@@ -81,7 +81,7 @@ void PluginEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colours::darkblue);
     g.setFont(juce::Font(18.0f, juce::Font::bold));
     const auto titleBounds = getLocalBounds().removeFromTop(50);
-    g.drawText("AmpSimBoris - Distortion Plugin", titleBounds, juce::Justification::centred, true);
+    g.drawText("808 Distortion", titleBounds, juce::Justification::centred, true);
 
     // Draw subtle border
     g.setColour(juce::Colours::grey.withAlpha(0.3f));
