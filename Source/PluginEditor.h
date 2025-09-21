@@ -9,25 +9,42 @@
 #pragma once
 
 #include <JuceHeader.h>
-#include "PluginProcessor.h"
+
+class PluginProcessor;
 
 //==============================================================================
 /**
 */
-class DistortionAudioProcessorEditor  : public juce::AudioProcessorEditor
+class PluginEditor : public juce::AudioProcessorEditor
 {
 public:
-    DistortionAudioProcessorEditor (DistortionAudioProcessor&);
-    ~DistortionAudioProcessorEditor() override;
+    explicit PluginEditor(PluginProcessor&);
+    ~PluginEditor() override = default;
 
     //==============================================================================
-    void paint (juce::Graphics&) override;
+    void paint(juce::Graphics&) override;
     void resized() override;
 
 private:
     // This reference is provided as a quick way for your editor to
     // access the processor object that created it.
-    DistortionAudioProcessor& audioProcessor;
+    PluginProcessor& audioProcessor;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DistortionAudioProcessorEditor)
+    // UI Components
+    juce::Slider inputGainSlider, distortionAmountSlider, outputGainSlider;
+    juce::Label inputGainLabel, distortionAmountLabel, outputGainLabel;
+
+    // Parameter attachments
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> inputGainAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> distortionAmountAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputGainAttachment;
+
+    // Helper methods
+    void setupSlider(juce::Slider& slider,
+        juce::Label& label,
+        const juce::String& text,
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>& attachment,
+        const juce::String& paramID);
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginEditor)
 };
