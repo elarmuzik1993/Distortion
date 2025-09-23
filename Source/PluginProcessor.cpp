@@ -211,11 +211,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     oversampling->processSamplesDown(inputBlock);
 
     // Apply output gain with proper bounds checking
-    for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
-    {
-        if (auto* channelData = buffer.getWritePointer(channel))
-            buffer.applyGain(channel, 0, buffer.getNumSamples(), outGain);
-    }
+    buffer.applyGain(outGain);
 }
 
 //==============================================================================
