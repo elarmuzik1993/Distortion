@@ -130,6 +130,10 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     preHighPassFilter.state = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, 120.0f);
     preHighPassFilter.prepare(spec);
     preHighPassFilter.reset();
+    // DC BLOCKING FILTER AT OUTPUT
+    dcBlockingFilter.state = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, 20.0f);
+    dcBlockingFilter.prepare(spec);
+    dcBlockingFilter.reset();
 }
 
 void PluginProcessor::releaseResources()
@@ -186,6 +190,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     auto inputBlock = juce::dsp::AudioBlock<float>(buffer);
     auto oversampledBlock = oversampling->processSamplesUp(inputBlock);
 
+    // Pre-filtering
     preHighPassFilter.process(juce::dsp::ProcessContextReplacing<float>(oversampledBlock));
 
     // Distortion processing on oversampled block
@@ -207,15 +212,14 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         }
     }
 
+    // DC blocking AFTER all distortion processing, BEFORE downsampling
+    dcBlockingFilter.process(juce::dsp::ProcessContextReplacing<float>(oversampledBlock));
+
     // Downsample back into original buffer
     oversampling->processSamplesDown(inputBlock);
 
-    // Apply output gain with proper bounds checking
-    for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
-    {
-        if (auto* channelData = buffer.getWritePointer(channel))
-            buffer.applyGain(channel, 0, buffer.getNumSamples(), outGain);
-    }
+    // Apply output gain to the final downsampled result
+    buffer.applyGain(outGain);
 }
 
 //==============================================================================

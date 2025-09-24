@@ -11,9 +11,7 @@
 #include <JuceHeader.h>
 #include <juce_dsp/juce_dsp.h>
 
-//==============================================================================
-/**
-*/
+
 class PluginProcessor : public juce::AudioProcessor
 {
 public:
@@ -67,6 +65,8 @@ private:
 
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> preHighPassFilter;
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> dcBlockingFilter;
 
     // Parameter pointers for efficient access
     std::atomic<float>* inputGainParam = nullptr;
