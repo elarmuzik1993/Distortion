@@ -178,9 +178,9 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         return;
 
     // Load parameters once
-    const auto inGain = inputGainParam->load();
-    const auto outGain = outputGainParam->load();
-    const auto distortionAmount = distortionAmountParam->load();
+    const auto inGain = parameters.getRawParameterValue("inputGain")->load();
+    const auto outGain = parameters.getRawParameterValue("outputGain")->load();
+    const auto distortionAmount = parameters.getRawParameterValue("distortionAmount")->load();
 
     // Pre-calculate coefficients
     const float gain1 = inGain * distortionAmount * 0.6f;
