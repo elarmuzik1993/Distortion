@@ -23,6 +23,7 @@ public:
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
 
+
 #ifndef JucePlugin_PreferredChannelConfigurations
     bool isBusesLayoutSupported(const BusesLayout& layouts) const override;
 #endif
@@ -67,6 +68,7 @@ private:
         juce::dsp::IIR::Coefficients<float>> preHighPassFilter;
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> dcBlockingFilter;
+    juce::SmoothedValue<float> smoothedInputGain, smoothedOutputGain, smoothedDistortion;
 
     // Parameter pointers for efficient access
     std::atomic<float>* inputGainParam = nullptr;

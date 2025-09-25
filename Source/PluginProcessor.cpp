@@ -102,8 +102,11 @@ void PluginProcessor::changeProgramName(int index, const juce::String& newName)
 //==============================================================================
 void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
-    // Ensure we have valid channel count
+    
     const int numChannels = std::max(1, getTotalNumInputChannels());
+    smoothedInputGain.reset(sampleRate, 0.02); // 20ms smoothing
+    smoothedOutputGain.reset(sampleRate, 0.02);
+    smoothedDistortion.reset(sampleRate, 0.05);
 
     // Recreate oversampling if channel count changed or doesn't exist
     if (!oversampling || currentNumChannels != numChannels) {
@@ -169,6 +172,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 {
     juce::ignoreUnused(midiMessages);
 
+
     // Early return for empty buffers
     if (buffer.getNumSamples() == 0 || buffer.getNumChannels() == 0)
         return;
@@ -181,7 +185,9 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const auto inGain = parameters.getRawParameterValue("inputGain")->load();
     const auto outGain = parameters.getRawParameterValue("outputGain")->load();
     const auto distortionAmount = parameters.getRawParameterValue("distortionAmount")->load();
-
+    smoothedInputGain.setTargetValue(inGain);
+    smoothedOutputGain.setTargetValue(outGain);
+    smoothedDistortion.setTargetValue(distortionAmount);
     // Pre-calculate coefficients
     const float gain1 = inGain * distortionAmount * 0.6f;
     const float drive2 = distortionAmount * 1.2f;
@@ -201,6 +207,12 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
         for (size_t sample = 0; sample < numSamples; ++sample)
         {
+            const float currentInputGain = smoothedInputGain.getNextValue();
+            const float currentDistortion = smoothedDistortion.getNextValue();
+
+            const float gain1 = currentInputGain * currentDistortion * 0.6f;
+            const float drive2 = currentDistortion * 1.2f;
+
             const float input = channelData[sample];
             const float driveSample = input * gain1;
             const float stage1 = std::tanh(driveSample);
@@ -210,6 +222,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
             channelData[sample] = juce::jlimit(-1.0f, 1.0f, stage2);
         }
+        
     }
 
     // DC blocking AFTER all distortion processing, BEFORE downsampling
