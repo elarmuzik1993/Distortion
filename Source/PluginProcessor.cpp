@@ -188,9 +188,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     smoothedInputGain.setTargetValue(inGain);
     smoothedOutputGain.setTargetValue(outGain);
     smoothedDistortion.setTargetValue(distortionAmount);
-    // Pre-calculate coefficients
-    const float gain1 = inGain * distortionAmount * 0.6f;
-    const float drive2 = distortionAmount * 1.2f;
+
 
     // Wrap original buffer into an AudioBlock
     auto inputBlock = juce::dsp::AudioBlock<float>(buffer);
@@ -209,11 +207,9 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         {
             const float currentInputGain = smoothedInputGain.getNextValue();
             const float currentDistortion = smoothedDistortion.getNextValue();
-
+            const float input = channelData[sample];
             const float gain1 = currentInputGain * currentDistortion * 0.6f;
             const float drive2 = currentDistortion * 1.2f;
-
-            const float input = channelData[sample];
             const float driveSample = input * gain1;
             const float stage1 = std::tanh(driveSample);
             const float stage2 = (stage1 > 0.0f) ?
@@ -232,7 +228,14 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     oversampling->processSamplesDown(inputBlock);
 
     // Apply output gain to the final downsampled result
-    buffer.applyGain(outGain);
+    for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+    {
+        auto* channelData = buffer.getWritePointer(channel);
+        for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+        {
+            channelData[sample] *= smoothedOutputGain.getNextValue();
+        }
+    }
 }
 
 //==============================================================================
