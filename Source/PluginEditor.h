@@ -9,7 +9,7 @@
 #pragma once
 
 #include <JuceHeader.h>
-
+#include "CustomKnob.h"
 class PluginProcessor;
 
 //==============================================================================
@@ -31,7 +31,7 @@ private:
     PluginProcessor& audioProcessor;
 
     // UI Components
-    juce::Slider inputGainSlider, distortionAmountSlider, outputGainSlider;
+    CustomKnob inputGainSlider, distortionAmountSlider, outputGainSlider;
     juce::Label inputGainLabel, distortionAmountLabel, outputGainLabel;
 
     // Parameter attachments
@@ -40,7 +40,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputGainAttachment;
 
     // Helper methods
-    void setupSlider(juce::Slider& slider,
+    void setupSlider(CustomKnob& slider,
         juce::Label& label,
         const juce::String& text,
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>& attachment,

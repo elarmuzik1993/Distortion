@@ -13,6 +13,8 @@
             file="Source/PluginEditor.cpp"/>
       <FILE id="cBmPhs" name="PluginEditor.h" compile="0" resource="0" file="Source/PluginEditor.h"/>
     </GROUP>
+    <FILE id="k8TTjs" name="CustomKnob.cpp" compile="1" resource="0" file="Source/CustomKnob.cpp"/>
+    <FILE id="Cj3vPi" name="CustomKnob.h" compile="0" resource="0" file="Source/CustomKnob.h"/>
   </MAINGROUP>
   <MODULES>
     <MODULE id="juce_audio_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>

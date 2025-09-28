@@ -28,19 +28,13 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 }
 
 //==============================================================================
-void PluginEditor::setupSlider(juce::Slider& slider,
+void PluginEditor::setupSlider(CustomKnob& slider,  // CHANGE THIS LINE
     juce::Label& label,
     const juce::String& text,
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>& attachment,
     const juce::String& paramID)
 {
-    // Configure slider appearance
-    slider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-    slider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 20);
-    slider.setColour(juce::Slider::textBoxTextColourId, juce::Colours::black);
-    slider.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colours::white);
-    slider.setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::grey);
-
+    
     // Add mouse wheel and double-click sensitivity
     slider.setMouseDragSensitivity(150);
     slider.setDoubleClickReturnValue(true, 1.0f); // Double-click returns to default
