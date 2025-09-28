@@ -53,11 +53,13 @@ void CustomKnob::paint(juce::Graphics& g)
         // compute angle from slider value
         auto toAngle = [](double value)
             {
-                return juce::MathConstants<float>::pi * 1.5f + value * juce::MathConstants<float>::pi * 1.5f;
+                return juce::MathConstants<float>::halfPi + value * juce::MathConstants<float>::twoPi;
             };
 
-        auto sliderPos = getValue();
-        auto rotationAngle = toAngle((sliderPos - getMinimum()) / (getMaximum() - getMinimum()));
+
+        auto sliderPos = (getValue() - getMinimum()) / (getMaximum() - getMinimum());
+        auto rotationAngle = juce::MathConstants<float>::halfPi + sliderPos * juce::MathConstants<float>::twoPi;
+
 
         auto indicatorRadius = 5.5f;
         auto indicatorX = centre.x + std::cos(rotationAngle) * (radius - 15.0f);
