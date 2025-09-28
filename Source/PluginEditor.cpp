@@ -66,8 +66,11 @@ void PluginEditor::setupSlider(CustomKnob& slider,  // CHANGE THIS LINE
 void PluginEditor::paint(juce::Graphics& g)
 {
     // Create gradient background
-    juce::ColourGradient gradient(juce::Colours::lightgrey, 0, 0,
-        juce::Colours::white, 0, static_cast<float>(getHeight()), false);
+    juce::ColourGradient gradient(
+        juce::Colour::fromRGB(0x63, 0xFF, 0x2F), 0, 0,                     // top colour
+        juce::Colour::fromRGB(0x80, 0xFF, 0x00), 0, (float)getHeight(),    // bottom colour
+        false);
+
     g.setGradientFill(gradient);
     g.fillAll();
 
@@ -75,7 +78,7 @@ void PluginEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colours::darkblue);
     g.setFont(juce::Font(18.0f, juce::Font::bold));
     const auto titleBounds = getLocalBounds().removeFromTop(50);
-    g.drawText("808 Distortion", titleBounds, juce::Justification::centred, true);
+    g.drawText(" Distortion", titleBounds, juce::Justification::centred, true);
 
     // Draw subtle border
     g.setColour(juce::Colours::grey.withAlpha(0.3f));
