@@ -234,12 +234,13 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     oversampling->processSamplesDown(inputBlock);
 
     // Apply output gain to the final downsampled result
-    for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+    for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
     {
-        auto* channelData = buffer.getWritePointer(channel);
-        for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+        const float currentOutputGain = smoothedOutputGain.getNextValue();
+        for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
         {
-            channelData[sample] *= smoothedOutputGain.getNextValue();
+            auto* channelData = buffer.getWritePointer(channel);
+            channelData[sample] *= currentOutputGain;
         }
     }
 }
