@@ -17,7 +17,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     // Set minimum and maximum size constraints
     setSize(600, 400);
     setResizable(true, true);
-    setResizeLimits(350, 250, 800, 600);
+    setResizeLimits(350, 350, 800, 600);
 
     // Setup all sliders
     setupSlider(inputGainSlider, inputGainLabel, "Input Gain",
@@ -99,19 +99,28 @@ void PluginEditor::resized()
     const int sliderHeight = 100;
     const int labelHeight = 20;
     const int spacing = 40;
+    const int minScopeHeight = 80;  // Minimum height for oscilloscope
 
     // Calculate available space
     auto bounds = getLocalBounds().reduced(margin);
     auto contentArea = bounds.withTrimmedTop(titleHeight);
 
-    // Allocate top 60% for oscilloscope, bottom 40% for controls
-    auto scopeArea = contentArea.removeFromTop(contentArea.getHeight() * 0.6f);
+    // Calculate space needed for controls
+    const int controlsHeight = sliderHeight + labelHeight + 20;  // 20px padding
+
+    // Allocate space: give oscilloscope what's left after controls, but with a minimum
+    int scopeHeight = contentArea.getHeight() - controlsHeight;
+    scopeHeight = juce::jmax(scopeHeight, minScopeHeight);  // Ensure minimum height
+
+    auto scopeArea = contentArea.removeFromTop(scopeHeight);
     oscilloscope.setBounds(scopeArea.reduced(5));
 
     // Position sliders in the remaining bottom area
+    auto controlArea = contentArea;
+
     const int totalSliderWidth = 3 * sliderWidth + 2 * spacing;
-    const int startX = contentArea.getX() + (contentArea.getWidth() - totalSliderWidth) / 2;
-    const int sliderY = contentArea.getY() + (contentArea.getHeight() - sliderHeight - labelHeight) / 2;
+    const int startX = controlArea.getX() + (controlArea.getWidth() - totalSliderWidth) / 2;
+    const int sliderY = controlArea.getY() + (controlArea.getHeight() - sliderHeight - labelHeight) / 2;
 
     // Position sliders and labels
     auto positionSliderAndLabel = [&](juce::Slider& slider, juce::Label& label, int index)
