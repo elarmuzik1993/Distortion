@@ -7,14 +7,29 @@
 */
 
 #include "CustomKnob.h"
-
+// Display for digits 
 CustomKnob::CustomKnob()
 {
     setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-    setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 20);
-    
-    // Add this line to format the text better
-    setNumDecimalPlacesToDisplay(1);  // Show only 1 decimal place
+    setTextBoxStyle(juce::Slider::TextBoxBelow, false, 70, 25);
+
+    // Custom text display - shows clean integer values
+    setTextValueSuffix("");
+
+    // Override how the value is displayed as text
+    textFromValueFunction = [](double value)
+        {
+            return juce::String(static_cast<int>(value));  // Show as whole number
+        };
+
+    // Style the text box like a digital display
+    setColour(juce::Slider::textBoxTextColourId, juce::Colour(0xff00ff00));  // Bright green text
+    setColour(juce::Slider::textBoxBackgroundColourId, juce::Colour(0xff1a1a1a));  // Dark background
+    setColour(juce::Slider::textBoxOutlineColourId, juce::Colour(0xff333333));  // Dark border
+    setColour(juce::Slider::textBoxHighlightColourId, juce::Colour(0xff004400));  // Dark green highlight
+
+    // Make text box read-only so it looks more like a display
+    setTextBoxIsEditable(false);
 }
 
 void CustomKnob::paint(juce::Graphics& g)

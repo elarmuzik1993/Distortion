@@ -181,10 +181,16 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     if (!oversampling)
         return;
 
-    // Load parameters once
-    const auto inGain = parameters.getRawParameterValue("inputGain")->load();
-    const auto outGain = parameters.getRawParameterValue("outputGain")->load();
-    const auto distortionAmount = parameters.getRawParameterValue("distortionAmount")->load();
+    // Load parameters and scale them from 0-100 to actual processing ranges
+    const auto inGainParam = parameters.getRawParameterValue("inputGain")->load();
+    const auto outGainParam = parameters.getRawParameterValue("outputGain")->load();
+    const auto distortionParam = parameters.getRawParameterValue("distortionAmount")->load();
+
+    // Scale to actual ranges for processing
+    const auto inGain = inGainParam / 50.0f;  // 0-100 becomes 0-2 (50 = 1.0 unity)
+    const auto outGain = outGainParam / 50.0f;  // 0-100 becomes 0-2 (50 = 1.0 unity)
+    const auto distortionAmount = 1.0f + (distortionParam / 100.0f) * 29.0f;  // 0-100 becomes 1-30
+
     smoothedInputGain.setTargetValue(inGain);
     smoothedOutputGain.setTargetValue(outGain);
     smoothedDistortion.setTargetValue(distortionAmount);
@@ -273,20 +279,20 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "inputGain", 1 },
         "Input Gain",
-        juce::NormalisableRange<float>(0.0f, 2.0f),
-        1.0f));
+        juce::NormalisableRange<float>(0.0f, 100.0f),
+        50.0f));
 
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "outputGain", 1 },
         "Output Gain",
-        juce::NormalisableRange<float>(0.0f, 2.0f),
-        1.0f));
+        juce::NormalisableRange<float>(0.0f, 100.0f),
+        50.0f));
 
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "distortionAmount", 1 },
         "Distortion Amount",
-        juce::NormalisableRange<float>(1.0f, 30.0f),
-        1.0f));
+        juce::NormalisableRange<float>(0.0f, 100.0f),
+        0.0f));
 
     return { params.begin(), params.end() };
 }

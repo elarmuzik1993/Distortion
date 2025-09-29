@@ -37,15 +37,20 @@ void PluginEditor::setupSlider(CustomKnob& slider,  // CHANGE THIS LINE
     
     // Add mouse wheel and double-click sensitivity
     slider.setMouseDragSensitivity(150);
-    slider.setDoubleClickReturnValue(true, 1.0f); // Double-click returns to default
+    slider.setDoubleClickReturnValue(true, 50.0f); // Double-click returns to 50
 
     addAndMakeVisible(slider);
 
-    // Create attachment (ensure parameter exists)
+    
     if (auto* param = audioProcessor.parameters.getParameter(paramID))
     {
         attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
             audioProcessor.parameters, paramID, slider);
+        slider.textFromValueFunction = [](double value)
+            {
+                return juce::String(static_cast<int>(value));
+            };
+        slider.updateText();
     }
     else
     {
