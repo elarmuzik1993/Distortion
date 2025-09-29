@@ -53,28 +53,50 @@ public:
             return;
         }
 
-        g.fillAll(juce::Colours::black);
+        // Darker background with subtle gradient
+        juce::ColourGradient bgGradient(
+            juce::Colour(0xff0a0a0a), 0, 0,
+            juce::Colour(0xff1a1a1a), 0, bounds.getHeight(),
+            false);
+        g.setGradientFill(bgGradient);
+        g.fillAll();
 
-        g.setColour(juce::Colours::grey.withAlpha(0.3f));
-        g.drawLine(0, bounds.getHeight() / 2, bounds.getWidth(), bounds.getHeight() / 2);
+        // Draw grid with better styling
+        g.setColour(juce::Colours::grey.withAlpha(0.15f));
 
+        // Vertical grid lines
+        const int numVerticalLines = 8;
+        for (int i = 1; i < numVerticalLines; ++i)
+        {
+            float x = bounds.getWidth() * i / (float)numVerticalLines;
+            g.drawLine(x, 0, x, bounds.getHeight(), 1.0f);
+        }
+
+        // Horizontal grid lines
         for (int i = 1; i < 4; ++i)
         {
             float y = bounds.getHeight() * i / 4.0f;
-            g.drawLine(0, y, bounds.getWidth(), y, 0.5f);
+            g.drawLine(0, y, bounds.getWidth(), y, 1.0f);
         }
+
+        // Emphasized center line
+        g.setColour(juce::Colours::grey.withAlpha(0.4f));
+        g.drawLine(0, bounds.getHeight() / 2, bounds.getWidth(), bounds.getHeight() / 2, 1.5f);
 
         // Lock buffer while drawing
         const juce::ScopedLock sl(bufferLock);
 
-        g.setColour(juce::Colours::cyan.withAlpha(0.85f));
-        drawChannel(g, 0);
+        // Draw waveforms with glow effect
+        drawChannelWithGlow(g, 0, juce::Colour(0xff00d4ff)); // Cyan with glow
 
         if (cachedBuffer.getNumChannels() > 1)
         {
-            g.setColour(juce::Colours::yellow.withAlpha(0.4f));
-            drawChannel(g, 1);
+            drawChannelWithGlow(g, 1, juce::Colour(0xffffbb00)); // Yellow/orange with glow
         }
+
+        // Draw border
+        g.setColour(juce::Colours::grey.withAlpha(0.3f));
+        g.drawRect(bounds, 1.0f);
     }
 
     void timerCallback() override
@@ -93,19 +115,17 @@ private:
     juce::AudioBuffer<float> cachedBuffer;   // Use this for drawing
     juce::CriticalSection bufferLock;
 
-    void drawChannel(juce::Graphics& g, int channel)
+    void drawChannelWithGlow(juce::Graphics& g, int channel, juce::Colour colour)
     {
         auto bounds = getLocalBounds().toFloat();
         const float height = bounds.getHeight();
         const float width = bounds.getWidth();
-        const int numSamples = cachedBuffer.getNumSamples();  // CHANGED: use cachedBuffer
+        const int numSamples = cachedBuffer.getNumSamples();
 
         if (numSamples < 2 || width < 2 || height < 2) return;
         if (channel >= cachedBuffer.getNumChannels()) return;
 
         juce::Path waveformPath;
-
-        // Use fixed number of points to prevent resize artifacts
         const int numPoints = juce::jmin(512, numSamples);
         if (numPoints < 2) return;
 
@@ -136,7 +156,7 @@ private:
 
             const float xPos = (float)i / (float)(numPoints - 1);
             const float x = bounds.getX() + xPos * width;
-            const float y = bounds.getY() + (0.5f - sample * 0.4f) * height;
+            const float y = bounds.getY() + (0.5f - sample * 0.45f) * height;
 
             if (!std::isfinite(x) || !std::isfinite(y))
                 continue;
@@ -157,6 +177,15 @@ private:
 
         if (pathStarted)
         {
+            // Draw glow effect (outer shadow)
+            g.setColour(colour.withAlpha(0.15f));
+            g.strokePath(waveformPath, juce::PathStrokeType(6.0f));
+
+            g.setColour(colour.withAlpha(0.3f));
+            g.strokePath(waveformPath, juce::PathStrokeType(4.0f));
+
+            // Draw main waveform
+            g.setColour(colour.withAlpha(channel == 0 ? 0.9f : 0.6f));
             g.strokePath(waveformPath, juce::PathStrokeType(2.0f));
         }
     }
