@@ -75,7 +75,7 @@ private:
     std::atomic<float>* distortionAmountParam = nullptr;
     juce::AudioBuffer<float> scopeBuffer;
     juce::AbstractFifo scopeFifo;
-    static constexpr int SCOPE_BUFFER_SIZE = 1024;
+    static constexpr int SCOPE_BUFFER_SIZE = 2048;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginProcessor)
 };

@@ -21,37 +21,41 @@ class Oscilloscope : public juce::Component, public juce::Timer
 public:
     Oscilloscope(PluginProcessor& p) : processor(p)
     {
-        startTimerHz(60);  // 60 FPS
-        displayBuffer.setSize(2, 512);  // Buffer for display
+        startTimerHz(30);  // 30 FPS is enough for smooth display
+        displayBuffer.setSize(2, 512);  // Smaller display buffer
+        displayBuffer.clear();
     }
 
     void paint(juce::Graphics& g) override
     {
-        // Fill background
         g.fillAll(juce::Colours::black);
 
         // Draw grid
         g.setColour(juce::Colours::grey.withAlpha(0.3f));
-        auto bounds = getLocalBounds();
+        auto bounds = getLocalBounds().toFloat();
 
-        // Vertical center line
+        // Horizontal center line
         g.drawLine(0, bounds.getHeight() / 2, bounds.getWidth(), bounds.getHeight() / 2);
 
-        // Horizontal lines
-        for (int i = 1; i < 4; ++i) {
+        // Additional grid lines
+        for (int i = 1; i < 4; ++i)
+        {
             float y = bounds.getHeight() * i / 4.0f;
-            g.drawLine(0, y, bounds.getWidth(), y);
+            g.drawLine(0, y, bounds.getWidth(), y, 0.5f);
         }
 
         // Get latest audio data
         processor.fillScopeBuffer(displayBuffer);
 
-        // Draw waveform
-        g.setColour(juce::Colours::cyan);
+        // Draw waveforms
+        g.setColour(juce::Colours::cyan.withAlpha(0.8f));
         drawChannel(g, 0);  // Left channel
 
-        g.setColour(juce::Colours::yellow);
-        drawChannel(g, 1);  // Right channel
+        if (displayBuffer.getNumChannels() > 1)
+        {
+            g.setColour(juce::Colours::yellow.withAlpha(0.8f));
+            drawChannel(g, 1);  // Right channel
+        }
     }
 
     void timerCallback() override
@@ -65,24 +69,27 @@ private:
 
     void drawChannel(juce::Graphics& g, int channel)
     {
-        auto bounds = getLocalBounds();
-        const float height = (float)bounds.getHeight();
-        const float width = (float)bounds.getWidth();
+        auto bounds = getLocalBounds().toFloat();
+        const float height = bounds.getHeight();
+        const float width = bounds.getWidth();
         const int numSamples = displayBuffer.getNumSamples();
 
+        if (numSamples < 2) return;  // Need at least 2 samples to draw
+
         juce::Path waveformPath;
-        bool started = false;
+        bool pathStarted = false;
 
         for (int i = 0; i < numSamples; ++i)
         {
-            const float sample = displayBuffer.getSample(channel, i);
-            const float x = (float)i / (float)numSamples * width;
-            const float y = (1.0f - sample) * height * 0.5f;  // Convert to screen coordinates
+            const float sample = juce::jlimit(-1.0f, 1.0f,
+                displayBuffer.getSample(channel, i));
+            const float x = bounds.getX() + (float)i / (float)(numSamples - 1) * width;
+            const float y = bounds.getY() + (0.5f - sample * 0.4f) * height;  // 0.4f for headroom
 
-            if (!started)
+            if (!pathStarted)
             {
                 waveformPath.startNewSubPath(x, y);
-                started = true;
+                pathStarted = true;
             }
             else
             {
@@ -90,7 +97,7 @@ private:
             }
         }
 
-        g.strokePath(waveformPath, juce::PathStrokeType(1.5f));
+        g.strokePath(waveformPath, juce::PathStrokeType(2.0f));
     }
 };
 class PluginEditor : public juce::AudioProcessorEditor

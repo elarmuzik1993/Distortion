@@ -107,9 +107,9 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     smoothedInputGain.reset(sampleRate, 0.02);      // 20 ms
     smoothedOutputGain.reset(sampleRate, 0.02);     // 20 ms
     smoothedDistortion.reset(sampleRate, 0.15);     // 150 ms slower ramp
-    scopeBuffer.setSize(2, 1024);  // Ensure it's sized correctly
+    scopeBuffer.setSize(2, SCOPE_BUFFER_SIZE);
     scopeBuffer.clear();
-    scopeFifo.reset();
+    scopeFifo.setTotalSize(SCOPE_BUFFER_SIZE);
 
 
 
@@ -254,13 +254,17 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         }
     }
     // Push samples to oscilloscope (after all processing)
-    const int scopeUpdateRate = 4;  // Update every 4 samples to reduce CPU
+    const int scopeUpdateRate = 2;  // Update every 2 samples
     for (int sample = 0; sample < buffer.getNumSamples(); sample += scopeUpdateRate)
     {
-        const float leftSample = buffer.getSample(0, sample);
-        const float rightSample = buffer.getNumChannels() > 1 ?
-            buffer.getSample(1, sample) : leftSample;
-        pushSampleToScope(leftSample, rightSample);
+        // Check if there's space in the FIFO before writing
+        if (scopeFifo.getFreeSpace() > 0)
+        {
+            const float leftSample = buffer.getSample(0, sample);
+            const float rightSample = buffer.getNumChannels() > 1 ?
+                buffer.getSample(1, sample) : leftSample;
+            pushSampleToScope(leftSample, rightSample);
+        }
     }
 }
 
@@ -283,21 +287,49 @@ void PluginProcessor::pushSampleToScope(float left, float right)
 void PluginProcessor::fillScopeBuffer(juce::AudioBuffer<float>& destBuffer)
 {
     const int numSamples = destBuffer.getNumSamples();
-    int start1, size1, start2, size2;
-    scopeFifo.prepareToRead(numSamples, start1, size1, start2, size2);
+    const int availableSamples = scopeFifo.getNumReady();
 
-    if (size1 > 0) {
-        for (int channel = 0; channel < destBuffer.getNumChannels(); ++channel) {
+    // Only read what's available
+    const int samplesToRead = juce::jmin(numSamples, availableSamples);
+
+    if (samplesToRead == 0)
+    {
+        // No new data available
+        return;
+    }
+
+    int start1, size1, start2, size2;
+    scopeFifo.prepareToRead(samplesToRead, start1, size1, start2, size2);
+
+    // Copy first section
+    if (size1 > 0)
+    {
+        for (int channel = 0; channel < destBuffer.getNumChannels(); ++channel)
+        {
             destBuffer.copyFrom(channel, 0, scopeBuffer, channel, start1, size1);
         }
     }
-    if (size2 > 0) {
-        for (int channel = 0; channel < destBuffer.getNumChannels(); ++channel) {
+
+    // Copy second section (wrap-around)
+    if (size2 > 0)
+    {
+        for (int channel = 0; channel < destBuffer.getNumChannels(); ++channel)
+        {
             destBuffer.copyFrom(channel, size1, scopeBuffer, channel, start2, size2);
         }
     }
 
-    scopeFifo.finishedRead(size1 + size2);
+    // If we read less than requested, clear the remainder
+    if (samplesToRead < numSamples)
+    {
+        const int remaining = numSamples - samplesToRead;
+        for (int channel = 0; channel < destBuffer.getNumChannels(); ++channel)
+        {
+            destBuffer.clear(channel, samplesToRead, remaining);
+        }
+    }
+
+    scopeFifo.finishedRead(samplesToRead);
 }
 //==============================================================================
 bool PluginProcessor::hasEditor() const

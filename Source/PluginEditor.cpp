@@ -106,7 +106,7 @@ void PluginEditor::resized()
 
     // Allocate top 60% for oscilloscope, bottom 40% for controls
     auto scopeArea = contentArea.removeFromTop(contentArea.getHeight() * 0.6f);
-    oscilloscope.setBounds(scopeArea.reduced(5));  // Small padding for scope
+    oscilloscope.setBounds(scopeArea.reduced(5));
 
     // Position sliders in the remaining bottom area
     const int totalSliderWidth = 3 * sliderWidth + 2 * spacing;
