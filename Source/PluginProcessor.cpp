@@ -104,9 +104,10 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
     
     const int numChannels = std::max(1, getTotalNumInputChannels());
-    smoothedInputGain.reset(sampleRate, 0.02); // 20ms smoothing
-    smoothedOutputGain.reset(sampleRate, 0.02);
-    smoothedDistortion.reset(sampleRate, 0.05);
+    smoothedInputGain.reset(sampleRate, 0.02);      // 20 ms
+    smoothedOutputGain.reset(sampleRate, 0.02);     // 20 ms
+    smoothedDistortion.reset(sampleRate, 0.15);     // 150 ms slower ramp
+
 
     // Recreate oversampling if channel count changed or doesn't exist
     if (!oversampling || currentNumChannels != numChannels) {
@@ -181,7 +182,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     if (!oversampling)
         return;
 
-    // Load parameters and scale them from 0-100 to actual processing ranges
+    // Load parameters and scale them 
     const auto inGainParam = parameters.getRawParameterValue("inputGain")->load();
     const auto outGainParam = parameters.getRawParameterValue("outputGain")->load();
     const auto distortionParam = parameters.getRawParameterValue("distortionAmount")->load();
@@ -203,28 +204,31 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Pre-filtering
     preHighPassFilter.process(juce::dsp::ProcessContextReplacing<float>(oversampledBlock));
 
-    // Distortion processing on oversampled block
-    for (size_t channel = 0; channel < oversampledBlock.getNumChannels(); ++channel)
-    {
-        auto* channelData = oversampledBlock.getChannelPointer(channel);
-        const size_t numSamples = oversampledBlock.getNumSamples();
+    // Distortion Loop
+    const size_t numSamples = oversampledBlock.getNumSamples();
+    const size_t numChannels = oversampledBlock.getNumChannels();
 
-        for (size_t sample = 0; sample < numSamples; ++sample)
+    for (size_t sample = 0; sample < numSamples; ++sample)
+    {
+        const float currentInputGain = smoothedInputGain.getNextValue();
+        const float currentDistortion = smoothedDistortion.getNextValue();
+
+        const float gain1 = currentInputGain * currentDistortion * 0.6f;
+        const float drive2 = currentDistortion * 1.2f;
+
+        for (size_t channel = 0; channel < numChannels; ++channel)
         {
-            const float currentInputGain = smoothedInputGain.getNextValue();
-            const float currentDistortion = smoothedDistortion.getNextValue();
+            auto* channelData = oversampledBlock.getChannelPointer(channel);
             const float input = channelData[sample];
-            const float gain1 = currentInputGain * currentDistortion * 0.6f;
-            const float drive2 = currentDistortion * 1.2f;
+
             const float driveSample = input * gain1;
             const float stage1 = std::tanh(driveSample);
-            const float stage2 = (stage1 > 0.0f) ?
-                1.0f - std::exp(-stage1 * drive2) :
-                -1.0f + std::exp(stage1 * drive2);
+            const float stage2 = (stage1 > 0.0f)
+                ? 1.0f - std::exp(-stage1 * drive2)
+                : -1.0f + std::exp(stage1 * drive2);
 
             channelData[sample] = juce::jlimit(-1.0f, 1.0f, stage2);
         }
-        
     }
 
     // DC blocking AFTER all distortion processing, BEFORE downsampling
