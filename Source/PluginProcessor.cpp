@@ -190,14 +190,14 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         return;
 
     // Load parameters and scale them 
-    const auto inGainParam = parameters.getRawParameterValue("inputGain")->load();
-    const auto outGainParam = parameters.getRawParameterValue("outputGain")->load();
-    const auto distortionParam = parameters.getRawParameterValue("distortionAmount")->load();
+    const auto inGainParam = inputGainParam->load();
+    const auto outGainParam = outputGainParam->load();
+    const auto distortionParam = distortionAmountParam->load();
 
     // Scale to actual ranges for processing
-    const auto inGain = inGainParam / 50.0f;  // 0-100 becomes 0-2 (50 = 1.0 unity)
-    const auto outGain = outGainParam / 50.0f;  // 0-100 becomes 0-2 (50 = 1.0 unity)
-    const auto distortionAmount = 1.0f + (distortionParam / 100.0f) * 29.0f;  // 0-100 becomes 1-30
+    const auto inGain = inGainParam / 50.0f;  
+    const auto outGain = outGainParam / 50.0f;  
+    const auto distortionAmount = 1.0f + (distortionParam / 100.0f) * 29.0f;  
 
     smoothedInputGain.setTargetValue(inGain);
     smoothedOutputGain.setTargetValue(outGain);
