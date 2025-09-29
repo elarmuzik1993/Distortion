@@ -74,8 +74,7 @@ double PluginProcessor::getTailLengthSeconds() const
 
 int PluginProcessor::getNumPrograms()
 {
-    return 1;   // NB: some hosts don't cope very well if you tell them there are 0 programs,
-    // so this should be at least 1, even if you're not really implementing programs.
+    return 1;   
 }
 
 int PluginProcessor::getCurrentProgram()
@@ -109,7 +108,7 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     smoothedDistortion.reset(sampleRate, 0.15);     // 150 ms slower ramp
 
 
-    // Recreate oversampling if channel count changed or doesn't exist
+    // Oversampling
     if (!oversampling || currentNumChannels != numChannels) {
         oversampling = std::make_unique<juce::dsp::Oversampling<float>>(
             numChannels, 2,
@@ -134,6 +133,7 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     preHighPassFilter.state = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, 120.0f);
     preHighPassFilter.prepare(spec);
     preHighPassFilter.reset();
+ 
     // DC BLOCKING FILTER AT OUTPUT
     dcBlockingFilter.state = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, 20.0f);
     dcBlockingFilter.prepare(spec);
@@ -142,8 +142,9 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 
 void PluginProcessor::releaseResources()
 {
-    if (oversampling)
-        oversampling.reset();
+    oversampling.reset();
+    preHighPassFilter.reset();
+    dcBlockingFilter.reset();
 }
 
 #ifndef JucePlugin_PreferredChannelConfigurations
