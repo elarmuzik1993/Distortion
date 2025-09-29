@@ -11,10 +11,11 @@
 
 //==============================================================================
 PluginEditor::PluginEditor(PluginProcessor& p)
-    : AudioProcessorEditor(&p), audioProcessor(p)
+    : AudioProcessorEditor(&p), audioProcessor(p), oscilloscope(p)
 {
+    addAndMakeVisible(oscilloscope);
     // Set minimum and maximum size constraints
-    setSize(400, 300);
+    setSize(600, 400);
     setResizable(true, true);
     setResizeLimits(350, 250, 800, 600);
 
@@ -100,10 +101,14 @@ void PluginEditor::resized()
     const int spacing = 40;
 
     // Calculate available space
-    const auto bounds = getLocalBounds().reduced(margin);
-    const auto contentArea = bounds.withTrimmedTop(titleHeight);
+    auto bounds = getLocalBounds().reduced(margin);
+    auto contentArea = bounds.withTrimmedTop(titleHeight);
 
-    // Calculate positions for responsive layout
+    // Allocate top 60% for oscilloscope, bottom 40% for controls
+    auto scopeArea = contentArea.removeFromTop(contentArea.getHeight() * 0.6f);
+    oscilloscope.setBounds(scopeArea.reduced(5));  // Small padding for scope
+
+    // Position sliders in the remaining bottom area
     const int totalSliderWidth = 3 * sliderWidth + 2 * spacing;
     const int startX = contentArea.getX() + (contentArea.getWidth() - totalSliderWidth) / 2;
     const int sliderY = contentArea.getY() + (contentArea.getHeight() - sliderHeight - labelHeight) / 2;

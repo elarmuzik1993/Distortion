@@ -19,7 +19,8 @@ PluginProcessor::PluginProcessor()
 #endif
         .withOutput("Output", juce::AudioChannelSet::stereo(), true)
 #endif
-    ), parameters(*this, nullptr, "Parameters", createParameterLayout())
+    ), parameters(*this, nullptr, "Parameters", createParameterLayout()),
+    scopeFifo(SCOPE_BUFFER_SIZE)
 {
     // Ensure parameters exist before storing pointers
     inputGainParam = parameters.getRawParameterValue("inputGain");
@@ -106,18 +107,22 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     smoothedInputGain.reset(sampleRate, 0.02);      // 20 ms
     smoothedOutputGain.reset(sampleRate, 0.02);     // 20 ms
     smoothedDistortion.reset(sampleRate, 0.15);     // 150 ms slower ramp
+    scopeBuffer.setSize(2, 1024);  // Ensure it's sized correctly
+    scopeBuffer.clear();
+    scopeFifo.reset();
+
 
 
     // Oversampling
-    if (!oversampling || currentNumChannels != numChannels) {
-        oversampling = std::make_unique<juce::dsp::Oversampling<float>>(
-            numChannels, 2,
-            juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR,
-            false, false
-        );
-        currentNumChannels = numChannels;
-    }
-
+if (!oversampling || currentNumChannels != numChannels) {
+    oversampling = std::make_unique<juce::dsp::Oversampling<float>>(
+        numChannels, 2,
+        juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR,
+        false, false
+    );
+    currentNumChannels = numChannels;
+}
+    
     // Initialize oversampling processing block size
     oversampling->initProcessing(static_cast<size_t>(samplesPerBlock));
 
@@ -139,6 +144,7 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     dcBlockingFilter.prepare(spec);
     dcBlockingFilter.reset();
 }
+
 
 void PluginProcessor::releaseResources()
 {
@@ -221,7 +227,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         {
             auto* channelData = oversampledBlock.getChannelPointer(channel);
             const float input = channelData[sample];
-
             const float driveSample = input * gain1;
             const float stage1 = std::tanh(driveSample);
             const float stage2 = (stage1 > 0.0f)
@@ -248,8 +253,52 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             channelData[sample] *= currentOutputGain;
         }
     }
+    // Push samples to oscilloscope (after all processing)
+    const int scopeUpdateRate = 4;  // Update every 4 samples to reduce CPU
+    for (int sample = 0; sample < buffer.getNumSamples(); sample += scopeUpdateRate)
+    {
+        const float leftSample = buffer.getSample(0, sample);
+        const float rightSample = buffer.getNumChannels() > 1 ?
+            buffer.getSample(1, sample) : leftSample;
+        pushSampleToScope(leftSample, rightSample);
+    }
 }
 
+void PluginProcessor::pushSampleToScope(float left, float right)
+{
+    int start1, size1, start2, size2;
+    scopeFifo.prepareToWrite(1, start1, size1, start2, size2);
+
+    if (size1 > 0) {
+        scopeBuffer.setSample(0, start1, left);
+        scopeBuffer.setSample(1, start1, right);
+    }
+    if (size2 > 0) {
+        scopeBuffer.setSample(0, start2, left);
+        scopeBuffer.setSample(1, start2, right);
+    }
+
+    scopeFifo.finishedWrite(size1 + size2);
+}
+void PluginProcessor::fillScopeBuffer(juce::AudioBuffer<float>& destBuffer)
+{
+    const int numSamples = destBuffer.getNumSamples();
+    int start1, size1, start2, size2;
+    scopeFifo.prepareToRead(numSamples, start1, size1, start2, size2);
+
+    if (size1 > 0) {
+        for (int channel = 0; channel < destBuffer.getNumChannels(); ++channel) {
+            destBuffer.copyFrom(channel, 0, scopeBuffer, channel, start1, size1);
+        }
+    }
+    if (size2 > 0) {
+        for (int channel = 0; channel < destBuffer.getNumChannels(); ++channel) {
+            destBuffer.copyFrom(channel, size1, scopeBuffer, channel, start2, size2);
+        }
+    }
+
+    scopeFifo.finishedRead(size1 + size2);
+}
 //==============================================================================
 bool PluginProcessor::hasEditor() const
 {
@@ -281,7 +330,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
-    // Use ParameterID for future-proofing
+    
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "inputGain", 1 },
         "Input Gain",

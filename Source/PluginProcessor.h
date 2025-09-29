@@ -10,7 +10,7 @@
 
 #include <JuceHeader.h>
 #include <juce_dsp/juce_dsp.h>
-
+#include <memory>
 
 class PluginProcessor : public juce::AudioProcessor
 {
@@ -56,7 +56,8 @@ public:
     //==============================================================================
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     juce::AudioProcessorValueTreeState parameters;
-
+    void fillScopeBuffer(juce::AudioBuffer<float>& destBuffer);
+    void pushSampleToScope(float left, float right);
 private:
     //==============================================================================
     // DSP Components
@@ -65,15 +66,16 @@ private:
     int currentNumChannels = 0;
 
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> preHighPassFilter;
+    juce::dsp::IIR::Coefficients<float>> preHighPassFilter;
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> dcBlockingFilter;
+    juce::dsp::IIR::Coefficients<float>> dcBlockingFilter;
     juce::SmoothedValue<float> smoothedInputGain, smoothedOutputGain, smoothedDistortion;
-
-    // Parameter pointers for efficient access
     std::atomic<float>* inputGainParam = nullptr;
     std::atomic<float>* outputGainParam = nullptr;
     std::atomic<float>* distortionAmountParam = nullptr;
+    juce::AudioBuffer<float> scopeBuffer;
+    juce::AbstractFifo scopeFifo;
+    static constexpr int SCOPE_BUFFER_SIZE = 1024;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginProcessor)
 };
