@@ -22,13 +22,15 @@ PluginProcessor::PluginProcessor()
     ), parameters(*this, nullptr, "Parameters", createParameterLayout()),
     scopeFifo(SCOPE_BUFFER_SIZE)
 {
-    // Ensure parameters exist before storing pointers
+    // Initialize Parameter Pointer in Constructor
+
     inputGainParam = parameters.getRawParameterValue("inputGain");
     outputGainParam = parameters.getRawParameterValue("outputGain");
     distortionAmountParam = parameters.getRawParameterValue("distortionAmount");
+    highPassFreqParam = parameters.getRawParameterValue("highPassFreq");
 
     // Verify all parameters were found
-    jassert(inputGainParam && outputGainParam && distortionAmountParam);
+    jassert(inputGainParam && outputGainParam && distortionAmountParam && highPassFreqParam);
 }
 
 PluginProcessor::~PluginProcessor()
@@ -135,7 +137,7 @@ if (!oversampling || currentNumChannels != numChannels) {
     spec.maximumBlockSize = static_cast<juce::uint32>(samplesPerBlock * oversamplingFactor);
     spec.numChannels = static_cast<juce::uint32>(numChannels);
 
-    preHighPassFilter.state = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, 120.0f);
+    preHighPassFilter.state = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, highPassFreqParam->load());
     preHighPassFilter.prepare(spec);
     preHighPassFilter.reset();
  
@@ -193,6 +195,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const auto inGainParam = inputGainParam->load();
     const auto outGainParam = outputGainParam->load();
     const auto distortionParam = distortionAmountParam->load();
+    const auto highPassFreq = highPassFreqParam->load();
 
     // Scale to actual ranges for processing
     const auto inGain = inGainParam / 50.0f;  
@@ -207,6 +210,9 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Wrap original buffer into an AudioBlock
     auto inputBlock = juce::dsp::AudioBlock<float>(buffer);
     auto oversampledBlock = oversampling->processSamplesUp(inputBlock);
+
+    *preHighPassFilter.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(
+        getSampleRate() * oversamplingFactor, highPassFreq);
 
     // Pre-filtering
     preHighPassFilter.process(juce::dsp::ProcessContextReplacing<float>(oversampledBlock));
@@ -357,7 +363,7 @@ void PluginProcessor::setStateInformation(const void* data, int sizeInBytes)
         parameters.replaceState(juce::ValueTree::fromXml(*xmlState));
 }
 
-//==============================================================================
+//Add Parameter Definition Here
 juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParameterLayout()
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
@@ -380,6 +386,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         "Distortion Amount",
         juce::NormalisableRange<float>(0.0f, 100.0f),
         0.0f));
+
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "highPassFreq", 1 },
+        "High Pass Frequency",
+        juce::NormalisableRange<float>(20.0f, 500.0f, 1.0f),
+        120.0f));
 
     return { params.begin(), params.end() };
 }

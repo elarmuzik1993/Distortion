@@ -208,13 +208,14 @@ private:
     Oscilloscope oscilloscope;
 
     // UI Components
-    CustomKnob inputGainSlider, distortionAmountSlider, outputGainSlider;
-    juce::Label inputGainLabel, distortionAmountLabel, outputGainLabel;
+    CustomKnob inputGainSlider, distortionAmountSlider, outputGainSlider, highPassFreqSlider;
+    juce::Label inputGainLabel, distortionAmountLabel, outputGainLabel, highPassFreqLabel;
 
     // Parameter attachments
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> inputGainAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> distortionAmountAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputGainAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> highPassFreqAttachment;
 
     // Helper methods
     void setupSlider(CustomKnob& slider,

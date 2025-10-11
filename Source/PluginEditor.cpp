@@ -9,27 +9,28 @@
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
 
-//==============================================================================
+//Setup Slider in Constructor Here
+
 PluginEditor::PluginEditor(PluginProcessor& p)
     : AudioProcessorEditor(&p), audioProcessor(p), oscilloscope(p)
 {
     addAndMakeVisible(oscilloscope);
-    // Set minimum and maximum size constraints
     setSize(600, 400);
     setResizable(true, true);
     setResizeLimits(350, 350, 800, 600);
 
-    // Setup all sliders
     setupSlider(inputGainSlider, inputGainLabel, "Input Gain",
         inputGainAttachment, "inputGain");
     setupSlider(distortionAmountSlider, distortionAmountLabel, "Distortion Amount",
         distortionAmountAttachment, "distortionAmount");
     setupSlider(outputGainSlider, outputGainLabel, "Output Gain",
         outputGainAttachment, "outputGain");
+    setupSlider(highPassFreqSlider, highPassFreqLabel, "Hi-Pass Filter",
+        highPassFreqAttachment, "highPassFreq");
 }
 
 //==============================================================================
-void PluginEditor::setupSlider(CustomKnob& slider,  // CHANGE THIS LINE
+void PluginEditor::setupSlider(CustomKnob& slider,  
     juce::Label& label,
     const juce::String& text,
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>& attachment,
@@ -118,7 +119,7 @@ void PluginEditor::resized()
     // Position sliders in the remaining bottom area
     auto controlArea = contentArea;
 
-    const int totalSliderWidth = 3 * sliderWidth + 2 * spacing;
+    const int totalSliderWidth = 4 * sliderWidth + 3 * spacing;
     const int startX = controlArea.getX() + (controlArea.getWidth() - totalSliderWidth) / 2;
     const int sliderY = controlArea.getY() + (controlArea.getHeight() - sliderHeight - labelHeight) / 2;
 
@@ -131,6 +132,7 @@ void PluginEditor::resized()
         };
 
     positionSliderAndLabel(inputGainSlider, inputGainLabel, 0);
-    positionSliderAndLabel(distortionAmountSlider, distortionAmountLabel, 1);
-    positionSliderAndLabel(outputGainSlider, outputGainLabel, 2);
+    positionSliderAndLabel(highPassFreqSlider, highPassFreqLabel, 1);
+    positionSliderAndLabel(distortionAmountSlider, distortionAmountLabel, 2);
+    positionSliderAndLabel(outputGainSlider, outputGainLabel, 3);
 }

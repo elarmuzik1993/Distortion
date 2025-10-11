@@ -59,8 +59,7 @@ public:
     void fillScopeBuffer(juce::AudioBuffer<float>& destBuffer);
     void pushSampleToScope(float left, float right);
 private:
-    //==============================================================================
-    // DSP Components
+    
     std::unique_ptr<juce::dsp::Oversampling<float>> oversampling;
     double oversamplingFactor = 4.0;
     int currentNumChannels = 0;
@@ -69,10 +68,14 @@ private:
     juce::dsp::IIR::Coefficients<float>> preHighPassFilter;
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
     juce::dsp::IIR::Coefficients<float>> dcBlockingFilter;
+
     juce::SmoothedValue<float> smoothedInputGain, smoothedOutputGain, smoothedDistortion;
+
     std::atomic<float>* inputGainParam = nullptr;
     std::atomic<float>* outputGainParam = nullptr;
     std::atomic<float>* distortionAmountParam = nullptr;
+    std::atomic<float>* highPassFreqParam = nullptr;
+
     juce::AudioBuffer<float> scopeBuffer;
     juce::AbstractFifo scopeFifo;
     static constexpr int SCOPE_BUFFER_SIZE = 2048;
