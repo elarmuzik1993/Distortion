@@ -18,6 +18,11 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     setSize(600, 400);
     setResizable(true, true);
     setResizeLimits(350, 350, 800, 600);
+    backgroundImage = juce::ImageCache::getFromMemory(
+        BinaryData::background_png,
+        BinaryData::background_pngSize
+    );
+
 
     setupSlider(inputGainSlider, inputGainLabel, "Input Gain",
         inputGainAttachment, "inputGain");
@@ -72,14 +77,24 @@ void PluginEditor::setupSlider(CustomKnob& slider,
 //==============================================================================
 void PluginEditor::paint(juce::Graphics& g)
 {
-    // Create gradient background
-    juce::ColourGradient gradient(
-        juce::Colour::fromRGB(0x63, 0xFF, 0x2F), 0, 0,                     // top colour
-        juce::Colour::fromRGB(0x80, 0xFF, 0x00), 0, (float)getHeight(),    // bottom colour
-        false);
-
-    g.setGradientFill(gradient);
-    g.fillAll();
+    // ========== REPLACE THE EXISTING GRADIENT CODE WITH THIS ==========
+    // Draw the background image
+    if (backgroundImage.isValid())
+    {
+        g.drawImage(backgroundImage, getLocalBounds().toFloat(),
+            juce::RectanglePlacement::fillDestination);
+    }
+    else
+    {
+        // Fallback if image fails to load - keep original gradient
+        juce::ColourGradient gradient(
+            juce::Colour::fromRGB(0x63, 0xFF, 0x2F), 0, 0,
+            juce::Colour::fromRGB(0x80, 0xFF, 0x00), 0, (float)getHeight(),
+            false);
+        g.setGradientFill(gradient);
+        g.fillAll();
+    }
+    // ==================================================================
 
     // Draw title
     g.setColour(juce::Colours::darkblue);

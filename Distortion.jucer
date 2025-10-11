@@ -15,6 +15,7 @@
     </GROUP>
     <FILE id="k8TTjs" name="CustomKnob.cpp" compile="1" resource="0" file="Source/CustomKnob.cpp"/>
     <FILE id="Cj3vPi" name="CustomKnob.h" compile="0" resource="0" file="Source/CustomKnob.h"/>
+    <FILE id="qIOX2q" name="background.png" compile="0" resource="1" file="../../background.png"/>
   </MAINGROUP>
   <MODULES>
     <MODULE id="juce_audio_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>

@@ -217,6 +217,8 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputGainAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> highPassFreqAttachment;
 
+    juce::Image backgroundImage;
+
     // Helper methods
     void setupSlider(CustomKnob& slider,
         juce::Label& label,
