@@ -4,7 +4,7 @@
 class CustomKnob : public juce::Slider
 {
 public:
-    CustomKnob();
+    CustomKnob(); 
 
     void paint(juce::Graphics& g) override;
 

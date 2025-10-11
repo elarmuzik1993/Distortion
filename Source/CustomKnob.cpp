@@ -6,13 +6,13 @@
   ==============================================================================
 */
 #include "CustomKnob.h"
+
 // Display for digits 
 CustomKnob::CustomKnob()
 {
     setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
     setTextBoxStyle(juce::Slider::TextBoxBelow, false, 70, 25);
 
-    
     auto startAngle = 7.0f * juce::MathConstants<float>::pi / 6.0f;  // 7 o'clock (210°)
     auto endAngle = startAngle + (5.0f * juce::MathConstants<float>::pi / 3.0f);  // +300° rotation
 
@@ -20,19 +20,20 @@ CustomKnob::CustomKnob()
 
     // Custom text display - shows clean integer values
     setTextValueSuffix("");
-    // Override how the value is displayed as text
     textFromValueFunction = [](double value)
         {
             return juce::String(static_cast<int>(value));  // Show as whole number
         };
+
     // Style the text box like a digital display
     setColour(juce::Slider::textBoxTextColourId, juce::Colour(0xff00ff00));  // Bright green text
     setColour(juce::Slider::textBoxBackgroundColourId, juce::Colour(0xff1a1a1a));  // Dark background
     setColour(juce::Slider::textBoxOutlineColourId, juce::Colour(0xff333333));  // Dark border
     setColour(juce::Slider::textBoxHighlightColourId, juce::Colour(0xff004400));  // Dark green highlight
-    // Make text box read-only so it looks more like a display
-    setTextBoxIsEditable(false);
+
+    setTextBoxIsEditable(false);  // Make text box read-only
 }
+
 void CustomKnob::paint(juce::Graphics& g)
 {
     auto bounds = getLocalBounds().toFloat();
@@ -50,16 +51,29 @@ void CustomKnob::paint(juce::Graphics& g)
     auto endAngle = startAngle + (5.0f * juce::MathConstants<float>::pi / 3.0f);
     auto sliderPos = (getValue() - getMinimum()) / (getMaximum() - getMinimum());
     auto currentAngle = startAngle + sliderPos * (endAngle - startAngle);
-    auto arcRadius = radius - 3.0f;
+    auto arcRadius = radius - 0.2f;
 
-    // Draw red arc
+    // Alpha increases with slider value (0.15 → 1.0)
+    float alpha = static_cast<float>(juce::jmap(sliderPos, 0.0, 1.0, 0.15, 1.0));
+    juce::Colour dynamicRed = juce::Colours::red.withAlpha(alpha);
+
+    // Draw red arc (only once)
     juce::Path arcPath;
     arcPath.addCentredArc(centre.x, centre.y,
         arcRadius, arcRadius,
-        0.0f,
-        startAngle, currentAngle,
-        true);
+        0.0f, startAngle, currentAngle, true);
 
-    g.setColour(juce::Colour(0xffff4444));
+    g.setColour(dynamicRed);
     g.strokePath(arcPath, juce::PathStrokeType(4.0f));
+
+    // === White pointer (indicator line) ===
+    const float pointerLength = radius + 0.1f;  // extend slightly beyond knob edge
+    const float pointerThickness = 3.0f;
+
+    juce::Path pointer;
+    pointer.addRoundedRectangle(-pointerThickness * 0.5f, -pointerLength,
+        pointerThickness, pointerLength * 0.5f, 1.0f);
+
+    g.setColour(juce::Colours::white);
+    g.fillPath(pointer, juce::AffineTransform::rotation(currentAngle).translated(centre.x, centre.y));
 }
