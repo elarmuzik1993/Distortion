@@ -40,12 +40,11 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     bandSplitAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
         audioProcessor.parameters, "bandSplitEnabled", bandSplitToggle);
 
-    // Setup label
     addAndMakeVisible(bandSplitLabel);
-    bandSplitLabel.setText("808-Safe", juce::dontSendNotification);
+    bandSplitLabel.setText("Clean Sub", juce::dontSendNotification);
     bandSplitLabel.setJustificationType(juce::Justification::centred);
-    bandSplitLabel.setColour(juce::Label::textColourId, juce::Colours::darkgrey);
-    bandSplitLabel.setFont(juce::Font(10.0f, juce::Font::italic));
+    bandSplitLabel.setColour(juce::Label::textColourId, juce::Colours::black);  // Changed to black for visibility
+    bandSplitLabel.setFont(juce::Font(12.0f, juce::Font::bold));  // Bigger and bold
 }
 
 //==============================================================================
