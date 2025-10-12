@@ -35,16 +35,14 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     // Setup 808-Safe Mode toggle
     addAndMakeVisible(bandSplitToggle);
     bandSplitToggle.setButtonText("808-Safe");
-    bandSplitToggle.setColour(juce::ToggleButton::textColourId, juce::Colours::black);
-    bandSplitToggle.setColour(juce::ToggleButton::tickColourId, juce::Colours::green);
-    bandSplitToggle.setColour(juce::ToggleButton::tickDisabledColourId, juce::Colours::grey);
+    bandSplitToggle.setLookAndFeel(&checkboxLookAndFeel);  // Apply custom black box with green tick
 
     bandSplitAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
         audioProcessor.parameters, "bandSplitEnabled", bandSplitToggle);
 
     // Setup label
     addAndMakeVisible(bandSplitLabel);
-    bandSplitLabel.setText("(Clean Low + Distorted High)", juce::dontSendNotification);
+    bandSplitLabel.setText("808-Safe", juce::dontSendNotification);
     bandSplitLabel.setJustificationType(juce::Justification::centred);
     bandSplitLabel.setColour(juce::Label::textColourId, juce::Colours::darkgrey);
     bandSplitLabel.setFont(juce::Font(10.0f, juce::Font::italic));
@@ -169,22 +167,25 @@ void PluginEditor::resized()
 
     // ========== ADD TOGGLE BUTTON POSITIONING BELOW ==========
     // Position 808-Safe toggle button in the top-right corner of the oscilloscope area
-    const int toggleWidth = 120;
-    const int toggleHeight = 24;
-    const int toggleMargin = 10;
+    const int toggleSize = 24;  // Square checkbox size
 
-    bandSplitToggle.setBounds(
-        scopeArea.getRight() - toggleWidth - toggleMargin,
-        scopeArea.getY() + toggleMargin,
-        toggleWidth,
-        toggleHeight
-    );
+    // Calculate exact center between the two knobs
+    const int knob1Center = startX + sliderWidth / 2;
+    const int knob2Center = startX + sliderWidth + spacing + sliderWidth / 2;
+    const int centerX = (knob1Center + knob2Center) / 2;
 
-    // Position description label below the toggle
+    // Center the toggle checkbox
+    const int toggleX = centerX - toggleSize / 2;
+    const int toggleY = sliderY + (sliderHeight / 2) - toggleSize / 2;  // Vertically centered with knobs
+
+    bandSplitToggle.setBounds(toggleX, toggleY, toggleSize, toggleSize);
+
+    // Position "808-Safe" label below the checkbox
+    const int labelWidth = 80;
     bandSplitLabel.setBounds(
-        scopeArea.getRight() - toggleWidth - toggleMargin,
-        scopeArea.getY() + toggleMargin + toggleHeight + 2,
-        toggleWidth,
+        centerX - labelWidth / 2,  // Center the label text
+        toggleY + toggleSize + 5,  // 5px below checkbox
+        labelWidth,
         16
     );
 }

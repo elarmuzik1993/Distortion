@@ -190,6 +190,35 @@ private:
         }
     }
 };
+// Custom LookAndFeel for solid black checkbox with green tick
+class CheckboxLookAndFeel : public juce::LookAndFeel_V4
+{
+public:
+    void drawTickBox(juce::Graphics& g, juce::Component& component,
+        float x, float y, float w, float h,
+        bool ticked, bool isEnabled, bool isMouseOverButton, bool isButtonDown) override
+    {
+        juce::ignoreUnused(component, isEnabled, isMouseOverButton, isButtonDown);
+
+        auto bounds = juce::Rectangle<float>(x, y, w, h).reduced(2.0f);
+
+        // Draw solid black box
+        g.setColour(juce::Colours::black);
+        g.fillRoundedRectangle(bounds, 2.0f);
+
+        // Draw white border for visibility
+        g.setColour(juce::Colours::white);
+        g.drawRoundedRectangle(bounds, 2.0f, 1.5f);
+
+        // Draw bright green tick if checked
+        if (ticked)
+        {
+            g.setColour(juce::Colours::lime);
+            auto tick = bounds.reduced(w * 0.2f);
+            g.fillRoundedRectangle(tick, 1.0f);
+        }
+    }
+};
 
 class PluginEditor : public juce::AudioProcessorEditor
 {
@@ -205,6 +234,7 @@ private:
     
     PluginProcessor& audioProcessor;
     Oscilloscope oscilloscope;
+    CheckboxLookAndFeel checkboxLookAndFeel;
 
     // UI Components
     CustomKnob inputGainSlider, distortionAmountSlider, outputGainSlider, highPassFreqSlider;
