@@ -32,6 +32,10 @@ PluginEditor::PluginEditor(PluginProcessor& p)
         outputGainAttachment, "outputGain");
     setupSlider(highPassFreqSlider, highPassFreqLabel, "Hi-Pass Filter",
         highPassFreqAttachment, "highPassFreq");
+    setupSlider(lfoRateSlider, lfoRateLabel, "LFO Rate",
+        lfoRateAttachment, "lfoRate");
+    setupSlider(lfoDepthSlider, lfoDepthLabel, "LFO Depth",
+        lfoDepthAttachment, "lfoDepth");
     // Setup 808-Safe Mode toggle
     addAndMakeVisible(bandSplitToggle);
     bandSplitToggle.setButtonText("808-Safe");
@@ -144,7 +148,7 @@ void PluginEditor::resized()
     const int sliderHeight = 100;
     const int labelHeight = 20;
     const int spacing = 40;
-    const int minScopeHeight = 80;  // Minimum height for oscilloscope
+    const int minScopeHeight = 100;  // Minimum height for oscilloscope
 
     // Calculate available space
     auto bounds = getLocalBounds().reduced(margin);
@@ -163,7 +167,7 @@ void PluginEditor::resized()
     // Position sliders in the remaining bottom area
     auto controlArea = contentArea;
 
-    const int totalSliderWidth = 4 * sliderWidth + 3 * spacing;
+    const int totalSliderWidth = 6 * sliderWidth + 5 * spacing;
     const int startX = controlArea.getX() + (controlArea.getWidth() - totalSliderWidth) / 2;
     const int sliderY = controlArea.getY() + (controlArea.getHeight() - sliderHeight - labelHeight) / 2;
 
@@ -179,6 +183,8 @@ void PluginEditor::resized()
     positionSliderAndLabel(highPassFreqSlider, highPassFreqLabel, 1);
     positionSliderAndLabel(distortionAmountSlider, distortionAmountLabel, 2);
     positionSliderAndLabel(outputGainSlider, outputGainLabel, 3);
+    positionSliderAndLabel(lfoRateSlider, lfoRateLabel, 4);
+    positionSliderAndLabel(lfoDepthSlider, lfoDepthLabel, 5);
 
     // ========== CLIP TYPE COMBOBOX POSITIONING ==========
     const int comboBoxWidth = 54;

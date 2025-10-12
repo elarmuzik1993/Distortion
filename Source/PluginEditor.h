@@ -240,6 +240,8 @@ private:
     // UI Components
     CustomKnob inputGainSlider, distortionAmountSlider, outputGainSlider, highPassFreqSlider;
     juce::Label inputGainLabel, distortionAmountLabel, outputGainLabel, highPassFreqLabel;
+    CustomKnob lfoRateSlider, lfoDepthSlider;
+    juce::Label lfoRateLabel, lfoDepthLabel;
 
     juce::ToggleButton bandSplitToggle;
     juce::Label bandSplitLabel;
@@ -255,6 +257,8 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bandSplitAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> clipTypeAttachment;
     juce::Image backgroundImage;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoRateAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoDepthAttachment;
 
     // Helper methods
     void setupSlider(CustomKnob& slider,

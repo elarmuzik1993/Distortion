@@ -30,10 +30,12 @@ PluginProcessor::PluginProcessor()
     highPassFreqParam = parameters.getRawParameterValue("highPassFreq");
     bandSplitEnabledParam = parameters.getRawParameterValue("bandSplitEnabled");
     clipTypeParam = parameters.getRawParameterValue("clipType");
-
+    lfoRateParam = parameters.getRawParameterValue("lfoRate");
+    lfoDepthParam = parameters.getRawParameterValue("lfoDepth");
 
     // Verify all parameters were found
-    jassert(inputGainParam && outputGainParam && distortionAmountParam && highPassFreqParam && bandSplitEnabledParam && clipTypeParam);
+    jassert(inputGainParam && outputGainParam && distortionAmountParam 
+        && highPassFreqParam && bandSplitEnabledParam && clipTypeParam  && lfoRateParam && lfoDepthParam);
 }
 
 PluginProcessor::~PluginProcessor()
@@ -107,6 +109,9 @@ void PluginProcessor::changeProgramName(int index, const juce::String& newName)
 //==============================================================================
 void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
+    // ========== STORE SAMPLE RATE FOR LFO (INSERT HERE) ==========
+    currentSampleRate = static_cast<float>(sampleRate);
+    lfoPhase = 0.0f;  // Reset LFO phase
     
     const int numChannels = std::max(1, getTotalNumInputChannels());
     smoothedInputGain.reset(sampleRate, 0.02);      // 20 ms
@@ -230,11 +235,36 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const auto highPassFreq = highPassFreqParam->load();
     const bool bandSplitEnabled = bandSplitEnabledParam->load() > 0.5f;
     const int clipType = static_cast<int>(clipTypeParam->load());
+    const float lfoRate = lfoRateParam->load();
+    const float lfoDepth = lfoDepthParam->load();
 
     // Scale to actual ranges for processing
-    const auto inGain = inGainParam / 50.0f;  
-    const auto outGain = outGainParam / 50.0f;  
-    const auto distortionAmount = 1.0f + (distortionParam / 100.0f) * 29.0f;  
+    const auto inGain = inGainParam / 50.0f;
+    const auto outGainDB = (outGainParam - 50.0f) * 0.24f;  // Maps 0->-12dB, 50->0dB, 100->+12dB
+    const auto outGain = juce::Decibels::decibelsToGain(outGainDB);
+
+    // ========== LFO MODULATION (INSERT HERE) ==========
+    // Calculate LFO value (sine wave from -1 to +1)
+    float lfoValue = 0.0f;
+    if (lfoRate > 0.0f)  // Only compute LFO if rate > 0
+    {
+        lfoValue = std::sin(lfoPhase * 2.0f * juce::MathConstants<float>::pi);
+
+        // Update phase for next block
+        const float phaseIncrement = lfoRate / currentSampleRate * buffer.getNumSamples();
+        lfoPhase += phaseIncrement;
+
+        // Keep phase in 0-1 range
+        if (lfoPhase >= 1.0f)
+            lfoPhase -= 1.0f;
+    }
+
+    // Apply LFO modulation to distortion amount
+    // lfoValue ranges -1 to +1, lfoDepth is 0-100
+    const float lfoModulation = (lfoValue * lfoDepth / 100.0f);  // -1 to +1 scaled by depth
+    const float modulatedDistortionParam = juce::jlimit(0.0f, 100.0f, distortionParam + lfoModulation * 50.0f);
+    const auto distortionAmount = 1.0f + (modulatedDistortionParam / 100.0f) * 50.0f;
+    // ==================================================
 
     smoothedInputGain.setTargetValue(inGain);
     smoothedOutputGain.setTargetValue(outGain);
@@ -293,6 +323,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             const float currentDistortion = smoothedDistortion.getNextValue();
             const float gain1 = currentInputGain * currentDistortion * 0.6f;
             const float drive2 = currentDistortion * 1.2f;
+
 
             for (size_t channel = 0; channel < numChannels; ++channel)
             {
@@ -583,7 +614,21 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         juce::ParameterID{ "clipType", 1 },
         "Clip Type",
         juce::StringArray{ "Soft Clip", "Hard Clip", "Tube Warmth", "Fuzz", "Asymmetric" },
-        0));  // Default is index 0 = "Soft Clip"
+        0));  
+    
+    
+    // ========== LFO PARAMETERS (INSERT HERE) ==========
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "lfoRate", 1 },
+        "LFO Rate",
+        juce::NormalisableRange<float>(0.1f, 10.0f, 0.1f),
+        0.0f));  // Default 0 = LFO off
+
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "lfoDepth", 1 },
+        "LFO Depth",
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f),
+        0.0f));  // Default 0 = no modulation
 
     return { params.begin(), params.end() };
 }

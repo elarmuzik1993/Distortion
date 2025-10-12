@@ -91,9 +91,12 @@ private:
     std::atomic<float>* distortionAmountParam = nullptr;
     std::atomic<float>* highPassFreqParam = nullptr;
     std::atomic<float>* clipTypeParam = nullptr;
-
-
     std::atomic<float>* bandSplitEnabledParam = nullptr;
+    std::atomic<float>* lfoRateParam = nullptr;
+    std::atomic<float>* lfoDepthParam = nullptr;
+
+    float lfoPhase = 0.0f;
+    float currentSampleRate = 44100.0f;
 
     juce::AudioBuffer<float> scopeBuffer;
     juce::AbstractFifo scopeFifo;
