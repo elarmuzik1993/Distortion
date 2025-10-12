@@ -202,8 +202,7 @@ public:
     void resized() override;
 
 private:
-    // This reference is provided as a quick way for your editor to
-    // access the processor object that created it.
+    
     PluginProcessor& audioProcessor;
     Oscilloscope oscilloscope;
 
@@ -211,11 +210,15 @@ private:
     CustomKnob inputGainSlider, distortionAmountSlider, outputGainSlider, highPassFreqSlider;
     juce::Label inputGainLabel, distortionAmountLabel, outputGainLabel, highPassFreqLabel;
 
+    juce::ToggleButton bandSplitToggle;
+    juce::Label bandSplitLabel;
+
     // Parameter attachments
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> inputGainAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> distortionAmountAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputGainAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> highPassFreqAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bandSplitAttachment;
 
     juce::Image backgroundImage;
 

@@ -28,9 +28,10 @@ PluginProcessor::PluginProcessor()
     outputGainParam = parameters.getRawParameterValue("outputGain");
     distortionAmountParam = parameters.getRawParameterValue("distortionAmount");
     highPassFreqParam = parameters.getRawParameterValue("highPassFreq");
+    bandSplitEnabledParam = parameters.getRawParameterValue("bandSplitEnabled");
 
     // Verify all parameters were found
-    jassert(inputGainParam && outputGainParam && distortionAmountParam && highPassFreqParam);
+    jassert(inputGainParam && outputGainParam && distortionAmountParam && highPassFreqParam && bandSplitEnabledParam);
 }
 
 PluginProcessor::~PluginProcessor()
@@ -145,7 +146,36 @@ if (!oversampling || currentNumChannels != numChannels) {
     dcBlockingFilter.state = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, 20.0f);
     dcBlockingFilter.prepare(spec);
     dcBlockingFilter.reset();
+
+    // ========== BAND-SPLIT FILTER PREPARATION BELOW ==========
+    // Prepare band-split filters (Linkwitz-Riley at 150Hz)
+    // Using cascaded Butterworth 2nd order for 4th order LR crossover
+
+    const float crossoverFreq = 150.0f;
+
+    lowPassFilter1.state = juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, crossoverFreq);
+    lowPassFilter1.prepare(spec);
+    lowPassFilter1.reset();
+
+    lowPassFilter2.state = juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, crossoverFreq);
+    lowPassFilter2.prepare(spec);
+    lowPassFilter2.reset();
+
+    highPassFilter1.state = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, crossoverFreq);
+    highPassFilter1.prepare(spec);
+    highPassFilter1.reset();
+
+    highPassFilter2.state = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, crossoverFreq);
+    highPassFilter2.prepare(spec);
+    highPassFilter2.reset();
+
+    // Prepare buffers for band-split processing (oversampled size)
+    const int oversampledBlockSize = samplesPerBlock * static_cast<int>(oversamplingFactor);
+    lowBandBuffer.setSize(numChannels, oversampledBlockSize);
+    highBandBuffer.setSize(numChannels, oversampledBlockSize);
+    // =============================================================
 }
+
 
 
 void PluginProcessor::releaseResources()
@@ -196,6 +226,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const auto outGainParam = outputGainParam->load();
     const auto distortionParam = distortionAmountParam->load();
     const auto highPassFreq = highPassFreqParam->load();
+    const bool bandSplitEnabled = bandSplitEnabledParam->load() > 0.5f;
 
     // Scale to actual ranges for processing
     const auto inGain = inGainParam / 50.0f;  
@@ -217,29 +248,98 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Pre-filtering
     preHighPassFilter.process(juce::dsp::ProcessContextReplacing<float>(oversampledBlock));
 
-    // Distortion Loop
+    // ========== REPLACE THE DISTORTION LOOP WITH THIS BAND-SPLIT LOGIC ==========
     const size_t numSamples = oversampledBlock.getNumSamples();
     const size_t numChannels = oversampledBlock.getNumChannels();
 
-    for (size_t sample = 0; sample < numSamples; ++sample)
+    if (bandSplitEnabled)
     {
-        const float currentInputGain = smoothedInputGain.getNextValue();
-        const float currentDistortion = smoothedDistortion.getNextValue();
+        // === BAND-SPLIT MODE: Clean low + Distorted high ===
 
-        const float gain1 = currentInputGain * currentDistortion * 0.6f;
-        const float drive2 = currentDistortion * 1.2f;
+        // Clear the band buffers
+        lowBandBuffer.clear();
+        highBandBuffer.clear();
 
+        // Copy input to both band buffers
         for (size_t channel = 0; channel < numChannels; ++channel)
         {
-            auto* channelData = oversampledBlock.getChannelPointer(channel);
-            const float input = channelData[sample];
-            const float driveSample = input * gain1;
-            const float stage1 = std::tanh(driveSample);
-            const float stage2 = (stage1 > 0.0f)
-                ? 1.0f - std::exp(-stage1 * drive2)
-                : -1.0f + std::exp(stage1 * drive2);
+            lowBandBuffer.copyFrom(static_cast<int>(channel), 0,
+                oversampledBlock.getChannelPointer(channel),
+                static_cast<int>(numSamples));
+            highBandBuffer.copyFrom(static_cast<int>(channel), 0,
+                oversampledBlock.getChannelPointer(channel),
+                static_cast<int>(numSamples));
+        }
 
-            channelData[sample] = juce::jlimit(-1.0f, 1.0f, stage2);
+        // Filter the bands
+        auto lowBlock = juce::dsp::AudioBlock<float>(lowBandBuffer).getSubBlock(0, numSamples);
+        auto highBlock = juce::dsp::AudioBlock<float>(highBandBuffer).getSubBlock(0, numSamples);
+
+        // Apply cascaded low-pass filters for Linkwitz-Riley
+        lowPassFilter1.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
+        lowPassFilter2.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
+
+        // Apply cascaded high-pass filters for Linkwitz-Riley
+        highPassFilter1.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
+        highPassFilter2.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
+
+        // Apply distortion ONLY to the high band
+        for (size_t sample = 0; sample < numSamples; ++sample)
+        {
+            const float currentInputGain = smoothedInputGain.getNextValue();
+            const float currentDistortion = smoothedDistortion.getNextValue();
+            const float gain1 = currentInputGain * currentDistortion * 0.6f;
+            const float drive2 = currentDistortion * 1.2f;
+
+            for (size_t channel = 0; channel < numChannels; ++channel)
+            {
+                auto* highBandData = highBandBuffer.getWritePointer(static_cast<int>(channel));
+                const float input = highBandData[sample];
+                const float driveSample = input * gain1;
+                const float stage1 = std::tanh(driveSample);
+                const float stage2 = (stage1 > 0.0f)
+                    ? 1.0f - std::exp(-stage1 * drive2)
+                    : -1.0f + std::exp(stage1 * drive2);
+
+                highBandData[sample] = juce::jlimit(-1.0f, 1.0f, stage2);
+            }
+        }
+
+        // Recombine: Clean low + Distorted high
+        for (size_t channel = 0; channel < numChannels; ++channel)
+        {
+            auto* outputData = oversampledBlock.getChannelPointer(channel);
+            const auto* lowData = lowBandBuffer.getReadPointer(static_cast<int>(channel));
+            const auto* highData = highBandBuffer.getReadPointer(static_cast<int>(channel));
+
+            for (size_t sample = 0; sample < numSamples; ++sample)
+            {
+                outputData[sample] = lowData[sample] + highData[sample];
+            }
+        }
+    }
+    else
+    {
+        // === NORMAL MODE: Full-range distortion (your original code) ===
+        for (size_t sample = 0; sample < numSamples; ++sample)
+        {
+            const float currentInputGain = smoothedInputGain.getNextValue();
+            const float currentDistortion = smoothedDistortion.getNextValue();
+            const float gain1 = currentInputGain * currentDistortion * 0.6f;
+            const float drive2 = currentDistortion * 1.2f;
+
+            for (size_t channel = 0; channel < numChannels; ++channel)
+            {
+                auto* channelData = oversampledBlock.getChannelPointer(channel);
+                const float input = channelData[sample];
+                const float driveSample = input * gain1;
+                const float stage1 = std::tanh(driveSample);
+                const float stage2 = (stage1 > 0.0f)
+                    ? 1.0f - std::exp(-stage1 * drive2)
+                    : -1.0f + std::exp(stage1 * drive2);
+
+                channelData[sample] = juce::jlimit(-1.0f, 1.0f, stage2);
+            }
         }
     }
 
@@ -392,6 +492,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         "High Pass Frequency",
         juce::NormalisableRange<float>(20.0f, 500.0f, 1.0f),
         120.0f));
+
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{ "bandSplitEnabled", 1 },
+        "808-Safe Mode",
+        false));  // Default is OFF (normal distortion mode)
 
     return { params.begin(), params.end() };
 }

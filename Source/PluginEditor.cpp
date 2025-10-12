@@ -32,6 +32,22 @@ PluginEditor::PluginEditor(PluginProcessor& p)
         outputGainAttachment, "outputGain");
     setupSlider(highPassFreqSlider, highPassFreqLabel, "Hi-Pass Filter",
         highPassFreqAttachment, "highPassFreq");
+    // Setup 808-Safe Mode toggle
+    addAndMakeVisible(bandSplitToggle);
+    bandSplitToggle.setButtonText("808-Safe");
+    bandSplitToggle.setColour(juce::ToggleButton::textColourId, juce::Colours::black);
+    bandSplitToggle.setColour(juce::ToggleButton::tickColourId, juce::Colours::green);
+    bandSplitToggle.setColour(juce::ToggleButton::tickDisabledColourId, juce::Colours::grey);
+
+    bandSplitAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        audioProcessor.parameters, "bandSplitEnabled", bandSplitToggle);
+
+    // Setup label
+    addAndMakeVisible(bandSplitLabel);
+    bandSplitLabel.setText("(Clean Low + Distorted High)", juce::dontSendNotification);
+    bandSplitLabel.setJustificationType(juce::Justification::centred);
+    bandSplitLabel.setColour(juce::Label::textColourId, juce::Colours::darkgrey);
+    bandSplitLabel.setFont(juce::Font(10.0f, juce::Font::italic));
 }
 
 //==============================================================================
@@ -150,4 +166,25 @@ void PluginEditor::resized()
     positionSliderAndLabel(highPassFreqSlider, highPassFreqLabel, 1);
     positionSliderAndLabel(distortionAmountSlider, distortionAmountLabel, 2);
     positionSliderAndLabel(outputGainSlider, outputGainLabel, 3);
+
+    // ========== ADD TOGGLE BUTTON POSITIONING BELOW ==========
+    // Position 808-Safe toggle button in the top-right corner of the oscilloscope area
+    const int toggleWidth = 120;
+    const int toggleHeight = 24;
+    const int toggleMargin = 10;
+
+    bandSplitToggle.setBounds(
+        scopeArea.getRight() - toggleWidth - toggleMargin,
+        scopeArea.getY() + toggleMargin,
+        toggleWidth,
+        toggleHeight
+    );
+
+    // Position description label below the toggle
+    bandSplitLabel.setBounds(
+        scopeArea.getRight() - toggleWidth - toggleMargin,
+        scopeArea.getY() + toggleMargin + toggleHeight + 2,
+        toggleWidth,
+        16
+    );
 }

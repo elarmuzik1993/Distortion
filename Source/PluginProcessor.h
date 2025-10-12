@@ -69,12 +69,29 @@ private:
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
     juce::dsp::IIR::Coefficients<float>> dcBlockingFilter;
 
+    // ========== SPLIT FILTER HERE ==========
+
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> lowPassFilter1;
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> lowPassFilter2;
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> highPassFilter1;
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> highPassFilter2;
+
+    juce::AudioBuffer<float> lowBandBuffer;   // For clean low frequencies
+    juce::AudioBuffer<float> highBandBuffer;  // For distorted high frequencies
+
+
     juce::SmoothedValue<float> smoothedInputGain, smoothedOutputGain, smoothedDistortion;
 
     std::atomic<float>* inputGainParam = nullptr;
     std::atomic<float>* outputGainParam = nullptr;
     std::atomic<float>* distortionAmountParam = nullptr;
     std::atomic<float>* highPassFreqParam = nullptr;
+
+    std::atomic<float>* bandSplitEnabledParam = nullptr;
 
     juce::AudioBuffer<float> scopeBuffer;
     juce::AbstractFifo scopeFifo;
