@@ -45,6 +45,22 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     bandSplitLabel.setJustificationType(juce::Justification::centred);
     bandSplitLabel.setColour(juce::Label::textColourId, juce::Colours::black);  // Changed to black for visibility
     bandSplitLabel.setFont(juce::Font(12.0f, juce::Font::bold));  // Bigger and bold
+
+    addAndMakeVisible(clipTypeComboBox);
+    clipTypeComboBox.addItem("Soft Clip", 1);
+    clipTypeComboBox.addItem("Hard Clip", 2);
+    clipTypeComboBox.addItem("Tube Warmth", 3);
+    clipTypeComboBox.addItem("Fuzz", 4);
+    clipTypeComboBox.addItem("Asymmetric", 5);
+    
+    clipTypeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.parameters, "clipType", clipTypeComboBox);
+    
+    addAndMakeVisible(clipTypeLabel);
+    clipTypeLabel.setText("Clip Type", juce::dontSendNotification);
+    clipTypeLabel.setJustificationType(juce::Justification::centred);
+    clipTypeLabel.setColour(juce::Label::textColourId, juce::Colours::black);
+    clipTypeLabel.setFont(juce::Font(12.0f, juce::Font::bold));
 }
 
 //==============================================================================
@@ -164,25 +180,47 @@ void PluginEditor::resized()
     positionSliderAndLabel(distortionAmountSlider, distortionAmountLabel, 2);
     positionSliderAndLabel(outputGainSlider, outputGainLabel, 3);
 
-    // ========== ADD TOGGLE BUTTON POSITIONING BELOW ==========
-    // Position 808-Safe toggle button in the top-right corner of the oscilloscope area
+    // ========== CLIP TYPE COMBOBOX POSITIONING ==========
+    const int comboBoxWidth = 54;
+    const int comboBoxHeight = 15;
+
+    const int hiPassCenter = startX + 1 * (sliderWidth + spacing) + sliderWidth / 2;
+    const int distortionCenter = startX + 2 * (sliderWidth + spacing) + sliderWidth / 2;
+    const int comboCenterX = (hiPassCenter + distortionCenter) / 2;
+
+    // Position above knobs with some spacing
+    const int comboY = sliderY + 30;  // slightly above knobs
+    clipTypeComboBox.setBounds(
+        comboCenterX - comboBoxWidth / 2,
+        comboY,
+        comboBoxWidth,
+        comboBoxHeight
+    );
+
+    clipTypeLabel.setBounds(
+        comboCenterX - comboBoxWidth / 2,
+        comboY + comboBoxHeight + 2,
+        comboBoxWidth,
+        14
+    );
+
+    // ========== 808-SAFE TOGGLE BUTTON POSITIONING ==========
     const int toggleSize = 24;  // Square checkbox size
 
-    // Calculate exact center between the two knobs
+    // Calculate exact center between Input Gain and Hi-Pass knobs
     const int knob1Center = startX + sliderWidth / 2;
     const int knob2Center = startX + sliderWidth + spacing + sliderWidth / 2;
     const int centerX = (knob1Center + knob2Center) / 2;
 
-    // Center the toggle checkbox
+    // Match Y position with ComboBox
     const int toggleX = centerX - toggleSize / 2;
-    const int toggleY = sliderY + (sliderHeight / 2) - toggleSize / 2;  // Vertically centered with knobs
-
+    const int toggleY = comboY + (comboBoxHeight / 2) - (toggleSize / 2);  // same vertical level as combo box
     bandSplitToggle.setBounds(toggleX, toggleY, toggleSize, toggleSize);
 
     // Position "808-Safe" label below the checkbox
     const int labelWidth = 80;
     bandSplitLabel.setBounds(
-        centerX - labelWidth / 2,  // Center the label text
+        centerX - labelWidth / 2,
         toggleY + toggleSize + 5,  // 5px below checkbox
         labelWidth,
         16

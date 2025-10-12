@@ -19,6 +19,7 @@ class PluginProcessor;
 class Oscilloscope : public juce::Component, public juce::Timer
 {
 public:
+
     Oscilloscope(PluginProcessor& p) : processor(p)
     {
         setOpaque(true);
@@ -243,13 +244,16 @@ private:
     juce::ToggleButton bandSplitToggle;
     juce::Label bandSplitLabel;
 
+    juce::ComboBox clipTypeComboBox;
+    juce::Label clipTypeLabel;
+
     // Parameter attachments
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> inputGainAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> distortionAmountAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputGainAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> highPassFreqAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bandSplitAttachment;
-
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> clipTypeAttachment;
     juce::Image backgroundImage;
 
     // Helper methods

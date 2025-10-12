@@ -90,6 +90,8 @@ private:
     std::atomic<float>* outputGainParam = nullptr;
     std::atomic<float>* distortionAmountParam = nullptr;
     std::atomic<float>* highPassFreqParam = nullptr;
+    std::atomic<float>* clipTypeParam = nullptr;
+
 
     std::atomic<float>* bandSplitEnabledParam = nullptr;
 

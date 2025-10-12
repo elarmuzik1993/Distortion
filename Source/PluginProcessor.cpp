@@ -29,9 +29,11 @@ PluginProcessor::PluginProcessor()
     distortionAmountParam = parameters.getRawParameterValue("distortionAmount");
     highPassFreqParam = parameters.getRawParameterValue("highPassFreq");
     bandSplitEnabledParam = parameters.getRawParameterValue("bandSplitEnabled");
+    clipTypeParam = parameters.getRawParameterValue("clipType");
+
 
     // Verify all parameters were found
-    jassert(inputGainParam && outputGainParam && distortionAmountParam && highPassFreqParam && bandSplitEnabledParam);
+    jassert(inputGainParam && outputGainParam && distortionAmountParam && highPassFreqParam && bandSplitEnabledParam && clipTypeParam);
 }
 
 PluginProcessor::~PluginProcessor()
@@ -227,6 +229,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const auto distortionParam = distortionAmountParam->load();
     const auto highPassFreq = highPassFreqParam->load();
     const bool bandSplitEnabled = bandSplitEnabledParam->load() > 0.5f;
+    const int clipType = static_cast<int>(clipTypeParam->load());
 
     // Scale to actual ranges for processing
     const auto inGain = inGainParam / 50.0f;  
@@ -296,12 +299,51 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                 auto* highBandData = highBandBuffer.getWritePointer(static_cast<int>(channel));
                 const float input = highBandData[sample];
                 const float driveSample = input * gain1;
-                const float stage1 = std::tanh(driveSample);
-                const float stage2 = (stage1 > 0.0f)
-                    ? 1.0f - std::exp(-stage1 * drive2)
-                    : -1.0f + std::exp(stage1 * drive2);
 
-                highBandData[sample] = juce::jlimit(-1.0f, 1.0f, stage2);
+                float output = 0.0f;
+
+                // Switch between clip types
+                switch (clipType)
+                {
+                case 0: // Soft Clip (original tanh + exponential)
+                {
+                    const float stage1 = std::tanh(driveSample);
+                    output = (stage1 > 0.0f)
+                        ? 1.0f - std::exp(-stage1 * drive2)
+                        : -1.0f + std::exp(stage1 * drive2);
+                    break;
+                }
+                case 1: // Hard Clip
+                {
+                    output = juce::jlimit(-1.0f, 1.0f, driveSample);
+                    break;
+                }
+                case 2: // Tube Warmth (tanh + asymmetric)
+                {
+                    const float stage1 = std::tanh(driveSample);
+                    output = stage1 + 0.3f * stage1 * stage1 * stage1;
+                    break;
+                }
+                case 3: // Fuzz (aggressive cubic)
+                {
+                    const float x = juce::jlimit(-1.5f, 1.5f, driveSample);
+                    output = x - (x * x * x) / 3.0f;
+                    break;
+                }
+                case 4: // Asymmetric (different curves for +/-)
+                {
+                    const float stage1 = std::tanh(driveSample * 1.5f);
+                    output = (stage1 > 0.0f)
+                        ? stage1 * 0.9f
+                        : stage1 * 1.2f;
+                    break;
+                }
+                default:
+                    output = std::tanh(driveSample);
+                    break;
+                }
+
+                highBandData[sample] = juce::jlimit(-1.0f, 1.0f, output);
             }
         }
 
@@ -320,7 +362,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     }
     else
     {
-        // === NORMAL MODE: Full-range distortion (your original code) ===
+        // === NORMAL MODE: Full-range distortion ===
         for (size_t sample = 0; sample < numSamples; ++sample)
         {
             const float currentInputGain = smoothedInputGain.getNextValue();
@@ -333,12 +375,51 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                 auto* channelData = oversampledBlock.getChannelPointer(channel);
                 const float input = channelData[sample];
                 const float driveSample = input * gain1;
-                const float stage1 = std::tanh(driveSample);
-                const float stage2 = (stage1 > 0.0f)
-                    ? 1.0f - std::exp(-stage1 * drive2)
-                    : -1.0f + std::exp(stage1 * drive2);
 
-                channelData[sample] = juce::jlimit(-1.0f, 1.0f, stage2);
+                float output = 0.0f;
+
+                // Switch between clip types
+                switch (clipType)
+                {
+                case 0: // Soft Clip (original tanh + exponential)
+                {
+                    const float stage1 = std::tanh(driveSample);
+                    output = (stage1 > 0.0f)
+                        ? 1.0f - std::exp(-stage1 * drive2)
+                        : -1.0f + std::exp(stage1 * drive2);
+                    break;
+                }
+                case 1: // Hard Clip
+                {
+                    output = juce::jlimit(-1.0f, 1.0f, driveSample);
+                    break;
+                }
+                case 2: // Tube Warmth (tanh + asymmetric)
+                {
+                    const float stage1 = std::tanh(driveSample);
+                    output = stage1 + 0.3f * stage1 * stage1 * stage1;
+                    break;
+                }
+                case 3: // Fuzz (aggressive cubic)
+                {
+                    const float x = juce::jlimit(-1.5f, 1.5f, driveSample);
+                    output = x - (x * x * x) / 3.0f;
+                    break;
+                }
+                case 4: // Asymmetric (different curves for +/-)
+                {
+                    const float stage1 = std::tanh(driveSample * 1.5f);
+                    output = (stage1 > 0.0f)
+                        ? stage1 * 0.9f
+                        : stage1 * 1.2f;
+                    break;
+                }
+                default:
+                    output = std::tanh(driveSample);
+                    break;
+                }
+
+                channelData[sample] = juce::jlimit(-1.0f, 1.0f, output);
             }
         }
     }
@@ -497,6 +578,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         juce::ParameterID{ "bandSplitEnabled", 1 },
         "808-Safe Mode",
         false));  // Default is OFF (normal distortion mode)
+
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID{ "clipType", 1 },
+        "Clip Type",
+        juce::StringArray{ "Soft Clip", "Hard Clip", "Tube Warmth", "Fuzz", "Asymmetric" },
+        0));  // Default is index 0 = "Soft Clip"
 
     return { params.begin(), params.end() };
 }
