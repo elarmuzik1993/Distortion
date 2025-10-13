@@ -32,10 +32,16 @@ PluginProcessor::PluginProcessor()
     clipTypeParam = parameters.getRawParameterValue("clipType");
     lfoRateParam = parameters.getRawParameterValue("lfoRate");
     lfoDepthParam = parameters.getRawParameterValue("lfoDepth");
+    compPeakReductionParam = parameters.getRawParameterValue("compPeakReduction");
+    compMakeupGainParam = parameters.getRawParameterValue("compMakeupGain");
+    compRatioParam = parameters.getRawParameterValue("compRatio");
+    compEnabledParam = parameters.getRawParameterValue("compEnabled");
 
     // Verify all parameters were found
-    jassert(inputGainParam && outputGainParam && distortionAmountParam 
-        && highPassFreqParam && bandSplitEnabledParam && clipTypeParam  && lfoRateParam && lfoDepthParam);
+    jassert(inputGainParam && outputGainParam && distortionAmountParam
+        && highPassFreqParam && bandSplitEnabledParam && clipTypeParam
+        && lfoRateParam && lfoDepthParam
+        && compPeakReductionParam && compMakeupGainParam && compRatioParam && compEnabledParam);
 }
 
 PluginProcessor::~PluginProcessor()
@@ -117,6 +123,15 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     smoothedInputGain.reset(sampleRate, 0.02);      // 20 ms
     smoothedOutputGain.reset(sampleRate, 0.02);     // 20 ms
     smoothedDistortion.reset(sampleRate, 0.15);     // 150 ms slower ramp
+    compEnvelopeState = 0.0f;
+    compRmsHistory = 0.0f;
+    tubeWarmth = 0.0f;
+
+    // Initialize smoothed gain reduction with slow release (LA-2A style)
+    smoothedGainReduction.reset(sampleRate, 0.5);  // 500ms for smooth, slow compression
+    smoothedGainReduction.setCurrentAndTargetValue(1.0f);  // Start at unity (no reduction)
+    
+
     scopeBuffer.setSize(2, SCOPE_BUFFER_SIZE);
     scopeBuffer.clear();
     scopeFifo.setTotalSize(SCOPE_BUFFER_SIZE);
@@ -214,6 +229,112 @@ bool PluginProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
 #endif
 }
 #endif
+// LA-2A Style Optical Compressor (processes low band only)
+void PluginProcessor::applyLA2ACompression(juce::AudioBuffer<float>& buffer,
+    float peakReduction,
+    float makeupGain,
+    int ratioMode)
+{
+    const int numSamples = buffer.getNumSamples();
+    const int numChannels = buffer.getNumChannels();
+
+    if (numSamples == 0 || numChannels == 0)
+        return;
+
+    // Map peak reduction (0-100) to threshold in dB
+    const float threshold = -60.0f + (peakReduction * 0.6f);  // -60dB to 0dB range
+
+    // Ratio: Compress mode = 3:1, Limit mode = 12:1 (LA-2A style)
+    const float ratio = (ratioMode == 0) ? 3.0f : 12.0f;
+
+    // Map makeup gain (0-100, 50=unity) to dB
+    const float makeupGainDB = (makeupGain - 50.0f) * 0.24f;  // ±12dB range
+    const float makeupGainLinear = juce::Decibels::decibelsToGain(makeupGainDB);
+
+    // Optical cell timing (program-dependent)
+    const float attackCoeff = 0.9995f;   // ~10ms attack (slow optical response)
+    const float releaseCoeff = 0.99995f; // ~500ms release (optical cell decay)
+
+    for (int sample = 0; sample < numSamples; ++sample)
+    {
+        // Calculate RMS across channels for detection
+        float sumSquares = 0.0f;
+        for (int channel = 0; channel < numChannels; ++channel)
+        {
+            const float sampleValue = buffer.getSample(channel, sample);
+            sumSquares += sampleValue * sampleValue;
+        }
+
+        const float rms = std::sqrt(sumSquares / numChannels);
+
+        // Update RMS history (program-dependent behavior)
+        compRmsHistory = 0.99f * compRmsHistory + 0.01f * rms;
+
+        // Convert to dB
+        const float inputLevelDB = juce::Decibels::gainToDecibels(rms + 0.00001f);
+
+        // Calculate gain reduction needed
+        float gainReductionDB = 0.0f;
+        if (inputLevelDB > threshold)
+        {
+            const float overThresholdDB = inputLevelDB - threshold;
+
+            // Soft knee (2dB knee width for smooth LA-2A character)
+            const float kneeWidth = 2.0f;
+            if (overThresholdDB < kneeWidth)
+            {
+                // Soft knee curve
+                const float kneeRatio = overThresholdDB / kneeWidth;
+                gainReductionDB = overThresholdDB * kneeRatio * (1.0f - 1.0f / ratio);
+            }
+            else
+            {
+                // Above knee - standard compression
+                gainReductionDB = kneeWidth * (1.0f - 1.0f / ratio) +
+                    (overThresholdDB - kneeWidth) * (1.0f - 1.0f / ratio);
+            }
+        }
+
+        // Optical cell envelope follower (T4 cell simulation)
+        const float targetGainReduction = juce::Decibels::decibelsToGain(-gainReductionDB);
+
+        if (targetGainReduction < compEnvelopeState)
+        {
+            // Attack - compression increasing (fast)
+            compEnvelopeState = attackCoeff * compEnvelopeState + (1.0f - attackCoeff) * targetGainReduction;
+        }
+        else
+        {
+            // Release - compression decreasing (slow, optical decay)
+            compEnvelopeState = releaseCoeff * compEnvelopeState + (1.0f - releaseCoeff) * targetGainReduction;
+        }
+
+        // Apply compression and makeup gain to all channels
+        for (int channel = 0; channel < numChannels; ++channel)
+        {
+            float sampleValue = buffer.getSample(channel, sample);
+
+            // Apply compression
+            sampleValue *= compEnvelopeState;
+
+            // Tube harmonic generation (even harmonics for warmth)
+            const float tubeInput = sampleValue * 1.5f;
+            const float tubeSaturation = std::tanh(tubeInput);
+
+            // Blend tube character (subtle 2nd harmonic)
+            sampleValue = sampleValue * 0.85f + tubeSaturation * 0.15f;
+
+            // Apply makeup gain
+            sampleValue *= makeupGainLinear;
+
+            // Soft clip output (prevent overs from makeup gain)
+            sampleValue = std::tanh(sampleValue * 0.9f) * 1.1f;
+
+            buffer.setSample(channel, sample, sampleValue);
+        }
+    }
+}
+
 
 void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
@@ -237,6 +358,10 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const int clipType = static_cast<int>(clipTypeParam->load());
     const float lfoRate = lfoRateParam->load();
     const float lfoDepth = lfoDepthParam->load();
+    const float compPeakReduction = compPeakReductionParam->load();
+    const float compMakeupGain = compMakeupGainParam->load();
+    const int compRatioMode = static_cast<int>(compRatioParam->load());
+    const bool compEnabled = compEnabledParam->load() > 0.5f;
 
     // Scale to actual ranges for processing
     const auto inGain = inGainParam / 50.0f;
@@ -316,6 +441,22 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         highPassFilter1.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
         highPassFilter2.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
 
+        // ========== APPLY COMPRESSION TO LOW BAND (INSERT HERE) ==========
+        // Apply LA-2A compression to low band if enabled
+        if (compEnabled && compPeakReduction > 0.0f)
+        {
+            // Create a temporary buffer view for the low band at correct size
+            juce::AudioBuffer<float> lowBandView(
+                lowBandBuffer.getArrayOfWritePointers(),
+                static_cast<int>(numChannels),
+                static_cast<int>(numSamples)
+            );
+
+            applyLA2ACompression(lowBandView, compPeakReduction, compMakeupGain, compRatioMode);
+        }
+        // =================================================================
+
+        
         // Apply distortion ONLY to the high band
         for (size_t sample = 0; sample < numSamples; ++sample)
         {
@@ -629,6 +770,29 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         "LFO Depth",
         juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f),
         0.0f));  // Default 0 = no modulation
+
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "compPeakReduction", 1 },
+        "Peak Reduction",
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f),
+        0.0f));  // Default 0 = no compression
+
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "compMakeupGain", 1 },
+        "Comp Makeup Gain",
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f),
+        50.0f));  // Default 50 = unity gain
+
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID{ "compRatio", 1 },
+        "Compress/Limit",
+        juce::StringArray{ "Compress", "Limit" },
+        0));  // Default 0 = Compress (3:1), 1 = Limit (12:1)
+
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{ "compEnabled", 1 },
+        "Compressor Enable",
+        false));  // Default OFF
 
     return { params.begin(), params.end() };
 }

@@ -240,8 +240,16 @@ private:
     // UI Components
     CustomKnob inputGainSlider, distortionAmountSlider, outputGainSlider, highPassFreqSlider;
     juce::Label inputGainLabel, distortionAmountLabel, outputGainLabel, highPassFreqLabel;
+    
     CustomKnob lfoRateSlider, lfoDepthSlider;
     juce::Label lfoRateLabel, lfoDepthLabel;
+
+    CustomKnob compPeakReductionSlider, compMakeupGainSlider;
+    juce::Label compPeakReductionLabel, compMakeupGainLabel;
+    juce::ComboBox compRatioComboBox;
+    juce::Label compRatioLabel;
+    juce::ToggleButton compEnableToggle;
+    juce::Label compSectionLabel;  // "LOW-END COMPRESSION" title
 
     juce::ToggleButton bandSplitToggle;
     juce::Label bandSplitLabel;
@@ -257,8 +265,12 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bandSplitAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> clipTypeAttachment;
     juce::Image backgroundImage;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoRateAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoRateAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoDepthAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> compPeakReductionAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> compMakeupGainAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> compRatioAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> compEnableAttachment;
 
     // Helper methods
     void setupSlider(CustomKnob& slider,

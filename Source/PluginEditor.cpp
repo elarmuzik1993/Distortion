@@ -15,9 +15,9 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     : AudioProcessorEditor(&p), audioProcessor(p), oscilloscope(p)
 {
     addAndMakeVisible(oscilloscope);
-    setSize(600, 400);
+    setSize(600, 500);  // Changed from 400 to 500 (added 100px for compression bar)
     setResizable(true, true);
-    setResizeLimits(350, 350, 800, 600);
+    setResizeLimits(350, 450, 800, 700);  // Changed min/max heights
     backgroundImage = juce::ImageCache::getFromMemory(
         BinaryData::background_png,
         BinaryData::background_pngSize
@@ -36,6 +36,41 @@ PluginEditor::PluginEditor(PluginProcessor& p)
         lfoRateAttachment, "lfoRate");
     setupSlider(lfoDepthSlider, lfoDepthLabel, "LFO Depth",
         lfoDepthAttachment, "lfoDepth");
+    // Setup compressor knobs
+    setupSlider(compPeakReductionSlider, compPeakReductionLabel, "Peak Reduction",
+        compPeakReductionAttachment, "compPeakReduction");
+    setupSlider(compMakeupGainSlider, compMakeupGainLabel, "Makeup Gain",
+        compMakeupGainAttachment, "compMakeupGain");
+
+    // Setup Compress/Limit dropdown
+    addAndMakeVisible(compRatioComboBox);
+    compRatioComboBox.addItem("Compress", 1);  // 3:1 ratio
+    compRatioComboBox.addItem("Limit", 2);     // 12:1 ratio
+
+    compRatioAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.parameters, "compRatio", compRatioComboBox);
+
+    addAndMakeVisible(compRatioLabel);
+    compRatioLabel.setText("Mode", juce::dontSendNotification);
+    compRatioLabel.setJustificationType(juce::Justification::centred);
+    compRatioLabel.setColour(juce::Label::textColourId, juce::Colours::black);
+    compRatioLabel.setFont(juce::Font(10.0f, juce::Font::bold));
+
+    // Setup compression enable toggle
+    addAndMakeVisible(compEnableToggle);
+    compEnableToggle.setButtonText("COMP");
+    compEnableToggle.setLookAndFeel(&checkboxLookAndFeel);
+
+    compEnableAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        audioProcessor.parameters, "compEnabled", compEnableToggle);
+
+    // Setup section title label
+    addAndMakeVisible(compSectionLabel);
+    compSectionLabel.setText("LOW-END COMPRESSION", juce::dontSendNotification);
+    compSectionLabel.setJustificationType(juce::Justification::centred);
+    compSectionLabel.setColour(juce::Label::textColourId, juce::Colours::darkblue);
+    compSectionLabel.setFont(juce::Font(14.0f, juce::Font::bold));
+    
     // Setup 808-Safe Mode toggle
     addAndMakeVisible(bandSplitToggle);
     bandSplitToggle.setButtonText("808-Safe");
@@ -144,27 +179,63 @@ void PluginEditor::resized()
 {
     const int margin = 20;
     const int titleHeight = 50;
+    const int compressionBarHeight = 90;  // NEW: Height for compression section
     const int sliderWidth = 100;
     const int sliderHeight = 100;
     const int labelHeight = 20;
     const int spacing = 40;
-    const int minScopeHeight = 100;  // Minimum height for oscilloscope
+    const int minScopeHeight = 100;
 
     // Calculate available space
     auto bounds = getLocalBounds().reduced(margin);
     auto contentArea = bounds.withTrimmedTop(titleHeight);
 
-    // Calculate space needed for controls
-    const int controlsHeight = sliderHeight + labelHeight + 20;  // 20px padding
+    // ========== COMPRESSION BAR AT TOP (NEW SECTION) ==========
+    auto compressionArea = contentArea.removeFromTop(compressionBarHeight);
 
-    // Allocate space: give oscilloscope what's left after controls, but with a minimum
+    // Compression section title
+    auto compTitleArea = compressionArea.removeFromTop(20);
+    compSectionLabel.setBounds(compTitleArea);
+
+    // Compression controls layout
+    const int compKnobSize = 60;  // Smaller knobs for compression bar
+    const int compSpacing = 20;
+    const int compControlsWidth = (3 * compKnobSize) + (2 * compSpacing) + 60 + 30;  // 3 knobs + dropdown + toggle
+    const int compStartX = compressionArea.getRight() - compControlsWidth - 20;  // Align to RIGHT with 20px margin
+    const int compKnobY = compressionArea.getY() + 5;
+
+    // Peak Reduction knob
+    compPeakReductionSlider.setBounds(compStartX, compKnobY, compKnobSize, compKnobSize);
+    compPeakReductionLabel.setBounds(compStartX, compKnobY + compKnobSize, compKnobSize, 15);
+
+    // Makeup Gain knob
+    const int makeupX = compStartX + compKnobSize + compSpacing;
+    compMakeupGainSlider.setBounds(makeupX, compKnobY, compKnobSize, compKnobSize);
+    compMakeupGainLabel.setBounds(makeupX, compKnobY + compKnobSize, compKnobSize, 15);
+
+    // Compress/Limit dropdown
+    const int dropdownX = makeupX + compKnobSize + compSpacing;
+    const int dropdownWidth = 60;
+    compRatioComboBox.setBounds(dropdownX, compKnobY + 15, dropdownWidth, 20);
+    compRatioLabel.setBounds(dropdownX, compKnobY + 37, dropdownWidth, 12);
+
+    // Enable toggle
+    const int toggleX = dropdownX + dropdownWidth + 15;
+    const int toggleSize = 24;
+    compEnableToggle.setBounds(toggleX, compKnobY + 15, toggleSize, toggleSize);
+    // ===========================================================
+
+    // Calculate space needed for distortion controls
+    const int controlsHeight = sliderHeight + labelHeight + 20;
+
+    // Allocate space: give oscilloscope what's left after compression bar and controls
     int scopeHeight = contentArea.getHeight() - controlsHeight;
-    scopeHeight = juce::jmax(scopeHeight, minScopeHeight);  // Ensure minimum height
+    scopeHeight = juce::jmax(scopeHeight, minScopeHeight);
 
     auto scopeArea = contentArea.removeFromTop(scopeHeight);
     oscilloscope.setBounds(scopeArea.reduced(5));
 
-    // Position sliders in the remaining bottom area
+    // Position distortion sliders in the remaining bottom area
     auto controlArea = contentArea;
 
     const int totalSliderWidth = 6 * sliderWidth + 5 * spacing;
@@ -194,8 +265,7 @@ void PluginEditor::resized()
     const int distortionCenter = startX + 2 * (sliderWidth + spacing) + sliderWidth / 2;
     const int comboCenterX = (hiPassCenter + distortionCenter) / 2;
 
-    // Position above knobs with some spacing
-    const int comboY = sliderY + 30;  // slightly above knobs
+    const int comboY = sliderY + 30;
     clipTypeComboBox.setBounds(
         comboCenterX - comboBoxWidth / 2,
         comboY,
@@ -211,23 +281,20 @@ void PluginEditor::resized()
     );
 
     // ========== 808-SAFE TOGGLE BUTTON POSITIONING ==========
-    const int toggleSize = 24;  // Square checkbox size
+    const int safeToggleSize = 24;  // Changed from toggleSize
 
-    // Calculate exact center between Input Gain and Hi-Pass knobs
     const int knob1Center = startX + sliderWidth / 2;
     const int knob2Center = startX + sliderWidth + spacing + sliderWidth / 2;
-    const int centerX = (knob1Center + knob2Center) / 2;
+    const int safeCenterX = (knob1Center + knob2Center) / 2;  // Changed from centerX
 
-    // Match Y position with ComboBox
-    const int toggleX = centerX - toggleSize / 2;
-    const int toggleY = comboY + (comboBoxHeight / 2) - (toggleSize / 2);  // same vertical level as combo box
-    bandSplitToggle.setBounds(toggleX, toggleY, toggleSize, toggleSize);
+    const int safeToggleX = safeCenterX - safeToggleSize / 2;  // Changed from toggleX
+    const int safeToggleY = comboY + (comboBoxHeight / 2) - (safeToggleSize / 2);  // Changed from toggleY
+    bandSplitToggle.setBounds(safeToggleX, safeToggleY, safeToggleSize, safeToggleSize);
 
-    // Position "808-Safe" label below the checkbox
     const int labelWidth = 80;
     bandSplitLabel.setBounds(
-        centerX - labelWidth / 2,
-        toggleY + toggleSize + 5,  // 5px below checkbox
+        safeCenterX - labelWidth / 2,  // Changed from centerX
+        safeToggleY + safeToggleSize + 5,  // Changed variables
         labelWidth,
         16
     );

@@ -58,6 +58,11 @@ public:
     juce::AudioProcessorValueTreeState parameters;
     void fillScopeBuffer(juce::AudioBuffer<float>& destBuffer);
     void pushSampleToScope(float left, float right);
+    // ========== COMPRESSOR FUNCTION DECLARATION (INSERT HERE) ==========
+    void applyLA2ACompression(juce::AudioBuffer<float>& buffer,
+        float peakReduction,
+        float makeupGain,
+        int ratioMode);
 private:
     
     std::unique_ptr<juce::dsp::Oversampling<float>> oversampling;
@@ -92,8 +97,31 @@ private:
     std::atomic<float>* highPassFreqParam = nullptr;
     std::atomic<float>* clipTypeParam = nullptr;
     std::atomic<float>* bandSplitEnabledParam = nullptr;
+   
     std::atomic<float>* lfoRateParam = nullptr;
     std::atomic<float>* lfoDepthParam = nullptr;
+
+    // ========== COMPRESSOR PARAMETERS (INSERT HERE) ==========
+
+    std::atomic<float>* compPeakReductionParam = nullptr;
+    std::atomic<float>* compMakeupGainParam = nullptr;
+    std::atomic<float>* compRatioParam = nullptr;  
+    std::atomic<float>* compEnabledParam = nullptr;
+    
+
+    // ========== COMPRESSOR STATE VARIABLES (INSERT HERE) ==========
+    // Optical cell envelope follower (LA-2A T4 cell simulation)
+    float compEnvelopeState = 0.0f;
+
+
+    // RMS detection for program-dependent behavior
+    float compRmsHistory = 0.0f;
+
+    // Smoothed gain reduction for visual/smooth compression
+    juce::SmoothedValue<float> smoothedGainReduction;
+
+    // Tube harmonic state
+    float tubeWarmth = 0.0f;
 
     float lfoPhase = 0.0f;
     float currentSampleRate = 44100.0f;
