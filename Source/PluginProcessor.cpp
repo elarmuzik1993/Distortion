@@ -191,6 +191,22 @@ if (!oversampling || currentNumChannels != numChannels) {
     highPassFilter2.prepare(spec);
     highPassFilter2.reset();
 
+    compLowPassFilter1.state = juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, crossoverFreq);
+    compLowPassFilter1.prepare(spec);
+    compLowPassFilter1.reset();
+
+    compLowPassFilter2.state = juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, crossoverFreq);
+    compLowPassFilter2.prepare(spec);
+    compLowPassFilter2.reset();
+
+    compHighPassFilter1.state = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, crossoverFreq);
+    compHighPassFilter1.prepare(spec);
+    compHighPassFilter1.reset();
+
+    compHighPassFilter2.state = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, crossoverFreq);
+    compHighPassFilter2.prepare(spec);
+    compHighPassFilter2.reset();
+
     // Prepare buffers for band-split processing (oversampled size)
     const int oversampledBlockSize = samplesPerBlock * static_cast<int>(oversamplingFactor);
     lowBandBuffer.setSize(numChannels, oversampledBlockSize);
@@ -406,7 +422,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Pre-filtering
     preHighPassFilter.process(juce::dsp::ProcessContextReplacing<float>(oversampledBlock));
 
-    // ========== REPLACE THE DISTORTION LOOP WITH THIS BAND-SPLIT LOGIC ==========
+
     const size_t numSamples = oversampledBlock.getNumSamples();
     const size_t numChannels = oversampledBlock.getNumChannels();
 
@@ -416,6 +432,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         lowBandBuffer.clear();
         highBandBuffer.clear();
 
+        // FIRST: Copy data to buffers
         for (size_t channel = 0; channel < numChannels; ++channel)
         {
             lowBandBuffer.copyFrom(static_cast<int>(channel), 0,
@@ -426,15 +443,16 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                 static_cast<int>(numSamples));
         }
 
-        // Filter for compression (150Hz split)
+        // SECOND: Create AudioBlocks
         auto lowBlock = juce::dsp::AudioBlock<float>(lowBandBuffer).getSubBlock(0, numSamples);
         auto highBlock = juce::dsp::AudioBlock<float>(highBandBuffer).getSubBlock(0, numSamples);
 
-        lowPassFilter1.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
-        lowPassFilter2.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
+        // THIRD: Apply COMPRESSION-SPECIFIC filters (150Hz split)
+        compLowPassFilter1.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
+        compLowPassFilter2.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
 
-        highPassFilter1.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
-        highPassFilter2.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
+        compHighPassFilter1.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
+        compHighPassFilter2.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
 
         // Apply compression to LOW BAND ONLY
         juce::AudioBuffer<float> lowBandView(
