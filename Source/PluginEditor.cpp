@@ -201,7 +201,7 @@ void PluginEditor::resized()
     const int compKnobSize = 60;  // Smaller knobs for compression bar
     const int compSpacing = 20;
     const int compControlsWidth = (3 * compKnobSize) + (2 * compSpacing) + 60 + 30;  // 3 knobs + dropdown + toggle
-    const int compStartX = compressionArea.getRight() - compControlsWidth - 20;  // Align to RIGHT with 20px margin
+    const int compStartX = compressionArea.getRight() - compControlsWidth - 50;  // Align to RIGHT with 20px margin
     const int compKnobY = compressionArea.getY() + 5;
 
     // Peak Reduction knob

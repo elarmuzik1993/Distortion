@@ -410,11 +410,61 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const size_t numSamples = oversampledBlock.getNumSamples();
     const size_t numChannels = oversampledBlock.getNumChannels();
 
+    if (compEnabled && compPeakReduction > 0.0f)
+    {
+        // Split into low/high bands for compression
+        lowBandBuffer.clear();
+        highBandBuffer.clear();
+
+        for (size_t channel = 0; channel < numChannels; ++channel)
+        {
+            lowBandBuffer.copyFrom(static_cast<int>(channel), 0,
+                oversampledBlock.getChannelPointer(channel),
+                static_cast<int>(numSamples));
+            highBandBuffer.copyFrom(static_cast<int>(channel), 0,
+                oversampledBlock.getChannelPointer(channel),
+                static_cast<int>(numSamples));
+        }
+
+        // Filter for compression (150Hz split)
+        auto lowBlock = juce::dsp::AudioBlock<float>(lowBandBuffer).getSubBlock(0, numSamples);
+        auto highBlock = juce::dsp::AudioBlock<float>(highBandBuffer).getSubBlock(0, numSamples);
+
+        lowPassFilter1.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
+        lowPassFilter2.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
+
+        highPassFilter1.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
+        highPassFilter2.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
+
+        // Apply compression to LOW BAND ONLY
+        juce::AudioBuffer<float> lowBandView(
+            lowBandBuffer.getArrayOfWritePointers(),
+            static_cast<int>(numChannels),
+            static_cast<int>(numSamples)
+        );
+
+        applyLA2ACompression(lowBandView, compPeakReduction, compMakeupGain, compRatioMode);
+
+        // Recombine compressed low + clean high back into main buffer
+        for (size_t channel = 0; channel < numChannels; ++channel)
+        {
+            auto* outputData = oversampledBlock.getChannelPointer(channel);
+            const auto* lowData = lowBandBuffer.getReadPointer(static_cast<int>(channel));
+            const auto* highData = highBandBuffer.getReadPointer(static_cast<int>(channel));
+
+            for (size_t sample = 0; sample < numSamples; ++sample)
+            {
+                outputData[sample] = lowData[sample] + highData[sample];
+            }
+        }
+    }
+    // ==========================================================
+
+    // ========== 808-SAFE DISTORTION PROCESSING (INDEPENDENT) ==========
     if (bandSplitEnabled)
     {
         // === BAND-SPLIT MODE: Clean low + Distorted high ===
 
-        // Clear the band buffers
         lowBandBuffer.clear();
         highBandBuffer.clear();
 
@@ -441,22 +491,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         highPassFilter1.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
         highPassFilter2.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
 
-        // ========== APPLY COMPRESSION TO LOW BAND (INSERT HERE) ==========
-        // Apply LA-2A compression to low band if enabled
-        if (compEnabled && compPeakReduction > 0.0f)
-        {
-            // Create a temporary buffer view for the low band at correct size
-            juce::AudioBuffer<float> lowBandView(
-                lowBandBuffer.getArrayOfWritePointers(),
-                static_cast<int>(numChannels),
-                static_cast<int>(numSamples)
-            );
-
-            applyLA2ACompression(lowBandView, compPeakReduction, compMakeupGain, compRatioMode);
-        }
-        // =================================================================
-
-        
         // Apply distortion ONLY to the high band
         for (size_t sample = 0; sample < numSamples; ++sample)
         {
@@ -464,7 +498,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             const float currentDistortion = smoothedDistortion.getNextValue();
             const float gain1 = currentInputGain * currentDistortion * 0.6f;
             const float drive2 = currentDistortion * 1.2f;
-
 
             for (size_t channel = 0; channel < numChannels; ++channel)
             {
@@ -474,10 +507,9 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
                 float output = 0.0f;
 
-                // Switch between clip types
                 switch (clipType)
                 {
-                case 0: // Soft Clip (original tanh + exponential)
+                case 0:
                 {
                     const float stage1 = std::tanh(driveSample);
                     output = (stage1 > 0.0f)
@@ -485,24 +517,24 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                         : -1.0f + std::exp(stage1 * drive2);
                     break;
                 }
-                case 1: // Hard Clip
+                case 1:
                 {
                     output = juce::jlimit(-1.0f, 1.0f, driveSample);
                     break;
                 }
-                case 2: // Tube Warmth (tanh + asymmetric)
+                case 2:
                 {
                     const float stage1 = std::tanh(driveSample);
                     output = stage1 + 0.3f * stage1 * stage1 * stage1;
                     break;
                 }
-                case 3: // Fuzz (aggressive cubic)
+                case 3:
                 {
                     const float x = juce::jlimit(-1.5f, 1.5f, driveSample);
                     output = x - (x * x * x) / 3.0f;
                     break;
                 }
-                case 4: // Asymmetric (different curves for +/-)
+                case 4:
                 {
                     const float stage1 = std::tanh(driveSample * 1.5f);
                     output = (stage1 > 0.0f)
@@ -550,10 +582,9 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
                 float output = 0.0f;
 
-                // Switch between clip types
                 switch (clipType)
                 {
-                case 0: // Soft Clip (original tanh + exponential)
+                case 0:
                 {
                     const float stage1 = std::tanh(driveSample);
                     output = (stage1 > 0.0f)
@@ -561,24 +592,24 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                         : -1.0f + std::exp(stage1 * drive2);
                     break;
                 }
-                case 1: // Hard Clip
+                case 1:
                 {
                     output = juce::jlimit(-1.0f, 1.0f, driveSample);
                     break;
                 }
-                case 2: // Tube Warmth (tanh + asymmetric)
+                case 2:
                 {
                     const float stage1 = std::tanh(driveSample);
                     output = stage1 + 0.3f * stage1 * stage1 * stage1;
                     break;
                 }
-                case 3: // Fuzz (aggressive cubic)
+                case 3:
                 {
                     const float x = juce::jlimit(-1.5f, 1.5f, driveSample);
                     output = x - (x * x * x) / 3.0f;
                     break;
                 }
-                case 4: // Asymmetric (different curves for +/-)
+                case 4:
                 {
                     const float stage1 = std::tanh(driveSample * 1.5f);
                     output = (stage1 > 0.0f)
