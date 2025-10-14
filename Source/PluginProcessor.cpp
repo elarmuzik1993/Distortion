@@ -678,6 +678,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
 void PluginProcessor::pushSampleToScope(float left, float right)
 {
+    const juce::SpinLock::ScopedLockType lock(scopeLock);
     int start1, size1, start2, size2;
     scopeFifo.prepareToWrite(1, start1, size1, start2, size2);
 
@@ -694,6 +695,7 @@ void PluginProcessor::pushSampleToScope(float left, float right)
 }
 void PluginProcessor::fillScopeBuffer(juce::AudioBuffer<float>& destBuffer)
 {
+    const juce::SpinLock::ScopedLockType lock(scopeLock);
     const int numSamples = destBuffer.getNumSamples();
     const int availableSamples = scopeFifo.getNumReady();
 
