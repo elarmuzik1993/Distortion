@@ -12,9 +12,10 @@
 //Setup Slider in Constructor Here
 
 PluginEditor::PluginEditor(PluginProcessor& p)
-    : AudioProcessorEditor(&p), audioProcessor(p), oscilloscope(p)
+    : AudioProcessorEditor(&p), audioProcessor(p), oscilloscope(p), gainReductionMeter(p)
 {
     addAndMakeVisible(oscilloscope);
+    addAndMakeVisible(gainReductionMeter);
     setSize(600, 500);  // Changed from 400 to 500 (added 100px for compression bar)
     setResizable(true, true);
     setResizeLimits(350, 450, 800, 700);  // Changed min/max heights
@@ -200,6 +201,13 @@ void PluginEditor::resized()
     // Compression section title
     auto compTitleArea = compressionArea.removeFromTop(20);
     compSectionLabel.setBounds(compTitleArea);
+
+    // ========== GAIN REDUCTION METER (LEFT SIDE) ==========
+    const int meterWidth = 40;
+    const int meterHeight = 65;
+    const int meterX = compressionArea.getX() + 10;
+    const int meterY = compressionArea.getY() + 5;
+    gainReductionMeter.setBounds(meterX, meterY, meterWidth, meterHeight);
 
     // ========== COMPRESSION CONTROLS LAYOUT (5 knobs + dropdown + toggle) ==========
     const int compKnobSize = 60;

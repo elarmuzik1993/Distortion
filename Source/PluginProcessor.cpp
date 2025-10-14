@@ -288,6 +288,8 @@ void PluginProcessor::applyLA2ACompression(juce::AudioBuffer<float>& buffer,
     const float attackCoeff = 0.9995f;   // ~10ms attack (slow optical response)
     const float releaseCoeff = 0.99995f; // ~500ms release (optical cell decay)
 
+    float maxGainReductionDB = 0.0f;  // Track max gain reduction for meter display
+
     for (int sample = 0; sample < numSamples; ++sample)
     {
         // Calculate RMS across channels for detection
@@ -342,6 +344,9 @@ void PluginProcessor::applyLA2ACompression(juce::AudioBuffer<float>& buffer,
             compEnvelopeState = releaseCoeff * compEnvelopeState + (1.0f - releaseCoeff) * targetGainReduction;
         }
 
+        // Track maximum gain reduction for meter display
+        maxGainReductionDB = juce::jmax(maxGainReductionDB, gainReductionDB);
+
         // Apply compression and makeup gain to all channels
         for (int channel = 0; channel < numChannels; ++channel)
         {
@@ -366,6 +371,9 @@ void PluginProcessor::applyLA2ACompression(juce::AudioBuffer<float>& buffer,
             buffer.setSample(channel, sample, sampleValue);
         }
     }
+
+    // Store the max gain reduction for UI meter display
+    currentGainReductionDB.store(maxGainReductionDB, std::memory_order_relaxed);
 }
 
 

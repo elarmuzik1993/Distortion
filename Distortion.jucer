@@ -39,8 +39,10 @@
   <EXPORTFORMATS>
     <VS2022 targetFolder="Builds/VisualStudio2022">
       <CONFIGURATIONS>
-        <CONFIGURATION isDebug="1" name="Debug" targetName="Distortion" enablePluginBinaryCopyStep="1"/>
-        <CONFIGURATION isDebug="0" name="Release" targetName="Distortion"/>
+        <CONFIGURATION isDebug="1" name="Debug" targetName="Distortion" enablePluginBinaryCopyStep="0"/>
+        <CONFIGURATION isDebug="0" name="Release" targetName="Distortion" enablePluginBinaryCopyStep="1"
+                       vst3BinaryLocation_Win32="%CommonProgramFiles(x86)%\VST3" vst3BinaryLocation_x64="%CommonProgramW6432%\VST3"
+                       vst3BinaryLocation_arm64=" "/>
       </CONFIGURATIONS>
       <MODULEPATHS>
         <MODULEPATH id="juce_audio_basics" path="../../../Documents/JUCE/modules"/>

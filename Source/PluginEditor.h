@@ -191,6 +191,85 @@ private:
         }
     }
 };
+
+// Gain Reduction Meter Component
+class GainReductionMeter : public juce::Component, public juce::Timer
+{
+public:
+    GainReductionMeter(PluginProcessor& p) : processor(p)
+    {
+        startTimerHz(30);  // 30 FPS refresh rate
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        auto bounds = getLocalBounds().toFloat();
+
+        // Background
+        g.setColour(juce::Colours::black);
+        g.fillRoundedRectangle(bounds, 4.0f);
+
+        // Border
+        g.setColour(juce::Colours::grey.withAlpha(0.5f));
+        g.drawRoundedRectangle(bounds, 4.0f, 1.5f);
+
+        // Get current gain reduction value
+        const float grDB = currentGainReduction;
+
+        if (grDB > 0.01f)  // Only draw if there's meaningful gain reduction
+        {
+            // Map gain reduction (0-20dB) to meter height
+            const float maxDB = 20.0f;
+            const float clampedDB = juce::jlimit(0.0f, maxDB, grDB);
+            const float normalizedLevel = clampedDB / maxDB;
+
+            // Calculate meter bar height
+            const float meterHeight = bounds.getHeight() * normalizedLevel;
+            const float meterY = bounds.getBottom() - meterHeight;
+
+            // Create gradient from green -> yellow -> red
+            juce::ColourGradient gradient(
+                juce::Colour(0xff00ff00),  // Green at bottom
+                bounds.getCentreX(), bounds.getBottom(),
+                juce::Colour(0xffff0000),  // Red at top
+                bounds.getCentreX(), bounds.getY(),
+                false);
+            gradient.addColour(0.3, juce::Colour(0xffffff00));  // Yellow in middle
+
+            g.setGradientFill(gradient);
+            g.fillRoundedRectangle(bounds.getX() + 2, meterY, bounds.getWidth() - 4, meterHeight, 2.0f);
+
+            // Draw gain reduction value as text
+            g.setColour(juce::Colours::white);
+            g.setFont(11.0f);
+            juce::String text = juce::String(grDB, 1) + " dB";
+            g.drawText(text, bounds.reduced(2), juce::Justification::centredTop, false);
+        }
+        else
+        {
+            // No compression - show "0 dB"
+            g.setColour(juce::Colours::grey);
+            g.setFont(11.0f);
+            g.drawText("0 dB", bounds, juce::Justification::centred, false);
+        }
+    }
+
+    void timerCallback() override
+    {
+        // Read gain reduction from processor
+        const float newGR = processor.currentGainReductionDB.load(std::memory_order_relaxed);
+
+        // Smooth the value for visual stability
+        currentGainReduction = currentGainReduction * 0.7f + newGR * 0.3f;
+
+        repaint();
+    }
+
+private:
+    PluginProcessor& processor;
+    float currentGainReduction = 0.0f;
+};
+
 // Custom LookAndFeel for solid black checkbox with green tick
 class CheckboxLookAndFeel : public juce::LookAndFeel_V4
 {
@@ -235,6 +314,7 @@ private:
     
     PluginProcessor& audioProcessor;
     Oscilloscope oscilloscope;
+    GainReductionMeter gainReductionMeter;
     CheckboxLookAndFeel checkboxLookAndFeel;
 
     // UI Components

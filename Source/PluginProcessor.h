@@ -63,6 +63,10 @@ public:
         float peakReduction,
         float makeupGain,
         int ratioMode);
+
+    // Atomic gain reduction for UI meter (in dB) - public for UI access
+    std::atomic<float> currentGainReductionDB{ 0.0f };
+
 private:
     
     std::unique_ptr<juce::dsp::Oversampling<float>> oversampling;
