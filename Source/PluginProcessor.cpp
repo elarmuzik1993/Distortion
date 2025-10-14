@@ -1,4 +1,4 @@
-/*
+﻿/*
   ==============================================================================
 
     This file contains the basic framework code for a JUCE plugin processor.
@@ -36,12 +36,13 @@ PluginProcessor::PluginProcessor()
     compMakeupGainParam = parameters.getRawParameterValue("compMakeupGain");
     compRatioParam = parameters.getRawParameterValue("compRatio");
     compEnabledParam = parameters.getRawParameterValue("compEnabled");
-
+    compWetDryParam = parameters.getRawParameterValue("compWetDry");
+    compCrossoverParam = parameters.getRawParameterValue("compCrossover");
     // Verify all parameters were found
     jassert(inputGainParam && outputGainParam && distortionAmountParam
         && highPassFreqParam && bandSplitEnabledParam && clipTypeParam
         && lfoRateParam && lfoDepthParam
-        && compPeakReductionParam && compMakeupGainParam && compRatioParam && compEnabledParam);
+        && compPeakReductionParam && compMakeupGainParam && compRatioParam && compEnabledParam && compWetDryParam && compCrossoverParam);
 }
 
 PluginProcessor::~PluginProcessor()
@@ -164,15 +165,12 @@ if (!oversampling || currentNumChannels != numChannels) {
     preHighPassFilter.prepare(spec);
     preHighPassFilter.reset();
  
-    // DC BLOCKING FILTER AT OUTPUT
+    // DC BLOCKING 1
     dcBlockingFilter.state = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, 20.0f);
     dcBlockingFilter.prepare(spec);
     dcBlockingFilter.reset();
 
-    // ========== BAND-SPLIT FILTER PREPARATION BELOW ==========
-    // Prepare band-split filters (Linkwitz-Riley at 150Hz)
-    // Using cascaded Butterworth 2nd order for 4th order LR crossover
-
+    // ========== 808-SAFE DISTORTION FILTERS (150Hz, Oversampled) ==========
     const float crossoverFreq = 150.0f;
 
     lowPassFilter1.state = juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, crossoverFreq);
@@ -191,26 +189,44 @@ if (!oversampling || currentNumChannels != numChannels) {
     highPassFilter2.prepare(spec);
     highPassFilter2.reset();
 
-    compLowPassFilter1.state = juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, crossoverFreq);
-    compLowPassFilter1.prepare(spec);
+    //  DC BLOCK #2 (Normal Rate - After Compression) 
+    juce::dsp::ProcessSpec normalSpec;
+    normalSpec.sampleRate = sampleRate;  // Normal rate, not oversampled
+    normalSpec.maximumBlockSize = static_cast<juce::uint32>(samplesPerBlock);
+    normalSpec.numChannels = static_cast<juce::uint32>(numChannels);
+
+    dcBlockingFilter2.state = juce::dsp::IIR::Coefficients<float>::makeHighPass(normalSpec.sampleRate, 20.0f);
+    dcBlockingFilter2.prepare(normalSpec);
+    dcBlockingFilter2.reset();
+
+    
+    const float compCrossoverFreq = compCrossoverParam ? compCrossoverParam->load() : 250.0f;
+
+    compLowPassFilter1.state = juce::dsp::IIR::Coefficients<float>::makeLowPass(normalSpec.sampleRate, compCrossoverFreq);
+    compLowPassFilter1.prepare(normalSpec);
     compLowPassFilter1.reset();
 
-    compLowPassFilter2.state = juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, crossoverFreq);
-    compLowPassFilter2.prepare(spec);
+    compLowPassFilter2.state = juce::dsp::IIR::Coefficients<float>::makeLowPass(normalSpec.sampleRate, compCrossoverFreq);
+    compLowPassFilter2.prepare(normalSpec);
     compLowPassFilter2.reset();
 
-    compHighPassFilter1.state = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, crossoverFreq);
-    compHighPassFilter1.prepare(spec);
+    compHighPassFilter1.state = juce::dsp::IIR::Coefficients<float>::makeHighPass(normalSpec.sampleRate, compCrossoverFreq);
+    compHighPassFilter1.prepare(normalSpec);
     compHighPassFilter1.reset();
 
-    compHighPassFilter2.state = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, crossoverFreq);
-    compHighPassFilter2.prepare(spec);
+    compHighPassFilter2.state = juce::dsp::IIR::Coefficients<float>::makeHighPass(normalSpec.sampleRate, compCrossoverFreq);
+    compHighPassFilter2.prepare(normalSpec);
     compHighPassFilter2.reset();
+
 
     // Prepare buffers for band-split processing (oversampled size)
     const int oversampledBlockSize = samplesPerBlock * static_cast<int>(oversamplingFactor);
     lowBandBuffer.setSize(numChannels, oversampledBlockSize);
     highBandBuffer.setSize(numChannels, oversampledBlockSize);
+    // ========== ADD COMPRESSION BUFFERS (Normal Rate) ==========
+    compLowBandBuffer.setSize(numChannels, samplesPerBlock);
+    compHighBandBuffer.setSize(numChannels, samplesPerBlock);
+    compDryBuffer.setSize(numChannels, samplesPerBlock);
     // =============================================================
 }
 
@@ -221,6 +237,7 @@ void PluginProcessor::releaseResources()
     oversampling.reset();
     preHighPassFilter.reset();
     dcBlockingFilter.reset();
+    dcBlockingFilter2.reset();
 }
 
 #ifndef JucePlugin_PreferredChannelConfigurations
@@ -264,7 +281,7 @@ void PluginProcessor::applyLA2ACompression(juce::AudioBuffer<float>& buffer,
     const float ratio = (ratioMode == 0) ? 3.0f : 12.0f;
 
     // Map makeup gain (0-100, 50=unity) to dB
-    const float makeupGainDB = (makeupGain - 50.0f) * 0.24f;  // �12dB range
+    const float makeupGainDB = (makeupGain - 50.0f) * 0.24f;  // ±12dB range
     const float makeupGainLinear = juce::Decibels::decibelsToGain(makeupGainDB);
 
     // Optical cell timing (program-dependent)
@@ -378,6 +395,8 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const float compMakeupGain = compMakeupGainParam->load();
     const int compRatioMode = static_cast<int>(compRatioParam->load());
     const bool compEnabled = compEnabledParam->load() > 0.5f;
+    const float compWetDry = compWetDryParam->load();
+    const float compCrossover = compCrossoverParam->load();
 
     // Scale to actual ranges for processing
     const auto inGain = inGainParam / 50.0f;
@@ -426,56 +445,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const size_t numSamples = oversampledBlock.getNumSamples();
     const size_t numChannels = oversampledBlock.getNumChannels();
 
-    if (compEnabled && compPeakReduction > 0.0f)
-    {
-        // Split into low/high bands for compression
-        lowBandBuffer.clear();
-        highBandBuffer.clear();
-
-        // FIRST: Copy data to buffers
-        for (size_t channel = 0; channel < numChannels; ++channel)
-        {
-            lowBandBuffer.copyFrom(static_cast<int>(channel), 0,
-                oversampledBlock.getChannelPointer(channel),
-                static_cast<int>(numSamples));
-            highBandBuffer.copyFrom(static_cast<int>(channel), 0,
-                oversampledBlock.getChannelPointer(channel),
-                static_cast<int>(numSamples));
-        }
-
-        // SECOND: Create AudioBlocks
-        auto lowBlock = juce::dsp::AudioBlock<float>(lowBandBuffer).getSubBlock(0, numSamples);
-        auto highBlock = juce::dsp::AudioBlock<float>(highBandBuffer).getSubBlock(0, numSamples);
-
-        // THIRD: Apply COMPRESSION-SPECIFIC filters (150Hz split)
-        compLowPassFilter1.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
-        compLowPassFilter2.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
-
-        compHighPassFilter1.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
-        compHighPassFilter2.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
-
-        // Apply compression to LOW BAND ONLY
-        juce::AudioBuffer<float> lowBandView(
-            lowBandBuffer.getArrayOfWritePointers(),
-            static_cast<int>(numChannels),
-            static_cast<int>(numSamples)
-        );
-
-        applyLA2ACompression(lowBandView, compPeakReduction, compMakeupGain, compRatioMode);
-
-        // Recombine compressed low + clean high back into main buffer
-        for (size_t channel = 0; channel < numChannels; ++channel)
-        {
-            auto* outputData = oversampledBlock.getChannelPointer(channel);
-            const auto* lowData = lowBandBuffer.getReadPointer(static_cast<int>(channel));
-            const auto* highData = highBandBuffer.getReadPointer(static_cast<int>(channel));
-
-            for (size_t sample = 0; sample < numSamples; ++sample)
-            {
-                outputData[sample] = lowData[sample] + highData[sample];
-            }
-        }
-    }
+    
     // ==========================================================
 
     // ========== 808-SAFE DISTORTION PROCESSING (INDEPENDENT) ==========
@@ -650,6 +620,83 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
     // Downsample back into original buffer
     oversampling->processSamplesDown(inputBlock);
+
+    // ========== PARALLEL COMPRESSION (After Downsampling, Normal Rate) ==========
+    if (compEnabled && compPeakReduction > 0.0f)
+    {
+        const int normalNumSamples = buffer.getNumSamples();
+        const int normalNumChannels = buffer.getNumChannels();
+
+        // Store DRY signal for parallel blending
+        for (int channel = 0; channel < normalNumChannels; ++channel)
+        {
+            compDryBuffer.copyFrom(channel, 0, buffer, channel, 0, normalNumSamples);
+        }
+
+        // Create WET signal: Split → Compress low only → Recombine
+        compLowBandBuffer.clear();
+        compHighBandBuffer.clear();
+
+        // Copy main buffer to both bands
+        for (int channel = 0; channel < normalNumChannels; ++channel)
+        {
+            compLowBandBuffer.copyFrom(channel, 0, buffer, channel, 0, normalNumSamples);
+            compHighBandBuffer.copyFrom(channel, 0, buffer, channel, 0, normalNumSamples);
+        }
+
+        // Update crossover frequency dynamically
+        const double normalSampleRate = getSampleRate();
+        *compLowPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(normalSampleRate, compCrossover);
+        *compLowPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(normalSampleRate, compCrossover);
+        *compHighPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(normalSampleRate, compCrossover);
+        *compHighPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(normalSampleRate, compCrossover);
+
+        // Create blocks for filtering
+        auto lowBlock = juce::dsp::AudioBlock<float>(compLowBandBuffer).getSubBlock(0, static_cast<size_t>(normalNumSamples));
+        auto highBlock = juce::dsp::AudioBlock<float>(compHighBandBuffer).getSubBlock(0, static_cast<size_t>(normalNumSamples));
+
+        // Apply Linkwitz-Riley crossover (4th order)
+        compLowPassFilter1.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
+        compLowPassFilter2.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
+
+        compHighPassFilter1.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
+        compHighPassFilter2.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
+
+        // Compress LOW BAND ONLY
+        applyLA2ACompression(compLowBandBuffer, compPeakReduction, compMakeupGain, compRatioMode);
+
+        // Recombine: Compressed low + Clean high = WET signal (store in main buffer)
+        for (int channel = 0; channel < normalNumChannels; ++channel)
+        {
+            auto* mainData = buffer.getWritePointer(channel);
+            const auto* lowData = compLowBandBuffer.getReadPointer(channel);
+            const auto* highData = compHighBandBuffer.getReadPointer(channel);
+
+            for (int sample = 0; sample < normalNumSamples; ++sample)
+            {
+                mainData[sample] = lowData[sample] + highData[sample];  // WET signal
+            }
+        }
+
+        // PARALLEL BLEND: Mix dry and wet based on compWetDry parameter
+        const float wetAmount = compWetDry / 100.0f;  // 0.0 to 1.0
+        const float dryAmount = 1.0f - wetAmount;
+
+        for (int channel = 0; channel < normalNumChannels; ++channel)
+        {
+            auto* mainData = buffer.getWritePointer(channel);
+            const auto* dryData = compDryBuffer.getReadPointer(channel);
+
+            for (int sample = 0; sample < normalNumSamples; ++sample)
+            {
+                mainData[sample] = dryAmount * dryData[sample] + wetAmount * mainData[sample];
+            }
+        }
+    }
+
+    // DC BLOCK #2 (After Compression, Normal Rate)
+    auto normalBlock = juce::dsp::AudioBlock<float>(buffer);
+    dcBlockingFilter2.process(juce::dsp::ProcessContextReplacing<float>(normalBlock));
 
     // Apply output gain to the final downsampled result
     for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
@@ -844,6 +891,19 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         juce::ParameterID{ "compEnabled", 1 },
         "Compressor Enable",
         false));  // Default OFF
+
+  
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "compWetDry", 1 },
+        "Comp Wet/Dry",
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f),
+        50.0f));  // Default 50 = 50% dry, 50% wet (parallel blend)
+
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "compCrossover", 1 },
+        "Comp Crossover",
+        juce::NormalisableRange<float>(150.0f, 350.0f, 1.0f),
+        250.0f));  // Default 250Hz split frequency
 
     return { params.begin(), params.end() };
 }

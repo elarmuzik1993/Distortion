@@ -73,6 +73,8 @@ private:
     juce::dsp::IIR::Coefficients<float>> preHighPassFilter;
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
     juce::dsp::IIR::Coefficients<float>> dcBlockingFilter;
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> dcBlockingFilter2;
 
     // ========== SPLIT FILTER HERE ==========
 
@@ -96,6 +98,9 @@ private:
 
     juce::AudioBuffer<float> lowBandBuffer;   // For clean low frequencies
     juce::AudioBuffer<float> highBandBuffer;  // For distorted high frequencies
+    juce::AudioBuffer<float> compLowBandBuffer;   // Low band for compression split
+    juce::AudioBuffer<float> compHighBandBuffer;  // High band for compression split
+    juce::AudioBuffer<float> compDryBuffer;       // Dry signal for parallel blend
 
 
     juce::SmoothedValue<float> smoothedInputGain, smoothedOutputGain, smoothedDistortion;
@@ -116,6 +121,9 @@ private:
     std::atomic<float>* compMakeupGainParam = nullptr;
     std::atomic<float>* compRatioParam = nullptr;  
     std::atomic<float>* compEnabledParam = nullptr;
+
+    std::atomic<float>* compWetDryParam = nullptr;      // 0=100% dry, 100=100% wet
+    std::atomic<float>* compCrossoverParam = nullptr;   // 150-350Hz adjustable split
     
 
     // ========== COMPRESSOR STATE VARIABLES (INSERT HERE) ==========
