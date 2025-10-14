@@ -250,7 +250,8 @@ private:
     juce::Label compRatioLabel;
     juce::ToggleButton compEnableToggle;
     juce::Label compSectionLabel;  // "LOW-END COMPRESSION" title
-
+    CustomKnob compWetDrySlider, compCrossoverSlider;
+    juce::Label compWetDryLabel, compCrossoverLabel;
     juce::ToggleButton bandSplitToggle;
     juce::Label bandSplitLabel;
 
@@ -271,7 +272,8 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> compMakeupGainAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> compRatioAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> compEnableAttachment;
-
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> compWetDryAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> compCrossoverAttachment;
     // Helper methods
     void setupSlider(CustomKnob& slider,
         juce::Label& label,

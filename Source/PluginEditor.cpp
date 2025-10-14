@@ -41,6 +41,10 @@ PluginEditor::PluginEditor(PluginProcessor& p)
         compPeakReductionAttachment, "compPeakReduction");
     setupSlider(compMakeupGainSlider, compMakeupGainLabel, "Makeup Gain",
         compMakeupGainAttachment, "compMakeupGain");
+    setupSlider(compWetDrySlider, compWetDryLabel, "Wet/Dry",
+        compWetDryAttachment, "compWetDry");
+    setupSlider(compCrossoverSlider, compCrossoverLabel, "Crossover",
+        compCrossoverAttachment, "compCrossover");
 
     // Setup Compress/Limit dropdown
     addAndMakeVisible(compRatioComboBox);
@@ -197,11 +201,11 @@ void PluginEditor::resized()
     auto compTitleArea = compressionArea.removeFromTop(20);
     compSectionLabel.setBounds(compTitleArea);
 
-    // Compression controls layout
-    const int compKnobSize = 60;  // Smaller knobs for compression bar
-    const int compSpacing = 20;
-    const int compControlsWidth = (3 * compKnobSize) + (2 * compSpacing) + 60 + 30;  // 3 knobs + dropdown + toggle
-    const int compStartX = compressionArea.getRight() - compControlsWidth - 20;  // Align to RIGHT with 20px margin
+    // ========== COMPRESSION CONTROLS LAYOUT (5 knobs + dropdown + toggle) ==========
+    const int compKnobSize = 60;
+    const int compSpacing = 15;
+    const int compControlsWidth = (5 * compKnobSize) + (4 * compSpacing) + 60 + 30;  // 5 knobs + dropdown + toggle
+    const int compStartX = compressionArea.getRight() - compControlsWidth - 20;
     const int compKnobY = compressionArea.getY() + 5;
 
     // Peak Reduction knob
@@ -213,8 +217,18 @@ void PluginEditor::resized()
     compMakeupGainSlider.setBounds(makeupX, compKnobY, compKnobSize, compKnobSize);
     compMakeupGainLabel.setBounds(makeupX, compKnobY + compKnobSize, compKnobSize, 15);
 
+    // Wet/Dry knob (NEW)
+    const int wetDryX = makeupX + compKnobSize + compSpacing;
+    compWetDrySlider.setBounds(wetDryX, compKnobY, compKnobSize, compKnobSize);
+    compWetDryLabel.setBounds(wetDryX, compKnobY + compKnobSize, compKnobSize, 15);
+
+    // Crossover knob (NEW)
+    const int crossoverX = wetDryX + compKnobSize + compSpacing;
+    compCrossoverSlider.setBounds(crossoverX, compKnobY, compKnobSize, compKnobSize);
+    compCrossoverLabel.setBounds(crossoverX, compKnobY + compKnobSize, compKnobSize, 15);
+
     // Compress/Limit dropdown
-    const int dropdownX = makeupX + compKnobSize + compSpacing;
+    const int dropdownX = crossoverX + compKnobSize + compSpacing;
     const int dropdownWidth = 60;
     compRatioComboBox.setBounds(dropdownX, compKnobY + 15, dropdownWidth, 20);
     compRatioLabel.setBounds(dropdownX, compKnobY + 37, dropdownWidth, 12);
