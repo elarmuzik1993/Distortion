@@ -147,6 +147,9 @@ private:
     float lfoPhase = 0.0f;
     float currentSampleRate = 44100.0f;
 
+    // Cached filter parameters to avoid unnecessary coefficient updates
+    float lastHighPassFreq = -1.0f;
+
     juce::AudioBuffer<float> scopeBuffer;
     juce::AbstractFifo scopeFifo;
     static constexpr int SCOPE_BUFFER_SIZE = 2048;

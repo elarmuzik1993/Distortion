@@ -161,60 +161,70 @@ if (!oversampling || currentNumChannels != numChannels) {
     spec.maximumBlockSize = static_cast<juce::uint32>(samplesPerBlock * oversamplingFactor);
     spec.numChannels = static_cast<juce::uint32>(numChannels);
 
-    preHighPassFilter.state = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, highPassFreqParam->load());
+    // Initialize with default frequency, but DON'T cache it to lastHighPassFreq
+    // This allows the first processBlock to set the correct frequency after state restoration
+    *preHighPassFilter.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, 120.0f);
     preHighPassFilter.prepare(spec);
     preHighPassFilter.reset();
+
+    // Force filter update on first processBlock (especially important for DAW state restoration)
+    lastHighPassFreq = -1.0f;
+
+    // DIAGNOSTIC: Log prepareToPlay call
+    DBG("prepareToPlay called - sampleRate: " << sampleRate
+        << ", highPassFreqParam: " << (highPassFreqParam ? highPassFreqParam->load() : -999.0f)
+        << ", lastHighPassFreq reset to: " << lastHighPassFreq);
  
     // DC BLOCKING 1
-    dcBlockingFilter.state = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, 20.0f);
+    *dcBlockingFilter.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, 20.0f);
     dcBlockingFilter.prepare(spec);
     dcBlockingFilter.reset();
 
     // ========== 808-SAFE DISTORTION FILTERS (150Hz, Oversampled) ==========
     const float crossoverFreq = 150.0f;
 
-    lowPassFilter1.state = juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, crossoverFreq);
+    *lowPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, crossoverFreq);
     lowPassFilter1.prepare(spec);
     lowPassFilter1.reset();
 
-    lowPassFilter2.state = juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, crossoverFreq);
+    *lowPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, crossoverFreq);
     lowPassFilter2.prepare(spec);
     lowPassFilter2.reset();
 
-    highPassFilter1.state = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, crossoverFreq);
+    *highPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, crossoverFreq);
     highPassFilter1.prepare(spec);
     highPassFilter1.reset();
 
-    highPassFilter2.state = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, crossoverFreq);
+    *highPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, crossoverFreq);
     highPassFilter2.prepare(spec);
     highPassFilter2.reset();
 
-    //  DC BLOCK #2 (Normal Rate - After Compression) 
+    //  DC BLOCK #2 (Normal Rate - After Compression)
     juce::dsp::ProcessSpec normalSpec;
     normalSpec.sampleRate = sampleRate;  // Normal rate, not oversampled
     normalSpec.maximumBlockSize = static_cast<juce::uint32>(samplesPerBlock);
     normalSpec.numChannels = static_cast<juce::uint32>(numChannels);
 
-    dcBlockingFilter2.state = juce::dsp::IIR::Coefficients<float>::makeHighPass(normalSpec.sampleRate, 20.0f);
+    *dcBlockingFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(normalSpec.sampleRate, 20.0f);
     dcBlockingFilter2.prepare(normalSpec);
     dcBlockingFilter2.reset();
 
-    
+
     const float compCrossoverFreq = compCrossoverParam ? compCrossoverParam->load() : 250.0f;
 
-    compLowPassFilter1.state = juce::dsp::IIR::Coefficients<float>::makeLowPass(normalSpec.sampleRate, compCrossoverFreq);
+    *compLowPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(normalSpec.sampleRate, compCrossoverFreq);
     compLowPassFilter1.prepare(normalSpec);
     compLowPassFilter1.reset();
 
-    compLowPassFilter2.state = juce::dsp::IIR::Coefficients<float>::makeLowPass(normalSpec.sampleRate, compCrossoverFreq);
+    *compLowPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(normalSpec.sampleRate, compCrossoverFreq);
     compLowPassFilter2.prepare(normalSpec);
     compLowPassFilter2.reset();
 
-    compHighPassFilter1.state = juce::dsp::IIR::Coefficients<float>::makeHighPass(normalSpec.sampleRate, compCrossoverFreq);
+    *compHighPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(normalSpec.sampleRate, compCrossoverFreq);
     compHighPassFilter1.prepare(normalSpec);
     compHighPassFilter1.reset();
 
-    compHighPassFilter2.state = juce::dsp::IIR::Coefficients<float>::makeHighPass(normalSpec.sampleRate, compCrossoverFreq);
+    *compHighPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(normalSpec.sampleRate, compCrossoverFreq);
     compHighPassFilter2.prepare(normalSpec);
     compHighPassFilter2.reset();
 
@@ -443,8 +453,37 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     auto inputBlock = juce::dsp::AudioBlock<float>(buffer);
     auto oversampledBlock = oversampling->processSamplesUp(inputBlock);
 
-    *preHighPassFilter.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(
-        getSampleRate() * oversamplingFactor, highPassFreq);
+    // Always ensure filter state is valid and update if frequency changed OR if state is uninitialized
+    static int processCount = 0;
+    bool filterUpdated = false;
+
+    // DIAGNOSTIC: Always log for first 20 blocks to see what's happening
+    if (processCount < 20)
+    {
+        DBG("processBlock #" << processCount
+            << " - highPassFreq: " << highPassFreq
+            << ", lastHighPassFreq: " << lastHighPassFreq
+            << ", diff: " << std::abs(highPassFreq - lastHighPassFreq)
+            << ", stateIsNull: " << (!preHighPassFilter.state ? "YES" : "NO")
+            << ", will update: " << ((!preHighPassFilter.state || std::abs(highPassFreq - lastHighPassFreq) > 0.01f) ? "YES" : "NO"));
+    }
+
+    if (!preHighPassFilter.state || std::abs(highPassFreq - lastHighPassFreq) > 0.01f)
+    {
+        // Update coefficients IN-PLACE (dereference both sides)
+        *preHighPassFilter.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(
+            getSampleRate() * oversamplingFactor, highPassFreq);
+
+        lastHighPassFreq = highPassFreq;
+        filterUpdated = true;
+
+        if (processCount < 20)
+        {
+            DBG("  -> Filter coefficients UPDATED to " << highPassFreq << "Hz at oversampled rate " << (getSampleRate() * oversamplingFactor) << "Hz");
+        }
+    }
+
+    processCount++;
 
     // Pre-filtering
     preHighPassFilter.process(juce::dsp::ProcessContextReplacing<float>(oversampledBlock));
@@ -819,7 +858,45 @@ void PluginProcessor::setStateInformation(const void* data, int sizeInBytes)
 {
     std::unique_ptr<juce::XmlElement> xmlState(getXmlFromBinary(data, sizeInBytes));
     if (xmlState != nullptr)
+    {
+        // DIAGNOSTIC: Log BEFORE state restoration
+        DBG("setStateInformation BEFORE - highPassFreqParam: "
+            << (highPassFreqParam ? highPassFreqParam->load() : -999.0f));
+
         parameters.replaceState(juce::ValueTree::fromXml(*xmlState));
+
+        // DIAGNOSTIC: Log AFTER state restoration
+        DBG("setStateInformation AFTER - highPassFreqParam: "
+            << (highPassFreqParam ? highPassFreqParam->load() : -999.0f)
+            << ", lastHighPassFreq reset to: -1.0");
+
+        // Reset all filters when loading state to prevent stale coefficients/state
+        if (preHighPassFilter.state)
+            preHighPassFilter.reset();
+        if (dcBlockingFilter.state)
+            dcBlockingFilter.reset();
+        if (dcBlockingFilter2.state)
+            dcBlockingFilter2.reset();
+        if (lowPassFilter1.state)
+            lowPassFilter1.reset();
+        if (lowPassFilter2.state)
+            lowPassFilter2.reset();
+        if (highPassFilter1.state)
+            highPassFilter1.reset();
+        if (highPassFilter2.state)
+            highPassFilter2.reset();
+        if (compLowPassFilter1.state)
+            compLowPassFilter1.reset();
+        if (compLowPassFilter2.state)
+            compLowPassFilter2.reset();
+        if (compHighPassFilter1.state)
+            compHighPassFilter1.reset();
+        if (compHighPassFilter2.state)
+            compHighPassFilter2.reset();
+
+        // Force filter coefficient update on next processBlock by invalidating cache
+        lastHighPassFreq = -1.0f;
+    }
 }
 
 //Add Parameter Definition Here

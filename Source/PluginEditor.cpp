@@ -204,13 +204,6 @@ void PluginEditor::resized()
     auto compTitleArea = compressionArea.removeFromTop(20);
     compSectionLabel.setBounds(compTitleArea);
 
-    // ========== GAIN REDUCTION METER (LEFT SIDE) ==========
-    const int meterWidth = 40;
-    const int meterHeight = 65;
-    const int meterX = compressionArea.getX() + 10;
-    const int meterY = compressionArea.getY() + 5;
-    gainReductionMeter.setBounds(meterX, meterY, meterWidth, meterHeight);
-
     // ========== COMPRESSION CONTROLS LAYOUT (5 knobs + dropdown + toggle) ==========
     const int compKnobSize = 60;
     const int compSpacing = 15;
@@ -247,6 +240,13 @@ void PluginEditor::resized()
     const int toggleX = dropdownX + dropdownWidth + 15;
     const int toggleSize = 24;
     compEnableToggle.setBounds(toggleX, compKnobY + 15, toggleSize, toggleSize);
+
+    // ========== GAIN REDUCTION METER (RIGHT SIDE, AFTER COMPRESSION CONTROLS) ==========
+    const int meterWidth = 40;
+    const int meterHeight = 65;
+    const int meterX = toggleX + toggleSize + 20;  // Position after the enable toggle
+    const int meterY = compressionArea.getY() + 5;
+    gainReductionMeter.setBounds(meterX, meterY, meterWidth, meterHeight);
     // ===========================================================
 
     // Calculate space needed for distortion controls
