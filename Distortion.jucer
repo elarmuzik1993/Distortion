@@ -13,9 +13,9 @@
             file="Source/PluginEditor.cpp"/>
       <FILE id="cBmPhs" name="PluginEditor.h" compile="0" resource="0" file="Source/PluginEditor.h"/>
     </GROUP>
+    <FILE id="UwTQgs" name="background.png" compile="0" resource="1" file="Resources/background.png"/>
     <FILE id="k8TTjs" name="CustomKnob.cpp" compile="1" resource="0" file="Source/CustomKnob.cpp"/>
     <FILE id="Cj3vPi" name="CustomKnob.h" compile="0" resource="0" file="Source/CustomKnob.h"/>
-    <FILE id="qIOX2q" name="background.png" compile="0" resource="1" file="../../background.png"/>
   </MAINGROUP>
   <MODULES>
     <MODULE id="juce_audio_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
@@ -39,7 +39,9 @@
   <EXPORTFORMATS>
     <VS2022 targetFolder="Builds/VisualStudio2022">
       <CONFIGURATIONS>
-        <CONFIGURATION isDebug="1" name="Debug" targetName="Distortion" enablePluginBinaryCopyStep="0"/>
+        <CONFIGURATION isDebug="1" name="Debug" targetName="Distortion" enablePluginBinaryCopyStep="1"
+                       vst3BinaryLocation_Win32="C:\Program Files\Common Files\VST3"
+                       vst3BinaryLocation_x64="C:\Program Files\Common Files\VST3"/>
         <CONFIGURATION isDebug="0" name="Release" targetName="Distortion" enablePluginBinaryCopyStep="1"
                        vst3BinaryLocation_Win32="%CommonProgramFiles(x86)%\VST3" vst3BinaryLocation_x64="%CommonProgramW6432%\VST3"
                        vst3BinaryLocation_arm64=" "/>

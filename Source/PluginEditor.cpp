@@ -16,9 +16,11 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 {
     addAndMakeVisible(oscilloscope);
     addAndMakeVisible(gainReductionMeter);
-    setSize(600, 500);  // Changed from 400 to 500 (added 100px for compression bar)
-    setResizable(true, true);
-    setResizeLimits(350, 450, 800, 700);  // Changed min/max heights
+
+    // Set fixed window size - no resizing allowed
+    setSize(802, 564);
+    setResizeLimits(802, 564, 802, 564);
+    setResizable(false, false);
     backgroundImage = juce::ImageCache::getFromMemory(
         BinaryData::background_png,
         BinaryData::background_pngSize
