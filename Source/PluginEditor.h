@@ -24,10 +24,10 @@ public:
     {
         setOpaque(true);
         setBufferedToImage(true);
-        startTimerHz(30);
-        displayBuffer.setSize(2, 512);
+        startTimerHz(DSPConstants::SCOPE_REFRESH_RATE_HZ);
+        displayBuffer.setSize(2, DSPConstants::SCOPE_DISPLAY_POINTS);
         displayBuffer.clear();
-        cachedBuffer.setSize(2, 512);
+        cachedBuffer.setSize(2, DSPConstants::SCOPE_DISPLAY_POINTS);
         cachedBuffer.clear();
     }
 
@@ -40,7 +40,7 @@ public:
         juce::Timer::callAfterDelay(50, [this]()
             {
                 if (!isTimerRunning())
-                    startTimerHz(30);
+                    startTimerHz(DSPConstants::SCOPE_REFRESH_RATE_HZ);
             });
     }
 
@@ -127,7 +127,7 @@ private:
         if (channel >= cachedBuffer.getNumChannels()) return;
 
         juce::Path waveformPath;
-        const int numPoints = juce::jmin(512, numSamples);
+        const int numPoints = juce::jmin(DSPConstants::SCOPE_DISPLAY_POINTS, numSamples);
         if (numPoints < 2) return;
 
         bool pathStarted = false;
@@ -198,7 +198,7 @@ class GainReductionMeter : public juce::Component, public juce::Timer
 public:
     GainReductionMeter(PluginProcessor& p) : processor(p)
     {
-        startTimerHz(30);  // 30 FPS refresh rate
+        startTimerHz(DSPConstants::METER_REFRESH_RATE_HZ);
     }
 
     void paint(juce::Graphics& g) override
@@ -218,8 +218,8 @@ public:
 
         if (grDB > 0.01f)  // Only draw if there's meaningful gain reduction
         {
-            // Map gain reduction (0-20dB) to meter height
-            const float maxDB = 20.0f;
+            // Map gain reduction to meter height
+            const float maxDB = DSPConstants::METER_MAX_DB;
             const float clampedDB = juce::jlimit(0.0f, maxDB, grDB);
             const float normalizedLevel = clampedDB / maxDB;
 
@@ -260,7 +260,8 @@ public:
         const float newGR = processor.currentGainReductionDB.load(std::memory_order_relaxed);
 
         // Smooth the value for visual stability
-        currentGainReduction = currentGainReduction * 0.7f + newGR * 0.3f;
+        currentGainReduction = currentGainReduction * DSPConstants::METER_SMOOTHING +
+                              newGR * (1.0f - DSPConstants::METER_SMOOTHING);
 
         repaint();
     }

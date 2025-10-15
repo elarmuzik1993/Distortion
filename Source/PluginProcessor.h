@@ -12,6 +12,59 @@
 #include <juce_dsp/juce_dsp.h>
 #include <memory>
 
+//==============================================================================
+// DSP Constants - Centralized configuration for audio processing algorithms
+//==============================================================================
+namespace DSPConstants
+{
+    // Oversampling configuration
+    constexpr int OVERSAMPLING_FACTOR = 4;                    // 4x oversampling to prevent aliasing
+    constexpr int OVERSAMPLING_STAGES = 2;                    // 2 stages for polyphase IIR
+
+    // Distortion band-split crossover (808-Safe mode)
+    constexpr float DISTORTION_CROSSOVER_FREQ = 150.0f;       // Preserve sub-bass below 150Hz
+
+    // Distortion gain scaling
+    constexpr float DISTORTION_INPUT_SCALE = 0.6f;            // Pre-distortion gain attenuation
+    constexpr float DISTORTION_DRIVE_SCALE = 1.2f;            // Secondary drive multiplier
+
+    // DC blocking filter frequency
+    constexpr float DC_BLOCKING_FREQ = 20.0f;                 // Remove DC offset at 20Hz
+
+    // LA-2A Compressor optical cell simulation
+    constexpr float COMP_ATTACK_COEFF = 0.9995f;              // ~10ms attack (fast optical response)
+    constexpr float COMP_RELEASE_COEFF = 0.99995f;            // ~500ms release (slow optical decay)
+    constexpr float COMP_KNEE_WIDTH_DB = 2.0f;                // Soft knee for smooth compression
+    constexpr float COMP_THRESHOLD_MIN_DB = -60.0f;           // Minimum threshold
+    constexpr float COMP_THRESHOLD_RANGE_DB = 60.0f;          // Full range: -60dB to 0dB
+    constexpr float COMP_MAKEUP_RANGE_DB = 12.0f;             // ±12dB makeup gain range
+    constexpr float COMP_RATIO_COMPRESS = 3.0f;               // 3:1 compression ratio
+    constexpr float COMP_RATIO_LIMIT = 12.0f;                 // 12:1 limiting ratio
+    constexpr float COMP_RMS_HISTORY_COEFF = 0.99f;           // RMS smoothing for program-dependent behavior
+    constexpr float COMP_TUBE_BLEND = 0.15f;                  // 15% tube harmonic blend
+    constexpr float COMP_TUBE_DRIVE = 1.5f;                   // Tube saturation drive amount
+
+    // Default parameter values
+    constexpr float DEFAULT_HIPASS_FREQ = 120.0f;             // Default hi-pass filter frequency
+    constexpr float DEFAULT_COMP_CROSSOVER = 250.0f;          // Default compression crossover
+
+    // Oscilloscope configuration
+    constexpr int SCOPE_BUFFER_SIZE = 2048;                   // Circular buffer size for waveform display
+    constexpr int SCOPE_UPDATE_DECIMATION = 2;                // Update every 2 samples to reduce CPU
+    constexpr int SCOPE_DISPLAY_POINTS = 512;                 // Number of points to draw
+    constexpr int SCOPE_REFRESH_RATE_HZ = 30;                 // UI refresh rate
+
+    // Gain reduction meter
+    constexpr int METER_REFRESH_RATE_HZ = 30;                 // UI refresh rate
+    constexpr float METER_MAX_DB = 20.0f;                     // Maximum gain reduction display range
+    constexpr float METER_SMOOTHING = 0.7f;                   // Visual smoothing coefficient
+
+    // Parameter smoothing times (in seconds)
+    constexpr double GAIN_SMOOTH_TIME_S = 0.02;               // 20ms for gain changes
+    constexpr double DISTORTION_SMOOTH_TIME_S = 0.15;         // 150ms for distortion (slower to avoid zipper)
+    constexpr double COMP_GR_SMOOTH_TIME_S = 0.5;             // 500ms for gain reduction display
+}
+
 class PluginProcessor : public juce::AudioProcessor
 {
 public:
@@ -58,7 +111,6 @@ public:
     juce::AudioProcessorValueTreeState parameters;
     void fillScopeBuffer(juce::AudioBuffer<float>& destBuffer);
     void pushSampleToScope(float left, float right);
-    // ========== COMPRESSOR FUNCTION DECLARATION (INSERT HERE) ==========
     void applyLA2ACompression(juce::AudioBuffer<float>& buffer,
         float peakReduction,
         float makeupGain,
@@ -80,8 +132,7 @@ private:
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> dcBlockingFilter2;
 
-    // ========== SPLIT FILTER HERE ==========
-
+    // Distortion band-split filters (808-Safe mode)
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> lowPassFilter1;
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
@@ -91,6 +142,7 @@ private:
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> highPassFilter2;
 
+    // Compression band-split filters (normal sample rate)
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> compLowPassFilter1;
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
@@ -106,7 +158,6 @@ private:
     juce::AudioBuffer<float> compHighBandBuffer;  // High band for compression split
     juce::AudioBuffer<float> compDryBuffer;       // Dry signal for parallel blend
 
-
     juce::SmoothedValue<float> smoothedInputGain, smoothedOutputGain, smoothedDistortion;
 
     std::atomic<float>* inputGainParam = nullptr;
@@ -115,12 +166,10 @@ private:
     std::atomic<float>* highPassFreqParam = nullptr;
     std::atomic<float>* clipTypeParam = nullptr;
     std::atomic<float>* bandSplitEnabledParam = nullptr;
-   
     std::atomic<float>* lfoRateParam = nullptr;
     std::atomic<float>* lfoDepthParam = nullptr;
 
-    // ========== COMPRESSOR PARAMETERS (INSERT HERE) ==========
-
+    // Compressor parameters
     std::atomic<float>* compPeakReductionParam = nullptr;
     std::atomic<float>* compMakeupGainParam = nullptr;
     std::atomic<float>* compRatioParam = nullptr;  
@@ -128,10 +177,9 @@ private:
 
     std::atomic<float>* compWetDryParam = nullptr;      // 0=100% dry, 100=100% wet
     std::atomic<float>* compCrossoverParam = nullptr;   // 150-350Hz adjustable split
-    
 
-    // ========== COMPRESSOR STATE VARIABLES (INSERT HERE) ==========
-    // Optical cell envelope follower (LA-2A T4 cell simulation)
+    // Compressor state variables (LA-2A optical cell simulation)
+    // Optical cell envelope follower (T4 cell)
     float compEnvelopeState = 0.0f;
 
 
@@ -152,7 +200,6 @@ private:
 
     juce::AudioBuffer<float> scopeBuffer;
     juce::AbstractFifo scopeFifo;
-    static constexpr int SCOPE_BUFFER_SIZE = 2048;
     mutable juce::SpinLock scopeLock;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginProcessor)

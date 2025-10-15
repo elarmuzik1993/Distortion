@@ -20,7 +20,7 @@ PluginProcessor::PluginProcessor()
         .withOutput("Output", juce::AudioChannelSet::stereo(), true)
 #endif
     ), parameters(*this, nullptr, "Parameters", createParameterLayout()),
-    scopeFifo(SCOPE_BUFFER_SIZE)
+    scopeFifo(DSPConstants::SCOPE_BUFFER_SIZE)
 {
     // Initialize Parameter Pointer in Constructor
 
@@ -116,33 +116,33 @@ void PluginProcessor::changeProgramName(int index, const juce::String& newName)
 //==============================================================================
 void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
-    // ========== STORE SAMPLE RATE FOR LFO (INSERT HERE) ==========
+    // Store sample rate for LFO calculations
     currentSampleRate = static_cast<float>(sampleRate);
     lfoPhase = 0.0f;  // Reset LFO phase
     
     const int numChannels = std::max(1, getTotalNumInputChannels());
-    smoothedInputGain.reset(sampleRate, 0.02);      // 20 ms
-    smoothedOutputGain.reset(sampleRate, 0.02);     // 20 ms
-    smoothedDistortion.reset(sampleRate, 0.15);     // 150 ms slower ramp
+    smoothedInputGain.reset(sampleRate, DSPConstants::GAIN_SMOOTH_TIME_S);
+    smoothedOutputGain.reset(sampleRate, DSPConstants::GAIN_SMOOTH_TIME_S);
+    smoothedDistortion.reset(sampleRate, DSPConstants::DISTORTION_SMOOTH_TIME_S);
     compEnvelopeState = 0.0f;
     compRmsHistory = 0.0f;
     tubeWarmth = 0.0f;
 
     // Initialize smoothed gain reduction with slow release (LA-2A style)
-    smoothedGainReduction.reset(sampleRate, 0.5);  // 500ms for smooth, slow compression
+    smoothedGainReduction.reset(sampleRate, DSPConstants::COMP_GR_SMOOTH_TIME_S);
     smoothedGainReduction.setCurrentAndTargetValue(1.0f);  // Start at unity (no reduction)
-    
 
-    scopeBuffer.setSize(2, SCOPE_BUFFER_SIZE);
+
+    scopeBuffer.setSize(2, DSPConstants::SCOPE_BUFFER_SIZE);
     scopeBuffer.clear();
-    scopeFifo.setTotalSize(SCOPE_BUFFER_SIZE);
+    scopeFifo.setTotalSize(DSPConstants::SCOPE_BUFFER_SIZE);
 
 
 
     // Oversampling
 if (!oversampling || currentNumChannels != numChannels) {
     oversampling = std::make_unique<juce::dsp::Oversampling<float>>(
-        numChannels, 2,
+        numChannels, DSPConstants::OVERSAMPLING_STAGES,
         juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR,
         false, false
     );
@@ -163,25 +163,20 @@ if (!oversampling || currentNumChannels != numChannels) {
 
     // Initialize with default frequency, but DON'T cache it to lastHighPassFreq
     // This allows the first processBlock to set the correct frequency after state restoration
-    *preHighPassFilter.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, 120.0f);
+    *preHighPassFilter.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, DSPConstants::DEFAULT_HIPASS_FREQ);
     preHighPassFilter.prepare(spec);
     preHighPassFilter.reset();
 
     // Force filter update on first processBlock (especially important for DAW state restoration)
     lastHighPassFreq = -1.0f;
 
-    // DIAGNOSTIC: Log prepareToPlay call
-    DBG("prepareToPlay called - sampleRate: " << sampleRate
-        << ", highPassFreqParam: " << (highPassFreqParam ? highPassFreqParam->load() : -999.0f)
-        << ", lastHighPassFreq reset to: " << lastHighPassFreq);
- 
     // DC BLOCKING 1
-    *dcBlockingFilter.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, 20.0f);
+    *dcBlockingFilter.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, DSPConstants::DC_BLOCKING_FREQ);
     dcBlockingFilter.prepare(spec);
     dcBlockingFilter.reset();
 
-    // ========== 808-SAFE DISTORTION FILTERS (150Hz, Oversampled) ==========
-    const float crossoverFreq = 150.0f;
+    // 808-Safe distortion filters (Linkwitz-Riley crossover, oversampled domain)
+    const float crossoverFreq = DSPConstants::DISTORTION_CROSSOVER_FREQ;
 
     *lowPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, crossoverFreq);
     lowPassFilter1.prepare(spec);
@@ -205,12 +200,12 @@ if (!oversampling || currentNumChannels != numChannels) {
     normalSpec.maximumBlockSize = static_cast<juce::uint32>(samplesPerBlock);
     normalSpec.numChannels = static_cast<juce::uint32>(numChannels);
 
-    *dcBlockingFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(normalSpec.sampleRate, 20.0f);
+    *dcBlockingFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(normalSpec.sampleRate, DSPConstants::DC_BLOCKING_FREQ);
     dcBlockingFilter2.prepare(normalSpec);
     dcBlockingFilter2.reset();
 
-
-    const float compCrossoverFreq = compCrossoverParam ? compCrossoverParam->load() : 250.0f;
+    // Compression crossover filters (normal sample rate)
+    const float compCrossoverFreq = compCrossoverParam ? compCrossoverParam->load() : DSPConstants::DEFAULT_COMP_CROSSOVER;
 
     *compLowPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(normalSpec.sampleRate, compCrossoverFreq);
     compLowPassFilter1.prepare(normalSpec);
@@ -233,11 +228,11 @@ if (!oversampling || currentNumChannels != numChannels) {
     const int oversampledBlockSize = samplesPerBlock * static_cast<int>(oversamplingFactor);
     lowBandBuffer.setSize(numChannels, oversampledBlockSize);
     highBandBuffer.setSize(numChannels, oversampledBlockSize);
-    // ========== ADD COMPRESSION BUFFERS (Normal Rate) ==========
+
+    // Compression buffers (normal sample rate)
     compLowBandBuffer.setSize(numChannels, samplesPerBlock);
     compHighBandBuffer.setSize(numChannels, samplesPerBlock);
     compDryBuffer.setSize(numChannels, samplesPerBlock);
-    // =============================================================
 }
 
 
@@ -285,18 +280,19 @@ void PluginProcessor::applyLA2ACompression(juce::AudioBuffer<float>& buffer,
         return;
 
     // Map peak reduction (0-100) to threshold in dB
-    const float threshold = -60.0f + (peakReduction * 0.6f);  // -60dB to 0dB range
+    const float threshold = DSPConstants::COMP_THRESHOLD_MIN_DB +
+                          (peakReduction * DSPConstants::COMP_THRESHOLD_RANGE_DB / 100.0f);
 
     // Ratio: Compress mode = 3:1, Limit mode = 12:1 (LA-2A style)
-    const float ratio = (ratioMode == 0) ? 3.0f : 12.0f;
+    const float ratio = (ratioMode == 0) ? DSPConstants::COMP_RATIO_COMPRESS : DSPConstants::COMP_RATIO_LIMIT;
 
     // Map makeup gain (0-100, 50=unity) to dB
-    const float makeupGainDB = (makeupGain - 50.0f) * 0.24f;  // ±12dB range
+    const float makeupGainDB = (makeupGain - 50.0f) * (DSPConstants::COMP_MAKEUP_RANGE_DB / 50.0f);
     const float makeupGainLinear = juce::Decibels::decibelsToGain(makeupGainDB);
 
     // Optical cell timing (program-dependent)
-    const float attackCoeff = 0.9995f;   // ~10ms attack (slow optical response)
-    const float releaseCoeff = 0.99995f; // ~500ms release (optical cell decay)
+    const float attackCoeff = DSPConstants::COMP_ATTACK_COEFF;
+    const float releaseCoeff = DSPConstants::COMP_RELEASE_COEFF;
 
     float maxGainReductionDB = 0.0f;  // Track max gain reduction for meter display
 
@@ -313,7 +309,8 @@ void PluginProcessor::applyLA2ACompression(juce::AudioBuffer<float>& buffer,
         const float rms = std::sqrt(sumSquares / numChannels);
 
         // Update RMS history (program-dependent behavior)
-        compRmsHistory = 0.99f * compRmsHistory + 0.01f * rms;
+        compRmsHistory = DSPConstants::COMP_RMS_HISTORY_COEFF * compRmsHistory +
+                        (1.0f - DSPConstants::COMP_RMS_HISTORY_COEFF) * rms;
 
         // Convert to dB
         const float inputLevelDB = juce::Decibels::gainToDecibels(rms + 0.00001f);
@@ -324,8 +321,8 @@ void PluginProcessor::applyLA2ACompression(juce::AudioBuffer<float>& buffer,
         {
             const float overThresholdDB = inputLevelDB - threshold;
 
-            // Soft knee (2dB knee width for smooth LA-2A character)
-            const float kneeWidth = 2.0f;
+            // Soft knee for smooth LA-2A character
+            const float kneeWidth = DSPConstants::COMP_KNEE_WIDTH_DB;
             if (overThresholdDB < kneeWidth)
             {
                 // Soft knee curve
@@ -366,11 +363,12 @@ void PluginProcessor::applyLA2ACompression(juce::AudioBuffer<float>& buffer,
             sampleValue *= compEnvelopeState;
 
             // Tube harmonic generation (even harmonics for warmth)
-            const float tubeInput = sampleValue * 1.5f;
+            const float tubeInput = sampleValue * DSPConstants::COMP_TUBE_DRIVE;
             const float tubeSaturation = std::tanh(tubeInput);
 
             // Blend tube character (subtle 2nd harmonic)
-            sampleValue = sampleValue * 0.85f + tubeSaturation * 0.15f;
+            sampleValue = sampleValue * (1.0f - DSPConstants::COMP_TUBE_BLEND) +
+                         tubeSaturation * DSPConstants::COMP_TUBE_BLEND;
 
             // Apply makeup gain
             sampleValue *= makeupGainLinear;
@@ -421,7 +419,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const auto outGainDB = (outGainParam - 50.0f) * 0.24f;  // Maps 0->-12dB, 50->0dB, 100->+12dB
     const auto outGain = juce::Decibels::decibelsToGain(outGainDB);
 
-    // ========== LFO MODULATION (INSERT HERE) ==========
+    // LFO modulation for dynamic distortion effects
     // Calculate LFO value (sine wave from -1 to +1)
     float lfoValue = 0.0f;
     if (lfoRate > 0.0f)  // Only compute LFO if rate > 0
@@ -438,11 +436,9 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     }
 
     // Apply LFO modulation to distortion amount
-    // lfoValue ranges -1 to +1, lfoDepth is 0-100
     const float lfoModulation = (lfoValue * lfoDepth / 100.0f);  // -1 to +1 scaled by depth
     const float modulatedDistortionParam = juce::jlimit(0.0f, 100.0f, distortionParam + lfoModulation * 50.0f);
     const auto distortionAmount = 1.0f + (modulatedDistortionParam / 100.0f) * 50.0f;
-    // ==================================================
 
     smoothedInputGain.setTargetValue(inGain);
     smoothedOutputGain.setTargetValue(outGain);
@@ -453,21 +449,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     auto inputBlock = juce::dsp::AudioBlock<float>(buffer);
     auto oversampledBlock = oversampling->processSamplesUp(inputBlock);
 
-    // Always ensure filter state is valid and update if frequency changed OR if state is uninitialized
-    static int processCount = 0;
-    bool filterUpdated = false;
-
-    // DIAGNOSTIC: Always log for first 20 blocks to see what's happening
-    if (processCount < 20)
-    {
-        DBG("processBlock #" << processCount
-            << " - highPassFreq: " << highPassFreq
-            << ", lastHighPassFreq: " << lastHighPassFreq
-            << ", diff: " << std::abs(highPassFreq - lastHighPassFreq)
-            << ", stateIsNull: " << (!preHighPassFilter.state ? "YES" : "NO")
-            << ", will update: " << ((!preHighPassFilter.state || std::abs(highPassFreq - lastHighPassFreq) > 0.01f) ? "YES" : "NO"));
-    }
-
+    // Update pre-filter coefficients if frequency changed
     if (!preHighPassFilter.state || std::abs(highPassFreq - lastHighPassFreq) > 0.01f)
     {
         // Update coefficients IN-PLACE (dereference both sides)
@@ -475,15 +457,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             getSampleRate() * oversamplingFactor, highPassFreq);
 
         lastHighPassFreq = highPassFreq;
-        filterUpdated = true;
-
-        if (processCount < 20)
-        {
-            DBG("  -> Filter coefficients UPDATED to " << highPassFreq << "Hz at oversampled rate " << (getSampleRate() * oversamplingFactor) << "Hz");
-        }
     }
-
-    processCount++;
 
     // Pre-filtering
     preHighPassFilter.process(juce::dsp::ProcessContextReplacing<float>(oversampledBlock));
@@ -492,10 +466,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const size_t numSamples = oversampledBlock.getNumSamples();
     const size_t numChannels = oversampledBlock.getNumChannels();
 
-    
-    // ==========================================================
-
-    // ========== 808-SAFE DISTORTION PROCESSING (INDEPENDENT) ==========
+    // Distortion processing with optional band-split (808-Safe mode)
     if (bandSplitEnabled)
     {
         // === BAND-SPLIT MODE: Clean low + Distorted high ===
@@ -531,8 +502,8 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         {
             const float currentInputGain = smoothedInputGain.getNextValue();
             const float currentDistortion = smoothedDistortion.getNextValue();
-            const float gain1 = currentInputGain * currentDistortion * 0.6f;
-            const float drive2 = currentDistortion * 1.2f;
+            const float gain1 = currentInputGain * currentDistortion * DSPConstants::DISTORTION_INPUT_SCALE;
+            const float drive2 = currentDistortion * DSPConstants::DISTORTION_DRIVE_SCALE;
 
             for (size_t channel = 0; channel < numChannels; ++channel)
             {
@@ -606,8 +577,8 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         {
             const float currentInputGain = smoothedInputGain.getNextValue();
             const float currentDistortion = smoothedDistortion.getNextValue();
-            const float gain1 = currentInputGain * currentDistortion * 0.6f;
-            const float drive2 = currentDistortion * 1.2f;
+            const float gain1 = currentInputGain * currentDistortion * DSPConstants::DISTORTION_INPUT_SCALE;
+            const float drive2 = currentDistortion * DSPConstants::DISTORTION_DRIVE_SCALE;
 
             for (size_t channel = 0; channel < numChannels; ++channel)
             {
@@ -668,7 +639,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Downsample back into original buffer
     oversampling->processSamplesDown(inputBlock);
 
-    // ========== PARALLEL COMPRESSION (After Downsampling, Normal Rate) ==========
+    // Parallel compression (LA-2A style, normal sample rate)
     if (compEnabled && compPeakReduction > 0.0f)
     {
         const int normalNumSamples = buffer.getNumSamples();
@@ -725,7 +696,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             }
         }
 
-        // PARALLEL BLEND: Mix dry and wet based on compWetDry parameter
+        // Parallel blend: Mix dry and wet signals
         const float wetAmount = compWetDry / 100.0f;  // 0.0 to 1.0
         const float dryAmount = 1.0f - wetAmount;
 
@@ -741,7 +712,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         }
     }
 
-    // DC BLOCK #2 (After Compression, Normal Rate)
+    // DC blocking filter #2 (after compression, normal sample rate)
     auto normalBlock = juce::dsp::AudioBlock<float>(buffer);
     dcBlockingFilter2.process(juce::dsp::ProcessContextReplacing<float>(normalBlock));
 
@@ -756,8 +727,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         }
     }
     // Push samples to oscilloscope (after all processing)
-    const int scopeUpdateRate = 2;  // Update every 2 samples
-    for (int sample = 0; sample < buffer.getNumSamples(); sample += scopeUpdateRate)
+    for (int sample = 0; sample < buffer.getNumSamples(); sample += DSPConstants::SCOPE_UPDATE_DECIMATION)
     {
         // Check if there's space in the FIFO before writing
         if (scopeFifo.getFreeSpace() > 0)
@@ -859,16 +829,7 @@ void PluginProcessor::setStateInformation(const void* data, int sizeInBytes)
     std::unique_ptr<juce::XmlElement> xmlState(getXmlFromBinary(data, sizeInBytes));
     if (xmlState != nullptr)
     {
-        // DIAGNOSTIC: Log BEFORE state restoration
-        DBG("setStateInformation BEFORE - highPassFreqParam: "
-            << (highPassFreqParam ? highPassFreqParam->load() : -999.0f));
-
         parameters.replaceState(juce::ValueTree::fromXml(*xmlState));
-
-        // DIAGNOSTIC: Log AFTER state restoration
-        DBG("setStateInformation AFTER - highPassFreqParam: "
-            << (highPassFreqParam ? highPassFreqParam->load() : -999.0f)
-            << ", lastHighPassFreq reset to: -1.0");
 
         // Reset all filters when loading state to prevent stale coefficients/state
         if (preHighPassFilter.state)
@@ -927,7 +888,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         juce::ParameterID{ "highPassFreq", 1 },
         "High Pass Frequency",
         juce::NormalisableRange<float>(20.0f, 500.0f, 1.0f),
-        120.0f));
+        DSPConstants::DEFAULT_HIPASS_FREQ));
 
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         juce::ParameterID{ "bandSplitEnabled", 1 },
@@ -938,10 +899,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         juce::ParameterID{ "clipType", 1 },
         "Clip Type",
         juce::StringArray{ "Soft Clip", "Hard Clip", "Tube Warmth", "Fuzz", "Asymmetric" },
-        0));  
-    
-    
-    // ========== LFO PARAMETERS (INSERT HERE) ==========
+        0));
+
+    // LFO parameters
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "lfoRate", 1 },
         "LFO Rate",
@@ -988,7 +948,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         juce::ParameterID{ "compCrossover", 1 },
         "Comp Crossover",
         juce::NormalisableRange<float>(150.0f, 350.0f, 1.0f),
-        250.0f));  // Default 250Hz split frequency
+        DSPConstants::DEFAULT_COMP_CROSSOVER));
 
     return { params.begin(), params.end() };
 }
