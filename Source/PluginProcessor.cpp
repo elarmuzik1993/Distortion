@@ -600,6 +600,19 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                     buffer.getSample(channel, sample) * currentOutputGain);
             }
         }
+
+        // Update oscilloscope even in bypass mode
+        for (int sample = 0; sample < buffer.getNumSamples(); sample += DSPConstants::SCOPE_UPDATE_DECIMATION)
+        {
+            if (scopeFifo.getFreeSpace() > 0)
+            {
+                const float leftSample = buffer.getSample(0, sample);
+                const float rightSample = buffer.getNumChannels() > 1 ?
+                    buffer.getSample(1, sample) : leftSample;
+                pushSampleToScope(leftSample, rightSample);
+            }
+        }
+
         return;  // Skip all DSP processing
     }
 
