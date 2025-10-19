@@ -177,6 +177,7 @@ private:
 
     std::atomic<float>* compWetDryParam = nullptr;      // 0=100% dry, 100=100% wet
     std::atomic<float>* compCrossoverParam = nullptr;   // 150-350Hz adjustable split
+    std::atomic<float>* distMixParam = nullptr;         // Distortion wet/dry mix (0-100)
 
     // Compressor state variables (LA-2A optical cell simulation)
     // Optical cell envelope follower (T4 cell)
@@ -195,12 +196,23 @@ private:
     float lfoPhase = 0.0f;
     float currentSampleRate = 44100.0f;
 
+    // Studio distortion DSP state (per-channel)
+    std::vector<float> dc_x1;  // DC block input history
+    std::vector<float> dc_y1;  // DC block output history
+    std::vector<float> pre_lp_z;  // Pre-distortion lowpass state
+    std::vector<float> post_lp_z;  // Post-distortion lowpass state
+
     // Cached filter parameters to avoid unnecessary coefficient updates
     float lastHighPassFreq = -1.0f;
 
     juce::AudioBuffer<float> scopeBuffer;
     juce::AbstractFifo scopeFifo;
     mutable juce::SpinLock scopeLock;
+
+    // Helper methods for studio distortion DSP
+    inline float dcBlock(float sample, float& x1, float& y1);
+    inline float onePoleLowpass(float sample, float& state, float cutoffHz, float sampleRate);
+    float applyStudioDistortion(float x, float gain, float drive, int clipType);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginProcessor)
 };

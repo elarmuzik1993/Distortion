@@ -38,15 +38,153 @@ PluginProcessor::PluginProcessor()
     compEnabledParam = parameters.getRawParameterValue("compEnabled");
     compWetDryParam = parameters.getRawParameterValue("compWetDry");
     compCrossoverParam = parameters.getRawParameterValue("compCrossover");
+    distMixParam = parameters.getRawParameterValue("distMix");
     // Verify all parameters were found
     jassert(inputGainParam && outputGainParam && distortionAmountParam
         && highPassFreqParam && bandSplitEnabledParam && clipTypeParam
         && lfoRateParam && lfoDepthParam
-        && compPeakReductionParam && compMakeupGainParam && compRatioParam && compEnabledParam && compWetDryParam && compCrossoverParam);
+        && compPeakReductionParam && compMakeupGainParam && compRatioParam && compEnabledParam && compWetDryParam && compCrossoverParam
+        && distMixParam);
 }
 
 PluginProcessor::~PluginProcessor()
 {
+}
+
+//==============================================================================
+// Studio Distortion DSP Helper Methods
+//==============================================================================
+
+inline float PluginProcessor::dcBlock(float sample, float& x1, float& y1)
+{
+    const float R = 0.995f;
+    const float output = sample - x1 + R * y1;
+    x1 = sample;
+    y1 = output;
+    return output;
+}
+
+inline float PluginProcessor::onePoleLowpass(float sample, float& state, float cutoffHz, float sampleRate)
+{
+    const float omega = 2.0f * juce::MathConstants<float>::pi * cutoffHz / sampleRate;
+    const float alpha = omega / (omega + 1.0f);
+    const float output = state + alpha * (sample - state);
+    state = output;
+    return output;
+}
+
+float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, int clipType)
+{
+    x = x * gain;
+    float y = 0.0f;
+
+    switch (clipType)
+    {
+    case 0:  // Enhanced Tanh with asymmetric bias
+    {
+        y = std::tanh(x * drive * 1.5f);
+        y = (y > 0.0f) ? y * (1.0f - 0.12f * y) : y * (1.0f - 0.05f * y);
+        y *= 0.9f;
+        break;
+    }
+    case 1:  // Soft knee with compression above threshold
+    {
+        y = x * drive * 1.3f;
+        const float abs_y = std::abs(y);
+        if (abs_y > 0.5f)
+        {
+            const float sign = (y > 0.0f) ? 1.0f : -1.0f;
+            const float over = abs_y - 0.5f;
+            const float compressed = 0.5f + over * 0.5f;
+            y = sign * std::tanh(compressed) * 0.92f;
+        }
+        else
+        {
+            y = std::tanh(y) * 0.95f;
+        }
+        break;
+    }
+    case 2:  // Dynamic ratio compression
+    {
+        y = x * drive * 1.8f;
+        const float abs_y = std::abs(y);
+        if (abs_y > 0.35f)
+        {
+            const float sign = (y > 0.0f) ? 1.0f : -1.0f;
+            const float ratio = 2.5f + abs_y * 2.0f;
+            const float over = abs_y - 0.35f;
+            const float compressed = 0.35f + over / ratio;
+            y = sign * compressed * 0.95f;
+        }
+        else
+        {
+            y *= 0.98f;
+        }
+        y = std::tanh(y);
+        break;
+    }
+    case 3:  // Multi-stage hard clipping
+    {
+        y = x * drive * 1.2f;
+        const float abs_y = std::abs(y);
+        float compressed;
+        if (abs_y < 0.5f)
+        {
+            compressed = abs_y;
+        }
+        else if (abs_y < 1.2f)
+        {
+            compressed = 0.5f + (abs_y - 0.5f) * 0.6f;
+        }
+        else
+        {
+            compressed = 0.92f + (abs_y - 1.2f) * 0.05f;
+            compressed = juce::jmin(compressed, 0.98f);
+        }
+        y = (x > 0.0f ? 1.0f : -1.0f) * compressed;
+        break;
+    }
+    case 4:  // Tanh with 2nd harmonic boost
+    {
+        y = std::tanh(x * drive * 1.4f);
+        y = y + 0.08f * y * y * (y > 0.0f ? 1.0f : -1.0f);
+        y = std::tanh(y * 1.2f) * 0.9f;
+        break;
+    }
+    case 5:  // Asymmetric clipping with different thresholds
+    {
+        y = x * drive * 2.0f;
+        if (y > 0.6f)
+        {
+            y = 0.6f + std::tanh((y - 0.6f) * 3.0f) * 0.3f;
+        }
+        else if (y < -0.7f)
+        {
+            y = -0.7f + std::tanh((y + 0.7f) * 2.5f) * 0.25f;
+        }
+        y *= 0.95f;
+        break;
+    }
+    case 6:  // Hard limiting with soft transition
+    {
+        y = x * drive * 2.5f;
+        if (y > 0.8f)
+        {
+            y = 0.8f + (y - 0.8f) * 0.1f;
+        }
+        else if (y < -0.8f)
+        {
+            y = -0.8f + (y + 0.8f) * 0.1f;
+        }
+        y = juce::jlimit(-0.9f, 0.9f, y);
+        break;
+    }
+    default:  // Fallback: simple tanh
+        y = std::tanh(x * drive) * 0.95f;
+        break;
+    }
+
+    return y;
 }
 
 //==============================================================================
@@ -127,6 +265,12 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     compEnvelopeState = 0.0f;
     compRmsHistory = 0.0f;
     tubeWarmth = 0.0f;
+
+    // Initialize studio distortion state vectors (per-channel)
+    dc_x1.resize(numChannels, 0.0f);
+    dc_y1.resize(numChannels, 0.0f);
+    pre_lp_z.resize(numChannels, 0.0f);
+    post_lp_z.resize(numChannels, 0.0f);
 
     // Initialize smoothed gain reduction with slow release (LA-2A style)
     smoothedGainReduction.reset(sampleRate, DSPConstants::COMP_GR_SMOOTH_TIME_S);
@@ -398,7 +542,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     if (!oversampling)
         return;
 
-    // Load parameters and scale them 
+    // Load parameters and scale them
     const auto inGainParam = inputGainParam->load();
     const auto outGainParam = outputGainParam->load();
     const auto distortionParam = distortionAmountParam->load();
@@ -413,9 +557,10 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const bool compEnabled = compEnabledParam->load() > 0.5f;
     const float compWetDry = compWetDryParam->load();
     const float compCrossover = compCrossoverParam->load();
+    const float distMix = distMixParam->load();
 
-    // Scale to actual ranges for processing
-    const auto inGain = inGainParam / 50.0f;
+    // Scale to actual ranges for processing (studio distortion style)
+    const float inputGain = std::pow(inGainParam / 50.0f, 1.5f) * 0.7f;
     const auto outGainDB = (outGainParam - 50.0f) * 0.24f;  // Maps 0->-12dB, 50->0dB, 100->+12dB
     const auto outGain = juce::Decibels::decibelsToGain(outGainDB);
 
@@ -438,16 +583,22 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Apply LFO modulation to distortion amount
     const float lfoModulation = (lfoValue * lfoDepth / 100.0f);  // -1 to +1 scaled by depth
     const float modulatedDistortionParam = juce::jlimit(0.0f, 100.0f, distortionParam + lfoModulation * 50.0f);
-    const auto distortionAmount = 1.0f + (modulatedDistortionParam / 100.0f) * 50.0f;
+    const float distortionDrive = 1.0f + (modulatedDistortionParam / 100.0f) * 3.5f;  // Studio style: 1.0 to 4.5
 
-    smoothedInputGain.setTargetValue(inGain);
+    // Mix amount for wet/dry blend
+    const float mixAmount = distMix / 100.0f;  // 0.0 to 1.0
+
+    smoothedInputGain.setTargetValue(inputGain);
     smoothedOutputGain.setTargetValue(outGain);
-    smoothedDistortion.setTargetValue(distortionAmount);
+    smoothedDistortion.setTargetValue(distortionDrive);
 
 
     // Wrap original buffer into an AudioBlock
     auto inputBlock = juce::dsp::AudioBlock<float>(buffer);
     auto oversampledBlock = oversampling->processSamplesUp(inputBlock);
+
+    // Calculate oversampled sample rate for one-pole filters
+    const float oversampledSampleRate = currentSampleRate * static_cast<float>(oversamplingFactor);
 
     // Update pre-filter coefficients if frequency changed
     if (!preHighPassFilter.state || std::abs(highPassFreq - lastHighPassFreq) > 0.01f)
@@ -497,63 +648,38 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         highPassFilter1.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
         highPassFilter2.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
 
-        // Apply distortion ONLY to the high band
+        // Apply studio distortion ONLY to the high band (with pre/post LP + DC block)
         for (size_t sample = 0; sample < numSamples; ++sample)
         {
             const float currentInputGain = smoothedInputGain.getNextValue();
-            const float currentDistortion = smoothedDistortion.getNextValue();
-            const float gain1 = currentInputGain * currentDistortion * DSPConstants::DISTORTION_INPUT_SCALE;
-            const float drive2 = currentDistortion * DSPConstants::DISTORTION_DRIVE_SCALE;
+            const float currentDrive = smoothedDistortion.getNextValue();
 
             for (size_t channel = 0; channel < numChannels; ++channel)
             {
                 auto* highBandData = highBandBuffer.getWritePointer(static_cast<int>(channel));
-                const float input = highBandData[sample];
-                const float driveSample = input * gain1;
+                const int channelIdx = static_cast<int>(channel);
 
-                float output = 0.0f;
+                // Read input (already band-split)
+                float inputSample = highBandData[sample];
+                const float drySample = inputSample;  // Store for mix
 
-                switch (clipType)
-                {
-                case 0:
-                {
-                    const float stage1 = std::tanh(driveSample);
-                    output = (stage1 > 0.0f)
-                        ? 1.0f - std::exp(-stage1 * drive2)
-                        : -1.0f + std::exp(stage1 * drive2);
-                    break;
-                }
-                case 1:
-                {
-                    output = juce::jlimit(-1.0f, 1.0f, driveSample);
-                    break;
-                }
-                case 2:
-                {
-                    const float stage1 = std::tanh(driveSample);
-                    output = stage1 + 0.3f * stage1 * stage1 * stage1;
-                    break;
-                }
-                case 3:
-                {
-                    const float x = juce::jlimit(-1.5f, 1.5f, driveSample);
-                    output = x - (x * x * x) / 3.0f;
-                    break;
-                }
-                case 4:
-                {
-                    const float stage1 = std::tanh(driveSample * 1.5f);
-                    output = (stage1 > 0.0f)
-                        ? stage1 * 0.9f
-                        : stage1 * 1.2f;
-                    break;
-                }
-                default:
-                    output = std::tanh(driveSample);
-                    break;
-                }
+                // Pre-distortion lowpass at 12kHz (oversampled rate)
+                inputSample = onePoleLowpass(inputSample, pre_lp_z[channelIdx], 12000.0f, oversampledSampleRate);
 
-                highBandData[sample] = juce::jlimit(-1.0f, 1.0f, output);
+                // Apply studio distortion
+                float distorted = applyStudioDistortion(inputSample, currentInputGain, currentDrive, clipType);
+
+                // Post-distortion lowpass at 10kHz (oversampled rate)
+                distorted = onePoleLowpass(distorted, post_lp_z[channelIdx], 10000.0f, oversampledSampleRate);
+
+                // DC blocking
+                distorted = dcBlock(distorted, dc_x1[channelIdx], dc_y1[channelIdx]);
+
+                // Wet/Dry mix
+                const float mixed = drySample * (1.0f - mixAmount) + distorted * mixAmount;
+
+                // Final output saturation
+                highBandData[sample] = std::tanh(mixed * 1.2f) * 0.95f;
             }
         }
 
@@ -572,63 +698,38 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     }
     else
     {
-        // === NORMAL MODE: Full-range distortion ===
+        // === NORMAL MODE: Full-range studio distortion (with pre/post LP + DC block) ===
         for (size_t sample = 0; sample < numSamples; ++sample)
         {
             const float currentInputGain = smoothedInputGain.getNextValue();
-            const float currentDistortion = smoothedDistortion.getNextValue();
-            const float gain1 = currentInputGain * currentDistortion * DSPConstants::DISTORTION_INPUT_SCALE;
-            const float drive2 = currentDistortion * DSPConstants::DISTORTION_DRIVE_SCALE;
+            const float currentDrive = smoothedDistortion.getNextValue();
 
             for (size_t channel = 0; channel < numChannels; ++channel)
             {
                 auto* channelData = oversampledBlock.getChannelPointer(channel);
-                const float input = channelData[sample];
-                const float driveSample = input * gain1;
+                const int channelIdx = static_cast<int>(channel);
 
-                float output = 0.0f;
+                // Read input
+                float inputSample = channelData[sample];
+                const float drySample = inputSample;  // Store for mix
 
-                switch (clipType)
-                {
-                case 0:
-                {
-                    const float stage1 = std::tanh(driveSample);
-                    output = (stage1 > 0.0f)
-                        ? 1.0f - std::exp(-stage1 * drive2)
-                        : -1.0f + std::exp(stage1 * drive2);
-                    break;
-                }
-                case 1:
-                {
-                    output = juce::jlimit(-1.0f, 1.0f, driveSample);
-                    break;
-                }
-                case 2:
-                {
-                    const float stage1 = std::tanh(driveSample);
-                    output = stage1 + 0.3f * stage1 * stage1 * stage1;
-                    break;
-                }
-                case 3:
-                {
-                    const float x = juce::jlimit(-1.5f, 1.5f, driveSample);
-                    output = x - (x * x * x) / 3.0f;
-                    break;
-                }
-                case 4:
-                {
-                    const float stage1 = std::tanh(driveSample * 1.5f);
-                    output = (stage1 > 0.0f)
-                        ? stage1 * 0.9f
-                        : stage1 * 1.2f;
-                    break;
-                }
-                default:
-                    output = std::tanh(driveSample);
-                    break;
-                }
+                // Pre-distortion lowpass at 12kHz (oversampled rate)
+                inputSample = onePoleLowpass(inputSample, pre_lp_z[channelIdx], 12000.0f, oversampledSampleRate);
 
-                channelData[sample] = juce::jlimit(-1.0f, 1.0f, output);
+                // Apply studio distortion
+                float distorted = applyStudioDistortion(inputSample, currentInputGain, currentDrive, clipType);
+
+                // Post-distortion lowpass at 10kHz (oversampled rate)
+                distorted = onePoleLowpass(distorted, post_lp_z[channelIdx], 10000.0f, oversampledSampleRate);
+
+                // DC blocking
+                distorted = dcBlock(distorted, dc_x1[channelIdx], dc_y1[channelIdx]);
+
+                // Wet/Dry mix
+                const float mixed = drySample * (1.0f - mixAmount) + distorted * mixAmount;
+
+                // Final output saturation
+                channelData[sample] = std::tanh(mixed * 1.2f) * 0.95f;
             }
         }
     }
@@ -898,7 +999,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
     params.push_back(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID{ "clipType", 1 },
         "Clip Type",
-        juce::StringArray{ "Soft Clip", "Hard Clip", "Tube Warmth", "Fuzz", "Asymmetric" },
+        juce::StringArray{
+            "Studio Tanh",           // 0: Enhanced Tanh with asymmetric bias
+            "Soft Knee",             // 1: Soft knee with compression
+            "Dynamic Compress",      // 2: Dynamic ratio compression
+            "Multi-Stage",           // 3: Multi-stage hard clipping
+            "Harmonic",              // 4: Tanh with 2nd harmonic boost
+            "Asymmetric",            // 5: Asymmetric clipping
+            "Hard Limit"             // 6: Hard limiting
+        },
         0));
 
     // LFO parameters
@@ -949,6 +1058,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         "Comp Crossover",
         juce::NormalisableRange<float>(150.0f, 350.0f, 1.0f),
         DSPConstants::DEFAULT_COMP_CROSSOVER));
+
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "distMix", 1 },
+        "Distortion Mix",
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f),
+        100.0f));  // Default 100 = 100% wet
 
     return { params.begin(), params.end() };
 }
