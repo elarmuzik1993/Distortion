@@ -156,18 +156,24 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
         y *= 0.95f;
         break;
     }
-    case 6:  // Hard limiting with soft transition
+    case 6:  // Hard limiting (aggressive brick-wall style)
     {
-        y = x * drive * 2.5f;
-        if (y > 0.8f)
+        y = x * drive * 3.5f;  // Increased drive for more aggression
+
+        // Brick-wall hard clipping with minimal soft knee
+        const float threshold = 0.65f;  // Lower threshold = more clipping
+        const float abs_y = std::abs(y);
+
+        if (abs_y > threshold)
         {
-            y = 0.8f + (y - 0.8f) * 0.1f;
+            const float sign = (y > 0.0f) ? 1.0f : -1.0f;
+            const float over = abs_y - threshold;
+            // Very minimal softening - mostly hard clip
+            y = sign * (threshold + over * 0.05f);  // Only 5% of overshoot allowed
         }
-        else if (y < -0.8f)
-        {
-            y = -0.8f + (y + 0.8f) * 0.1f;
-        }
-        y = juce::jlimit(-0.9f, 0.9f, y);
+
+        // Final brick-wall limit at 0.85
+        y = juce::jlimit(-0.85f, 0.85f, y);
         break;
     }
     default:  // Fallback: simple tanh
