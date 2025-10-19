@@ -31,6 +31,8 @@ PluginEditor::PluginEditor(PluginProcessor& p)
         inputGainAttachment, "inputGain");
     setupSlider(distortionAmountSlider, distortionAmountLabel, "Distortion Amount",
         distortionAmountAttachment, "distortionAmount");
+    setupSlider(distMixSlider, distMixLabel, "Dist Mix",
+        distMixAttachment, "distMix");
     setupSlider(outputGainSlider, outputGainLabel, "Output Gain",
         outputGainAttachment, "outputGain");
     setupSlider(highPassFreqSlider, highPassFreqLabel, "Hi-Pass Filter",
@@ -93,11 +95,13 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     bandSplitLabel.setFont(juce::Font(12.0f, juce::Font::bold));  // Bigger and bold
 
     addAndMakeVisible(clipTypeComboBox);
-    clipTypeComboBox.addItem("Soft Clip", 1);
-    clipTypeComboBox.addItem("Hard Clip", 2);
-    clipTypeComboBox.addItem("Tube Warmth", 3);
-    clipTypeComboBox.addItem("Fuzz", 4);
-    clipTypeComboBox.addItem("Asymmetric", 5);
+    clipTypeComboBox.addItem("Studio Tanh", 1);
+    clipTypeComboBox.addItem("Soft Knee", 2);
+    clipTypeComboBox.addItem("Dynamic Compress", 3);
+    clipTypeComboBox.addItem("Multi-Stage", 4);
+    clipTypeComboBox.addItem("Harmonic", 5);
+    clipTypeComboBox.addItem("Asymmetric", 6);
+    clipTypeComboBox.addItem("Hard Limit", 7);
     
     clipTypeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.parameters, "clipType", clipTypeComboBox);
@@ -204,10 +208,10 @@ void PluginEditor::resized()
     auto compTitleArea = compressionArea.removeFromTop(20);
     compSectionLabel.setBounds(compTitleArea);
 
-    // ========== COMPRESSION CONTROLS LAYOUT (5 knobs + dropdown + toggle) ==========
+    // ========== COMPRESSION CONTROLS LAYOUT (4 knobs + dropdown + toggle) ==========
     const int compKnobSize = 60;
     const int compSpacing = 15;
-    const int compControlsWidth = (5 * compKnobSize) + (4 * compSpacing) + 60 + 30;  // 5 knobs + dropdown + toggle
+    const int compControlsWidth = (4 * compKnobSize) + (3 * compSpacing) + 60 + 30;  // 4 knobs + dropdown + toggle
     const int compStartX = compressionArea.getRight() - compControlsWidth - 20;
     const int compKnobY = compressionArea.getY() + 5;
 
@@ -220,12 +224,12 @@ void PluginEditor::resized()
     compMakeupGainSlider.setBounds(makeupX, compKnobY, compKnobSize, compKnobSize);
     compMakeupGainLabel.setBounds(makeupX, compKnobY + compKnobSize, compKnobSize, 15);
 
-    // Wet/Dry knob (NEW)
+    // Wet/Dry knob (Compression)
     const int wetDryX = makeupX + compKnobSize + compSpacing;
     compWetDrySlider.setBounds(wetDryX, compKnobY, compKnobSize, compKnobSize);
     compWetDryLabel.setBounds(wetDryX, compKnobY + compKnobSize, compKnobSize, 15);
 
-    // Crossover knob (NEW)
+    // Crossover knob
     const int crossoverX = wetDryX + compKnobSize + compSpacing;
     compCrossoverSlider.setBounds(crossoverX, compKnobY, compKnobSize, compKnobSize);
     compCrossoverLabel.setBounds(crossoverX, compKnobY + compKnobSize, compKnobSize, 15);
@@ -262,7 +266,7 @@ void PluginEditor::resized()
     // Position distortion sliders in the remaining bottom area
     auto controlArea = contentArea;
 
-    const int totalSliderWidth = 6 * sliderWidth + 5 * spacing;
+    const int totalSliderWidth = 6 * sliderWidth + 5 * spacing;  // 6 sliders (distMix moved to top)
     const int startX = controlArea.getX() + (controlArea.getWidth() - totalSliderWidth) / 2;
     const int sliderY = controlArea.getY() + (controlArea.getHeight() - sliderHeight - labelHeight) / 2;
 
@@ -302,6 +306,27 @@ void PluginEditor::resized()
         comboY + comboBoxHeight + 2,
         comboBoxWidth,
         14
+    );
+
+    // ========== DIST MIX KNOB POSITIONING (between Distortion and Output) ==========
+    const int distortionKnobCenter = startX + 2 * (sliderWidth + spacing) + sliderWidth / 2;
+    const int outputKnobCenter = startX + 3 * (sliderWidth + spacing) + sliderWidth / 2;
+    const int distMixCenterX = (distortionKnobCenter + outputKnobCenter) / 2;
+
+    const int distMixKnobSize = 50;  // Smaller knob size to fit between main knobs
+    distMixSlider.setBounds(
+        distMixCenterX - distMixKnobSize / 2,
+        comboY - 5,  // Same Y level as clip type dropdown
+        distMixKnobSize,
+        distMixKnobSize
+    );
+
+    const int distMixLabelHeight = 14;
+    distMixLabel.setBounds(
+        distMixCenterX - distMixKnobSize / 2,
+        comboY - 5 + distMixKnobSize + 2,
+        distMixKnobSize,
+        distMixLabelHeight
     );
 
     // ========== 808-SAFE TOGGLE BUTTON POSITIONING ==========

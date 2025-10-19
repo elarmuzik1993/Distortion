@@ -319,8 +319,8 @@ private:
     CheckboxLookAndFeel checkboxLookAndFeel;
 
     // UI Components
-    CustomKnob inputGainSlider, distortionAmountSlider, outputGainSlider, highPassFreqSlider;
-    juce::Label inputGainLabel, distortionAmountLabel, outputGainLabel, highPassFreqLabel;
+    CustomKnob inputGainSlider, distortionAmountSlider, outputGainSlider, highPassFreqSlider, distMixSlider;
+    juce::Label inputGainLabel, distortionAmountLabel, outputGainLabel, highPassFreqLabel, distMixLabel;
     
     CustomKnob lfoRateSlider, lfoDepthSlider;
     juce::Label lfoRateLabel, lfoDepthLabel;
@@ -344,6 +344,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> distortionAmountAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputGainAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> highPassFreqAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> distMixAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bandSplitAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> clipTypeAttachment;
     juce::Image backgroundImage;
