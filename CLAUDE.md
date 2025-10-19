@@ -100,10 +100,16 @@ The compressor simulates a Teletronix LA-2A optical cell (T4 cell) with:
 - All controls use JUCE's attachment system for parameter binding
 
 **Custom Components:**
-- **Oscilloscope**: Timer-based (30Hz), thread-safe buffer access via `juce::SpinLock`, dual-channel waveform with glow effects
+- **Oscilloscope**: Timer-based (30Hz), thread-safe buffer access via `juce::SpinLock`, dual-channel waveform with glow effects (6px/4px/2px stroke widths)
 - **GainReductionMeter**: Timer-based (30Hz), displays 0-20dB range with gradient (green→yellow→red), reads from `processor.currentGainReductionDB` atomic
 - **CheckboxLookAndFeel**: Solid black boxes with green tick indicators
 - **CustomKnob**: Professional rotary controls (`Source/CustomKnob.cpp/h`)
+
+**GUI Layout:**
+- Top section: Compression controls (Peak Reduction, Makeup Gain, Wet/Dry, Crossover, Mode dropdown, COMP toggle, Gain Reduction Meter)
+- Middle section: Oscilloscope display (real-time dual-channel waveform)
+- Bottom section: 6 main knobs (Input Gain, Hi-Pass Filter, Distortion Amount, Output Gain, LFO Rate, LFO Depth)
+- Middle row controls: 808-Safe toggle, Clip Type dropdown, **Dist Mix knob** (50x50px, positioned between Distortion Amount and Output Gain)
 
 **Thread Safety:**
 - Scope buffer uses `juce::AbstractFifo` + `juce::SpinLock` for lock-free audio→GUI transfer
@@ -132,21 +138,22 @@ All processing constants centralized in `DSPConstants` namespace (PluginProcesso
 - **Multi-Stage** (3): Multi-stage hard clipping with progressive limiting
 - **Harmonic** (4): Tanh with 2nd harmonic boost for tube-like character
 - **Asymmetric** (5): Asymmetric clipping with different positive/negative thresholds
-- **Hard Limit** (6): Hard limiting with soft transition zones
+- **Hard Limit** (6): Aggressive brick-wall clipping (3.5x drive, 0.65 threshold, only 5% overshoot allowed, ±0.85 final limit)
 
 **True Bypass Architecture**:
 - When `distortion < 0.5%` AND `compression OFF`: **Complete bypass mode**
 - Skips ALL processing: oversampling, filters, DC blocking
 - Zero phase distortion, perfect level matching
 - Only applies output gain for volume control
+- **Oscilloscope continues updating** even in bypass mode (prevents waveform freeze)
 - Critical for transparent operation and phase coherence testing
 
 **Processing Chain (when active)**:
 1. Pre-highpass filter (20Hz default, user adjustable 20-500Hz)
 2. 4x oversampling (polyphase IIR)
-3. Studio distortion algorithms
+3. Studio distortion algorithms (7 clip types)
 4. DC blocking (custom first-order, R=0.999, ~1Hz cutoff)
-5. Wet/Dry mix (`distMix` parameter 0-100%)
+5. **Wet/Dry mix** (`distMix` parameter 0-100% for parallel distortion blending)
 6. Downsampling
 7. Additional DC blocking stages (5Hz IIR filters)
 
@@ -230,14 +237,20 @@ for (size_t channel = 0; channel < numChannels; ++channel)
 
 ## Recent Architectural Changes
 
-**Studio Distortion Implementation** (Latest):
+**Latest Session Changes**:
+- **GUI Updates**: Added Dist Mix knob to GUI (positioned between Distortion Amount and Output Gain at 50x50px)
+- **Clip Type Dropdown**: Updated from 5 to 7 clip types in GUI to match backend
+- **Hard Limit Algorithm**: Made more aggressive (3.5x drive, 0.65 threshold, brick-wall style with 5% overshoot)
+- **Oscilloscope Fix**: Fixed freeze issue when distortion = 0 (scope now updates even in TRUE BYPASS mode)
+
+**Studio Distortion Implementation**:
 - Replaced original 5 clip types with 7 professional algorithms from Python prototype
 - Implemented true bypass mode (skips all processing when distortion < 0.5%)
 - Fixed input gain to unity at default (removed 0.7x multiplier causing level drop)
 - Removed one-pole lowpass filters (12kHz pre, 10kHz post) to preserve high frequencies
 - Lowered DC blocking frequencies (20Hz → 5Hz) to preserve bass
 - Custom DC block filter (R=0.999, ~1Hz cutoff) for minimal phase impact
-- Added `distMix` parameter for parallel distortion blending
+- Added `distMix` parameter for parallel distortion blending (0-100%, default 100% wet)
 - Fixed loop ordering (sample-first) for proper smoothed parameter consumption
 
 **Phase Coherence & Transparency**:
