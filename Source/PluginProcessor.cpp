@@ -57,19 +57,10 @@ PluginProcessor::~PluginProcessor()
 
 inline float PluginProcessor::dcBlock(float sample, float& x1, float& y1)
 {
-    const float R = 0.995f;
+    const float R = 0.999f;  // Very high R = only blocks true DC, ~1Hz cutoff
     const float output = sample - x1 + R * y1;
     x1 = sample;
     y1 = output;
-    return output;
-}
-
-inline float PluginProcessor::onePoleLowpass(float sample, float& state, float cutoffHz, float sampleRate)
-{
-    const float omega = 2.0f * juce::MathConstants<float>::pi * cutoffHz / sampleRate;
-    const float alpha = omega / (omega + 1.0f);
-    const float output = state + alpha * (sample - state);
-    state = output;
     return output;
 }
 
@@ -269,8 +260,6 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // Initialize studio distortion state vectors (per-channel)
     dc_x1.resize(numChannels, 0.0f);
     dc_y1.resize(numChannels, 0.0f);
-    pre_lp_z.resize(numChannels, 0.0f);
-    post_lp_z.resize(numChannels, 0.0f);
 
     // Initialize smoothed gain reduction with slow release (LA-2A style)
     smoothedGainReduction.reset(sampleRate, DSPConstants::COMP_GR_SMOOTH_TIME_S);
@@ -597,9 +586,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     auto inputBlock = juce::dsp::AudioBlock<float>(buffer);
     auto oversampledBlock = oversampling->processSamplesUp(inputBlock);
 
-    // Calculate oversampled sample rate for one-pole filters
-    const float oversampledSampleRate = currentSampleRate * static_cast<float>(oversamplingFactor);
-
     // Update pre-filter coefficients if frequency changed
     if (!preHighPassFilter.state || std::abs(highPassFreq - lastHighPassFreq) > 0.01f)
     {
@@ -663,23 +649,14 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                 float inputSample = highBandData[sample];
                 const float drySample = inputSample;  // Store for mix
 
-                // Pre-distortion lowpass at 12kHz (oversampled rate)
-                inputSample = onePoleLowpass(inputSample, pre_lp_z[channelIdx], 12000.0f, oversampledSampleRate);
-
                 // Apply studio distortion
                 float distorted = applyStudioDistortion(inputSample, currentInputGain, currentDrive, clipType);
 
-                // Post-distortion lowpass at 10kHz (oversampled rate)
-                distorted = onePoleLowpass(distorted, post_lp_z[channelIdx], 10000.0f, oversampledSampleRate);
-
-                // DC blocking
+                // DC blocking (only on distorted signal)
                 distorted = dcBlock(distorted, dc_x1[channelIdx], dc_y1[channelIdx]);
 
                 // Wet/Dry mix
-                const float mixed = drySample * (1.0f - mixAmount) + distorted * mixAmount;
-
-                // Final output saturation
-                highBandData[sample] = std::tanh(mixed * 1.2f) * 0.95f;
+                highBandData[sample] = drySample * (1.0f - mixAmount) + distorted * mixAmount;
             }
         }
 
@@ -713,23 +690,14 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                 float inputSample = channelData[sample];
                 const float drySample = inputSample;  // Store for mix
 
-                // Pre-distortion lowpass at 12kHz (oversampled rate)
-                inputSample = onePoleLowpass(inputSample, pre_lp_z[channelIdx], 12000.0f, oversampledSampleRate);
-
                 // Apply studio distortion
                 float distorted = applyStudioDistortion(inputSample, currentInputGain, currentDrive, clipType);
 
-                // Post-distortion lowpass at 10kHz (oversampled rate)
-                distorted = onePoleLowpass(distorted, post_lp_z[channelIdx], 10000.0f, oversampledSampleRate);
-
-                // DC blocking
+                // DC blocking (only on distorted signal)
                 distorted = dcBlock(distorted, dc_x1[channelIdx], dc_y1[channelIdx]);
 
                 // Wet/Dry mix
-                const float mixed = drySample * (1.0f - mixAmount) + distorted * mixAmount;
-
-                // Final output saturation
-                channelData[sample] = std::tanh(mixed * 1.2f) * 0.95f;
+                channelData[sample] = drySample * (1.0f - mixAmount) + distorted * mixAmount;
             }
         }
     }

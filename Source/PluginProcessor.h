@@ -29,7 +29,7 @@ namespace DSPConstants
     constexpr float DISTORTION_DRIVE_SCALE = 1.2f;            // Secondary drive multiplier
 
     // DC blocking filter frequency
-    constexpr float DC_BLOCKING_FREQ = 20.0f;                 // Remove DC offset at 20Hz
+    constexpr float DC_BLOCKING_FREQ = 5.0f;                  // Remove DC offset at 5Hz (subsonic only)
 
     // LA-2A Compressor optical cell simulation
     constexpr float COMP_ATTACK_COEFF = 0.9995f;              // ~10ms attack (fast optical response)
@@ -45,7 +45,7 @@ namespace DSPConstants
     constexpr float COMP_TUBE_DRIVE = 1.5f;                   // Tube saturation drive amount
 
     // Default parameter values
-    constexpr float DEFAULT_HIPASS_FREQ = 120.0f;             // Default hi-pass filter frequency
+    constexpr float DEFAULT_HIPASS_FREQ = 20.0f;              // Default hi-pass filter frequency (subsonic only)
     constexpr float DEFAULT_COMP_CROSSOVER = 250.0f;          // Default compression crossover
 
     // Oscilloscope configuration
@@ -199,8 +199,6 @@ private:
     // Studio distortion DSP state (per-channel)
     std::vector<float> dc_x1;  // DC block input history
     std::vector<float> dc_y1;  // DC block output history
-    std::vector<float> pre_lp_z;  // Pre-distortion lowpass state
-    std::vector<float> post_lp_z;  // Post-distortion lowpass state
 
     // Cached filter parameters to avoid unnecessary coefficient updates
     float lastHighPassFreq = -1.0f;
@@ -211,7 +209,6 @@ private:
 
     // Helper methods for studio distortion DSP
     inline float dcBlock(float sample, float& x1, float& y1);
-    inline float onePoleLowpass(float sample, float& state, float cutoffHz, float sampleRate);
     float applyStudioDistortion(float x, float gain, float drive, int clipType);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginProcessor)
