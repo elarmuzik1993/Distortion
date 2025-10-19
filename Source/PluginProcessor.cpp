@@ -549,7 +549,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const float distMix = distMixParam->load();
 
     // Scale to actual ranges for processing (studio distortion style)
-    const float inputGain = std::pow(inGainParam / 50.0f, 1.5f) * 0.7f;
+    const float inputGain = std::pow(inGainParam / 50.0f, 1.5f);  // Unity at 50, range 0-2.83
     const auto outGainDB = (outGainParam - 50.0f) * 0.24f;  // Maps 0->-12dB, 50->0dB, 100->+12dB
     const auto outGain = juce::Decibels::decibelsToGain(outGainDB);
 
@@ -581,6 +581,21 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     smoothedOutputGain.setTargetValue(outGain);
     smoothedDistortion.setTargetValue(distortionDrive);
 
+    // TRUE BYPASS MODE: Skip all processing when distortion is off
+    if (modulatedDistortionParam < 0.5f && !compEnabled)
+    {
+        // Apply only output gain (for volume matching)
+        for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+        {
+            const float currentOutputGain = smoothedOutputGain.getNextValue();
+            for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+            {
+                buffer.setSample(channel, sample,
+                    buffer.getSample(channel, sample) * currentOutputGain);
+            }
+        }
+        return;  // Skip all DSP processing
+    }
 
     // Wrap original buffer into an AudioBlock
     auto inputBlock = juce::dsp::AudioBlock<float>(buffer);
@@ -647,16 +662,23 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
                 // Read input (already band-split)
                 float inputSample = highBandData[sample];
-                const float drySample = inputSample;  // Store for mix
 
-                // Apply studio distortion
-                float distorted = applyStudioDistortion(inputSample, currentInputGain, currentDrive, clipType);
+                // Bypass distortion if amount is negligible (< 0.5%)
+                if (modulatedDistortionParam < 0.5f)
+                {
+                    highBandData[sample] = inputSample;  // Pure bypass
+                }
+                else
+                {
+                    // Apply studio distortion
+                    float distorted = applyStudioDistortion(inputSample, currentInputGain, currentDrive, clipType);
 
-                // DC blocking (only on distorted signal)
-                distorted = dcBlock(distorted, dc_x1[channelIdx], dc_y1[channelIdx]);
+                    // DC blocking (only on distorted signal)
+                    distorted = dcBlock(distorted, dc_x1[channelIdx], dc_y1[channelIdx]);
 
-                // Wet/Dry mix
-                highBandData[sample] = drySample * (1.0f - mixAmount) + distorted * mixAmount;
+                    // Wet/Dry mix
+                    highBandData[sample] = inputSample * (1.0f - mixAmount) + distorted * mixAmount;
+                }
             }
         }
 
@@ -688,16 +710,23 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
                 // Read input
                 float inputSample = channelData[sample];
-                const float drySample = inputSample;  // Store for mix
 
-                // Apply studio distortion
-                float distorted = applyStudioDistortion(inputSample, currentInputGain, currentDrive, clipType);
+                // Bypass distortion if amount is negligible (< 0.5%)
+                if (modulatedDistortionParam < 0.5f)
+                {
+                    channelData[sample] = inputSample;  // Pure bypass
+                }
+                else
+                {
+                    // Apply studio distortion
+                    float distorted = applyStudioDistortion(inputSample, currentInputGain, currentDrive, clipType);
 
-                // DC blocking (only on distorted signal)
-                distorted = dcBlock(distorted, dc_x1[channelIdx], dc_y1[channelIdx]);
+                    // DC blocking (only on distorted signal)
+                    distorted = dcBlock(distorted, dc_x1[channelIdx], dc_y1[channelIdx]);
 
-                // Wet/Dry mix
-                channelData[sample] = drySample * (1.0f - mixAmount) + distorted * mixAmount;
+                    // Wet/Dry mix
+                    channelData[sample] = inputSample * (1.0f - mixAmount) + distorted * mixAmount;
+                }
             }
         }
     }
