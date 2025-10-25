@@ -271,6 +271,42 @@ private:
     float currentGainReduction = 0.0f;
 };
 
+// Lock Icon Component
+class LockIcon : public juce::Component
+{
+public:
+    LockIcon() { setSize(16, 16); }
+
+    void setLocked(bool shouldBeLocked)
+    {
+        isLocked = shouldBeLocked;
+        repaint();
+    }
+
+    bool getLocked() const { return isLocked; }
+
+    void paint(juce::Graphics& g) override
+    {
+        if (!isLocked) return;  // Don't draw if unlocked
+
+        auto bounds = getLocalBounds().toFloat().reduced(2.0f);
+
+        // Draw lock icon
+        g.setColour(juce::Colours::yellow);
+
+        // Lock body (rectangle)
+        auto body = bounds.removeFromBottom(bounds.getHeight() * 0.6f);
+        g.fillRoundedRectangle(body, 2.0f);
+
+        // Lock shackle (arc)
+        auto shackle = bounds;
+        g.drawRoundedRectangle(shackle.reduced(2.0f, 0.0f), shackle.getWidth() * 0.3f, 2.0f);
+    }
+
+private:
+    bool isLocked = false;
+};
+
 // Custom LookAndFeel for solid black checkbox with green tick
 class CheckboxLookAndFeel : public juce::LookAndFeel_V4
 {
@@ -310,6 +346,7 @@ public:
     //==============================================================================
     void paint(juce::Graphics&) override;
     void resized() override;
+    void mouseUp(const juce::MouseEvent& e) override;
 
 private:
     
@@ -339,6 +376,32 @@ private:
     juce::ComboBox clipTypeComboBox;
     juce::Label clipTypeLabel;
 
+    // Custom button class for randomize with right-click menu
+    class RandomizeButton : public juce::TextButton
+    {
+    public:
+        std::function<void()> onRightClick;
+
+        void mouseUp(const juce::MouseEvent& e) override
+        {
+            if (e.mods.isPopupMenu() && onRightClick)
+                onRightClick();
+            else
+                juce::TextButton::mouseUp(e);
+        }
+    };
+
+    RandomizeButton randomizeButton;
+
+    // Lock icons for each parameter
+    LockIcon inputGainLock, outputGainLock, distortionAmountLock, highPassFreqLock;
+    LockIcon distMixLock, lfoRateLock, lfoDepthLock;
+    LockIcon compPeakReductionLock, compMakeupGainLock, compWetDryLock, compCrossoverLock;
+    LockIcon bandSplitLock, clipTypeLock, compRatioLock, compEnableLock;
+
+    // Lock toggles for randomization
+    std::map<juce::String, bool> parameterLocks;
+
     // Parameter attachments
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> inputGainAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> distortionAmountAttachment;
@@ -362,6 +425,12 @@ private:
         const juce::String& text,
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>& attachment,
         const juce::String& paramID);
+
+    void randomizeAllParameters();
+    bool isParameterLocked(const juce::String& paramID) const;
+    void toggleParameterLock(const juce::String& paramID);
+    void updateLockIcons();
+    void setupKnobRightClick(juce::Component& component, const juce::String& paramID);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginEditor)
 };

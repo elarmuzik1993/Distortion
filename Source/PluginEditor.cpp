@@ -111,6 +111,125 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     clipTypeLabel.setJustificationType(juce::Justification::centred);
     clipTypeLabel.setColour(juce::Label::textColourId, juce::Colours::black);
     clipTypeLabel.setFont(juce::Font(12.0f, juce::Font::bold));
+
+    // Setup randomize button
+    addAndMakeVisible(randomizeButton);
+    randomizeButton.setButtonText("Randomize");
+    randomizeButton.onClick = [this]() { randomizeAllParameters(); };
+
+    // Add right-click menu for lock management
+    randomizeButton.setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    randomizeButton.onRightClick = [this]()
+    {
+        juce::PopupMenu menu;
+
+        // Add lock/unlock options for each parameter
+        menu.addSectionHeader("Lock/Unlock Parameters");
+        menu.addSeparator();
+
+        // Main parameters
+        menu.addItem("Input Gain", true, isParameterLocked("inputGain"),
+                     [this]() { toggleParameterLock("inputGain"); });
+        menu.addItem("Output Gain", true, isParameterLocked("outputGain"),
+                     [this]() { toggleParameterLock("outputGain"); });
+        menu.addItem("Distortion Amount", true, isParameterLocked("distortionAmount"),
+                     [this]() { toggleParameterLock("distortionAmount"); });
+        menu.addItem("Hi-Pass Filter", true, isParameterLocked("highPassFreq"),
+                     [this]() { toggleParameterLock("highPassFreq"); });
+        menu.addItem("808-Safe", true, isParameterLocked("bandSplitEnabled"),
+                     [this]() { toggleParameterLock("bandSplitEnabled"); });
+        menu.addItem("Clip Type", true, isParameterLocked("clipType"),
+                     [this]() { toggleParameterLock("clipType"); });
+        menu.addItem("Dist Mix", true, isParameterLocked("distMix"),
+                     [this]() { toggleParameterLock("distMix"); });
+
+        menu.addSeparator();
+        menu.addSectionHeader("LFO");
+        menu.addItem("LFO Rate", true, isParameterLocked("lfoRate"),
+                     [this]() { toggleParameterLock("lfoRate"); });
+        menu.addItem("LFO Depth", true, isParameterLocked("lfoDepth"),
+                     [this]() { toggleParameterLock("lfoDepth"); });
+
+        menu.addSeparator();
+        menu.addSectionHeader("Compression");
+        menu.addItem("Peak Reduction", true, isParameterLocked("compPeakReduction"),
+                     [this]() { toggleParameterLock("compPeakReduction"); });
+        menu.addItem("Makeup Gain", true, isParameterLocked("compMakeupGain"),
+                     [this]() { toggleParameterLock("compMakeupGain"); });
+        menu.addItem("Comp Ratio", true, isParameterLocked("compRatio"),
+                     [this]() { toggleParameterLock("compRatio"); });
+        menu.addItem("Comp Enable", true, isParameterLocked("compEnabled"),
+                     [this]() { toggleParameterLock("compEnabled"); });
+        menu.addItem("Comp Wet/Dry", true, isParameterLocked("compWetDry"),
+                     [this]() { toggleParameterLock("compWetDry"); });
+        menu.addItem("Comp Crossover", true, isParameterLocked("compCrossover"),
+                     [this]() { toggleParameterLock("compCrossover"); });
+
+        menu.addSeparator();
+        menu.addItem("Lock All", [this]()
+        {
+            for (auto& pair : parameterLocks)
+                pair.second = true;
+        });
+        menu.addItem("Unlock All", [this]()
+        {
+            for (auto& pair : parameterLocks)
+                pair.second = false;
+        });
+
+        menu.showMenuAsync(juce::PopupMenu::Options());
+    };
+
+    // Initialize all parameter locks to unlocked (false)
+    parameterLocks["inputGain"] = false;
+    parameterLocks["outputGain"] = false;
+    parameterLocks["distortionAmount"] = false;
+    parameterLocks["highPassFreq"] = false;
+    parameterLocks["bandSplitEnabled"] = false;
+    parameterLocks["clipType"] = false;
+    parameterLocks["distMix"] = false;
+    parameterLocks["lfoRate"] = false;
+    parameterLocks["lfoDepth"] = false;
+    parameterLocks["compPeakReduction"] = false;
+    parameterLocks["compMakeupGain"] = false;
+    parameterLocks["compRatio"] = false;
+    parameterLocks["compEnabled"] = false;
+    parameterLocks["compWetDry"] = false;
+    parameterLocks["compCrossover"] = false;
+
+    // Add lock icons
+    addAndMakeVisible(inputGainLock);
+    addAndMakeVisible(outputGainLock);
+    addAndMakeVisible(distortionAmountLock);
+    addAndMakeVisible(highPassFreqLock);
+    addAndMakeVisible(distMixLock);
+    addAndMakeVisible(lfoRateLock);
+    addAndMakeVisible(lfoDepthLock);
+    addAndMakeVisible(compPeakReductionLock);
+    addAndMakeVisible(compMakeupGainLock);
+    addAndMakeVisible(compWetDryLock);
+    addAndMakeVisible(compCrossoverLock);
+    addAndMakeVisible(bandSplitLock);
+    addAndMakeVisible(clipTypeLock);
+    addAndMakeVisible(compRatioLock);
+    addAndMakeVisible(compEnableLock);
+
+    // Setup right-click handlers for all controls
+    setupKnobRightClick(inputGainSlider, "inputGain");
+    setupKnobRightClick(outputGainSlider, "outputGain");
+    setupKnobRightClick(distortionAmountSlider, "distortionAmount");
+    setupKnobRightClick(highPassFreqSlider, "highPassFreq");
+    setupKnobRightClick(distMixSlider, "distMix");
+    setupKnobRightClick(lfoRateSlider, "lfoRate");
+    setupKnobRightClick(lfoDepthSlider, "lfoDepth");
+    setupKnobRightClick(compPeakReductionSlider, "compPeakReduction");
+    setupKnobRightClick(compMakeupGainSlider, "compMakeupGain");
+    setupKnobRightClick(compWetDrySlider, "compWetDry");
+    setupKnobRightClick(compCrossoverSlider, "compCrossover");
+    setupKnobRightClick(bandSplitToggle, "bandSplitEnabled");
+    setupKnobRightClick(clipTypeComboBox, "clipType");
+    setupKnobRightClick(compRatioComboBox, "compRatio");
+    setupKnobRightClick(compEnableToggle, "compEnabled");
 }
 
 //==============================================================================
@@ -245,12 +364,35 @@ void PluginEditor::resized()
     const int toggleSize = 24;
     compEnableToggle.setBounds(toggleX, compKnobY + 15, toggleSize, toggleSize);
 
+    // Position compression lock icons
+    const int compLockSize = 14;
+    const int compLockOffset = 3;
+    compPeakReductionLock.setBounds(compStartX + compKnobSize - compLockSize - compLockOffset,
+                                   compKnobY + compLockOffset, compLockSize, compLockSize);
+    compMakeupGainLock.setBounds(makeupX + compKnobSize - compLockSize - compLockOffset,
+                                compKnobY + compLockOffset, compLockSize, compLockSize);
+    compWetDryLock.setBounds(wetDryX + compKnobSize - compLockSize - compLockOffset,
+                            compKnobY + compLockOffset, compLockSize, compLockSize);
+    compCrossoverLock.setBounds(crossoverX + compKnobSize - compLockSize - compLockOffset,
+                               compKnobY + compLockOffset, compLockSize, compLockSize);
+    compRatioLock.setBounds(dropdownX + dropdownWidth - compLockSize - 2,
+                           compKnobY + 15, compLockSize, compLockSize);
+    compEnableLock.setBounds(toggleX + toggleSize - compLockSize,
+                            compKnobY + 15, compLockSize, compLockSize);
+
     // ========== GAIN REDUCTION METER (RIGHT SIDE, AFTER COMPRESSION CONTROLS) ==========
     const int meterWidth = 40;
     const int meterHeight = 65;
     const int meterX = toggleX + toggleSize + 20;  // Position after the enable toggle
     const int meterY = compressionArea.getY() + 5;
     gainReductionMeter.setBounds(meterX, meterY, meterWidth, meterHeight);
+
+    // ========== RANDOMIZE BUTTON (LEFT SIDE OF COMPRESSION SECTION) ==========
+    const int randomizeButtonWidth = 90;
+    const int randomizeButtonHeight = 30;
+    const int randomizeButtonX = compressionArea.getX() + 10;
+    const int randomizeButtonY = compressionArea.getY() + 30;
+    randomizeButton.setBounds(randomizeButtonX, randomizeButtonY, randomizeButtonWidth, randomizeButtonHeight);
     // ===========================================================
 
     // Calculate space needed for distortion controls
@@ -284,6 +426,22 @@ void PluginEditor::resized()
     positionSliderAndLabel(outputGainSlider, outputGainLabel, 3);
     positionSliderAndLabel(lfoRateSlider, lfoRateLabel, 4);
     positionSliderAndLabel(lfoDepthSlider, lfoDepthLabel, 5);
+
+    // Position lock icons for main sliders (top-right corner of each knob)
+    const int lockSize = 16;
+    const int lockOffset = 5;
+    inputGainLock.setBounds(inputGainSlider.getX() + sliderWidth - lockSize - lockOffset,
+                           inputGainSlider.getY() + lockOffset, lockSize, lockSize);
+    highPassFreqLock.setBounds(highPassFreqSlider.getX() + sliderWidth - lockSize - lockOffset,
+                              highPassFreqSlider.getY() + lockOffset, lockSize, lockSize);
+    distortionAmountLock.setBounds(distortionAmountSlider.getX() + sliderWidth - lockSize - lockOffset,
+                                  distortionAmountSlider.getY() + lockOffset, lockSize, lockSize);
+    outputGainLock.setBounds(outputGainSlider.getX() + sliderWidth - lockSize - lockOffset,
+                            outputGainSlider.getY() + lockOffset, lockSize, lockSize);
+    lfoRateLock.setBounds(lfoRateSlider.getX() + sliderWidth - lockSize - lockOffset,
+                         lfoRateSlider.getY() + lockOffset, lockSize, lockSize);
+    lfoDepthLock.setBounds(lfoDepthSlider.getX() + sliderWidth - lockSize - lockOffset,
+                          lfoDepthSlider.getY() + lockOffset, lockSize, lockSize);
 
     // ========== CLIP TYPE COMBOBOX POSITIONING ==========
     const int comboBoxWidth = 54;
@@ -347,4 +505,133 @@ void PluginEditor::resized()
         labelWidth,
         16
     );
+
+    // Position remaining lock icons
+    const int smallLockSize = 12;
+    distMixLock.setBounds(distMixSlider.getX() + distMixKnobSize - smallLockSize - 3,
+                         distMixSlider.getY() + 3, smallLockSize, smallLockSize);
+    clipTypeLock.setBounds(clipTypeComboBox.getX() + comboBoxWidth - smallLockSize - 2,
+                          clipTypeComboBox.getY(), smallLockSize, smallLockSize);
+    bandSplitLock.setBounds(bandSplitToggle.getX() + safeToggleSize - smallLockSize,
+                           bandSplitToggle.getY(), smallLockSize, smallLockSize);
+}
+
+bool PluginEditor::isParameterLocked(const juce::String& paramID) const
+{
+    auto it = parameterLocks.find(paramID);
+    return (it != parameterLocks.end()) ? it->second : false;
+}
+
+void PluginEditor::toggleParameterLock(const juce::String& paramID)
+{
+    parameterLocks[paramID] = !parameterLocks[paramID];
+    updateLockIcons();
+}
+
+void PluginEditor::updateLockIcons()
+{
+    inputGainLock.setLocked(isParameterLocked("inputGain"));
+    outputGainLock.setLocked(isParameterLocked("outputGain"));
+    distortionAmountLock.setLocked(isParameterLocked("distortionAmount"));
+    highPassFreqLock.setLocked(isParameterLocked("highPassFreq"));
+    distMixLock.setLocked(isParameterLocked("distMix"));
+    lfoRateLock.setLocked(isParameterLocked("lfoRate"));
+    lfoDepthLock.setLocked(isParameterLocked("lfoDepth"));
+    compPeakReductionLock.setLocked(isParameterLocked("compPeakReduction"));
+    compMakeupGainLock.setLocked(isParameterLocked("compMakeupGain"));
+    compWetDryLock.setLocked(isParameterLocked("compWetDry"));
+    compCrossoverLock.setLocked(isParameterLocked("compCrossover"));
+    bandSplitLock.setLocked(isParameterLocked("bandSplitEnabled"));
+    clipTypeLock.setLocked(isParameterLocked("clipType"));
+    compRatioLock.setLocked(isParameterLocked("compRatio"));
+    compEnableLock.setLocked(isParameterLocked("compEnabled"));
+}
+
+void PluginEditor::setupKnobRightClick(juce::Component& component, const juce::String& paramID)
+{
+    component.setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    component.addMouseListener(this, false);
+
+    // Store parameter ID in component properties for later retrieval
+    component.getProperties().set("paramID", paramID);
+}
+
+void PluginEditor::mouseUp(const juce::MouseEvent& e)
+{
+    if (e.mods.isPopupMenu())
+    {
+        // Check if the event came from a component with a paramID property
+        if (auto* comp = e.eventComponent)
+        {
+            if (comp->getProperties().contains("paramID"))
+            {
+                juce::String paramID = comp->getProperties()["paramID"].toString();
+                toggleParameterLock(paramID);
+                e.eventComponent->repaint();
+            }
+        }
+    }
+}
+
+void PluginEditor::randomizeAllParameters()
+{
+    // Create random number generator
+    juce::Random random(juce::Time::currentTimeMillis());
+
+    // Helper lambda to randomize float parameters (with lock check)
+    auto randomizeFloatParam = [this, &random](const juce::String& paramID, float min, float max)
+    {
+        if (isParameterLocked(paramID)) return;  // Skip if locked
+
+        float randomValue = min + random.nextFloat() * (max - min);
+        if (auto* param = audioProcessor.parameters.getParameter(paramID))
+        {
+            param->setValueNotifyingHost(param->convertTo0to1(randomValue));
+        }
+    };
+
+    // Helper lambda to randomize choice parameters (with lock check)
+    auto randomizeChoiceParam = [this, &random](const juce::String& paramID, int numChoices)
+    {
+        if (isParameterLocked(paramID)) return;  // Skip if locked
+
+        int randomChoice = random.nextInt(numChoices);
+        if (auto* param = audioProcessor.parameters.getParameter(paramID))
+        {
+            param->setValueNotifyingHost(randomChoice / (float)(numChoices - 1));
+        }
+    };
+
+    // Helper lambda to randomize boolean parameters (with lock check)
+    auto randomizeBoolParam = [this, &random](const juce::String& paramID)
+    {
+        if (isParameterLocked(paramID)) return;  // Skip if locked
+
+        bool randomValue = random.nextBool();
+        if (auto* param = audioProcessor.parameters.getParameter(paramID))
+        {
+            param->setValueNotifyingHost(randomValue ? 1.0f : 0.0f);
+        }
+    };
+
+    // DISTORTION SECTION
+    randomizeFloatParam("inputGain", 0.0f, 100.0f);
+    randomizeFloatParam("outputGain", 0.0f, 100.0f);
+    randomizeFloatParam("distortionAmount", 0.0f, 100.0f);
+    randomizeFloatParam("highPassFreq", 20.0f, 500.0f);
+    randomizeBoolParam("bandSplitEnabled");
+    randomizeChoiceParam("clipType", 7);
+    randomizeFloatParam("distMix", 0.0f, 100.0f);
+
+    // LFO SECTION
+    randomizeFloatParam("lfoRate", 0.1f, 10.0f);
+    randomizeFloatParam("lfoDepth", 0.0f, 100.0f);
+
+    // COMPRESSION SECTION
+    randomizeFloatParam("compPeakReduction", 0.0f, 100.0f);
+    randomizeFloatParam("compMakeupGain", 0.0f, 100.0f);
+    randomizeChoiceParam("compRatio", 2);
+    randomizeBoolParam("compEnabled");
+    randomizeFloatParam("compWetDry", 0.0f, 100.0f);
+    randomizeFloatParam("compCrossover", 150.0f, 350.0f);
 }
