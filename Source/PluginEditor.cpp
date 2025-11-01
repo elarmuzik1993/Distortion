@@ -21,6 +21,8 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     setSize(802, 564);
     setResizeLimits(802, 564, 802, 564);
     setResizable(false, false);
+
+    // Load background image from Resources folder
     backgroundImage = juce::ImageCache::getFromMemory(
         BinaryData::background_png,
         BinaryData::background_pngSize
@@ -62,7 +64,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addAndMakeVisible(compRatioLabel);
     compRatioLabel.setText("Mode", juce::dontSendNotification);
     compRatioLabel.setJustificationType(juce::Justification::centred);
-    compRatioLabel.setColour(juce::Label::textColourId, juce::Colours::black);
+    compRatioLabel.setColour(juce::Label::textColourId, juce::Colours::white);
     compRatioLabel.setFont(juce::Font(10.0f, juce::Font::bold));
 
     // Setup compression enable toggle
@@ -77,7 +79,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addAndMakeVisible(compSectionLabel);
     compSectionLabel.setText("LOW-END COMPRESSION", juce::dontSendNotification);
     compSectionLabel.setJustificationType(juce::Justification::centred);
-    compSectionLabel.setColour(juce::Label::textColourId, juce::Colours::darkblue);
+    compSectionLabel.setColour(juce::Label::textColourId, juce::Colour(0xFF, 0x00, 0x44));  // Neon red
     compSectionLabel.setFont(juce::Font(14.0f, juce::Font::bold));
     
     // Setup 808-Safe Mode toggle
@@ -91,7 +93,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addAndMakeVisible(bandSplitLabel);
     bandSplitLabel.setText("Clean Sub", juce::dontSendNotification);
     bandSplitLabel.setJustificationType(juce::Justification::centred);
-    bandSplitLabel.setColour(juce::Label::textColourId, juce::Colours::black);  // Changed to black for visibility
+    bandSplitLabel.setColour(juce::Label::textColourId, juce::Colours::white);
     bandSplitLabel.setFont(juce::Font(12.0f, juce::Font::bold));  // Bigger and bold
 
     addAndMakeVisible(clipTypeComboBox);
@@ -109,8 +111,91 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addAndMakeVisible(clipTypeLabel);
     clipTypeLabel.setText("Clip Type", juce::dontSendNotification);
     clipTypeLabel.setJustificationType(juce::Justification::centred);
-    clipTypeLabel.setColour(juce::Label::textColourId, juce::Colours::black);
+    clipTypeLabel.setColour(juce::Label::textColourId, juce::Colours::white);
     clipTypeLabel.setFont(juce::Font(12.0f, juce::Font::bold));
+
+    // Setup preset selector
+    addAndMakeVisible(presetLabel);
+    presetLabel.setText("Preset:", juce::dontSendNotification);
+    presetLabel.setJustificationType(juce::Justification::centredRight);
+    presetLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+    presetLabel.setFont(juce::Font(12.0f, juce::Font::bold));
+
+    addAndMakeVisible(presetSelector);
+    presetSelector.setTextWhenNothingSelected("Select Preset...");
+    presetSelector.onChange = [this]()
+    {
+        if (presetSelector.getSelectedId() > 0)
+        {
+            juce::String presetName = presetSelector.getText();
+
+            // Check if it's a factory preset or user preset
+            if (presetName == "Default" || presetName == "Warm Tube" ||
+                presetName == "Hard Clip" || presetName == "Soft Saturation" ||
+                presetName == "808 Safe")
+            {
+                loadFactoryPreset(presetName);
+            }
+            else
+            {
+                loadPreset(presetName);
+            }
+        }
+    };
+
+    addAndMakeVisible(savePresetButton);
+    savePresetButton.setButtonText("Save");
+    savePresetButton.onClick = [this]()
+    {
+        auto* w = new juce::AlertWindow("Save Preset", "Enter preset name:", juce::AlertWindow::NoIcon);
+        w->addTextEditor("presetName", "", "Preset Name:");
+        w->addButton("OK", 1, juce::KeyPress(juce::KeyPress::returnKey));
+        w->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+
+        w->enterModalState(true, juce::ModalCallbackFunction::create([this, w](int result)
+        {
+            if (result == 1)
+            {
+                juce::String presetName = w->getTextEditorContents("presetName");
+                if (presetName.isNotEmpty())
+                {
+                    savePreset(presetName);
+                    refreshPresetList();
+                }
+            }
+            delete w;
+        }));
+    };
+
+    addAndMakeVisible(deletePresetButton);
+    deletePresetButton.setButtonText("Delete");
+    deletePresetButton.onClick = [this]()
+    {
+        if (presetSelector.getSelectedId() > 0)
+        {
+            juce::String presetName = presetSelector.getText();
+
+            // Create confirmation dialog
+            auto options = juce::MessageBoxOptions()
+                .withIconType(juce::MessageBoxIconType::WarningIcon)
+                .withTitle("Delete Preset")
+                .withMessage("Are you sure you want to delete '" + presetName + "'?")
+                .withButton("OK")
+                .withButton("Cancel");
+
+            juce::AlertWindow::showAsync(options, [this, presetName](int result)
+            {
+                if (result == 1)  // OK button pressed
+                {
+                    deletePreset(presetName);
+                    refreshPresetList();
+                }
+            });
+        }
+    };
+
+    // Load presets
+    refreshPresetList();
 
     // Setup randomize button
     addAndMakeVisible(randomizeButton);
@@ -262,12 +347,12 @@ void PluginEditor::setupSlider(CustomKnob& slider,
         jassertfalse; // Parameter not found - check your parameter IDs
     }
 
-    // Configure label
+    // Configure label with neon red color
     label.setText(text, juce::dontSendNotification);
     label.setJustificationType(juce::Justification::centred);
-    label.setColour(juce::Label::textColourId, juce::Colours::black);
+    label.setColour(juce::Label::textColourId, juce::Colours::white);  // White text
     label.setColour(juce::Label::backgroundColourId, juce::Colours::transparentWhite);
-    label.setFont(juce::Font(12.0f, juce::Font::plain));
+    label.setFont(juce::Font(12.0f, juce::Font::bold));
 
     addAndMakeVisible(label);
 }
@@ -275,7 +360,6 @@ void PluginEditor::setupSlider(CustomKnob& slider,
 //==============================================================================
 void PluginEditor::paint(juce::Graphics& g)
 {
-    // ========== REPLACE THE EXISTING GRADIENT CODE WITH THIS ==========
     // Draw the background image
     if (backgroundImage.isValid())
     {
@@ -284,25 +368,24 @@ void PluginEditor::paint(juce::Graphics& g)
     }
     else
     {
-        // Fallback if image fails to load - keep original gradient
+        // Fallback - neon red gradient if image fails to load
         juce::ColourGradient gradient(
-            juce::Colour::fromRGB(0x63, 0xFF, 0x2F), 0, 0,
-            juce::Colour::fromRGB(0x80, 0xFF, 0x00), 0, (float)getHeight(),
+            juce::Colour(0xFF, 0x00, 0x00), 0, 0,
+            juce::Colour(0x80, 0x00, 0x00), 0, (float)getHeight(),
             false);
         g.setGradientFill(gradient);
         g.fillAll();
     }
-    // ==================================================================
 
-    // Draw title
-    g.setColour(juce::Colours::darkblue);
+    // Draw title in neon red
+    g.setColour(juce::Colour(0xFF, 0x00, 0x44));
     g.setFont(juce::Font(18.0f, juce::Font::bold));
     const auto titleBounds = getLocalBounds().removeFromTop(50);
     g.drawText(" Distortion", titleBounds, juce::Justification::centred, true);
 
-    // Draw subtle border
-    g.setColour(juce::Colours::grey.withAlpha(0.3f));
-    g.drawRect(getLocalBounds(), 1);
+    // Draw neon red border
+    g.setColour(juce::Colour(0xFF, 0x00, 0x44).withAlpha(0.7f));
+    g.drawRect(getLocalBounds(), 2);
 }
 
 void PluginEditor::resized()
@@ -318,7 +401,28 @@ void PluginEditor::resized()
 
     // Calculate available space
     auto bounds = getLocalBounds().reduced(margin);
-    auto contentArea = bounds.withTrimmedTop(titleHeight);
+    auto titleArea = bounds.removeFromTop(titleHeight);
+
+    // ========== PRESET SELECTOR (TOP-LEFT) ==========
+    const int presetLabelWidth = 50;
+    const int presetSelectorWidth = 150;
+    const int presetButtonWidth = 50;
+    const int presetSpacing = 5;
+    const int presetHeight = 24;
+
+    const int presetY = titleArea.getY() + (titleHeight - presetHeight) / 2;
+    const int presetX = titleArea.getX();
+
+    presetLabel.setBounds(presetX, presetY, presetLabelWidth, presetHeight);
+    presetSelector.setBounds(presetX + presetLabelWidth + presetSpacing, presetY,
+                            presetSelectorWidth, presetHeight);
+    savePresetButton.setBounds(presetX + presetLabelWidth + presetSpacing + presetSelectorWidth + presetSpacing,
+                               presetY, presetButtonWidth, presetHeight);
+    deletePresetButton.setBounds(presetX + presetLabelWidth + presetSpacing + presetSelectorWidth +
+                                 presetSpacing + presetButtonWidth + presetSpacing,
+                                 presetY, presetButtonWidth, presetHeight);
+
+    auto contentArea = bounds;
 
     // ========== COMPRESSION BAR AT TOP (NEW SECTION) ==========
     auto compressionArea = contentArea.removeFromTop(compressionBarHeight);
@@ -634,4 +738,236 @@ void PluginEditor::randomizeAllParameters()
     randomizeBoolParam("compEnabled");
     randomizeFloatParam("compWetDry", 0.0f, 100.0f);
     randomizeFloatParam("compCrossover", 150.0f, 350.0f);
+}
+
+juce::File PluginEditor::getPresetDirectory()
+{
+    // Get user's AppData folder
+    auto presetDir = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+        .getChildFile("ElarMusicAudio")
+        .getChildFile("Distortion")
+        .getChildFile("Presets");
+
+    // Create directory if it doesn't exist
+    if (!presetDir.exists())
+        presetDir.createDirectory();
+
+    return presetDir;
+}
+
+void PluginEditor::savePreset(const juce::String& presetName)
+{
+    // Create XML document
+    juce::XmlElement preset("Preset");
+    preset.setAttribute("name", presetName);
+
+    // Save all parameter values
+    auto state = audioProcessor.parameters.copyState();
+    auto stateXml = state.createXml();
+    if (stateXml != nullptr)
+        preset.addChildElement(stateXml.release());
+
+    // Save lock states
+    auto* locksXml = new juce::XmlElement("ParameterLocks");
+    for (const auto& pair : parameterLocks)
+    {
+        locksXml->setAttribute(pair.first, pair.second);
+    }
+    preset.addChildElement(locksXml);
+
+    // Save to file
+    auto presetFile = getPresetDirectory().getChildFile(presetName + ".xml");
+    preset.writeTo(presetFile);
+}
+
+void PluginEditor::loadPreset(const juce::String& presetName)
+{
+    auto presetFile = getPresetDirectory().getChildFile(presetName + ".xml");
+
+    if (presetFile.existsAsFile())
+    {
+        auto xml = juce::parseXML(presetFile);
+        if (xml != nullptr)
+        {
+            // Load parameter values - first child is the parameter state
+            auto* stateXml = xml->getFirstChildElement();
+            if (stateXml != nullptr && stateXml->getTagName() != "ParameterLocks")
+            {
+                juce::ValueTree state = juce::ValueTree::fromXml(*stateXml);
+                audioProcessor.parameters.replaceState(state);
+            }
+
+            // Load lock states
+            auto* locksXml = xml->getChildByName("ParameterLocks");
+            if (locksXml != nullptr)
+            {
+                // Restore all lock states from preset
+                for (auto& pair : parameterLocks)
+                {
+                    pair.second = locksXml->getBoolAttribute(pair.first, false);
+                }
+            }
+            else
+            {
+                // No lock data in preset - clear all locks
+                for (auto& pair : parameterLocks)
+                {
+                    pair.second = false;
+                }
+            }
+            updateLockIcons();
+        }
+    }
+}
+
+void PluginEditor::deletePreset(const juce::String& presetName)
+{
+    auto presetFile = getPresetDirectory().getChildFile(presetName + ".xml");
+    if (presetFile.existsAsFile())
+    {
+        presetFile.deleteFile();
+    }
+}
+
+void PluginEditor::refreshPresetList()
+{
+    presetSelector.clear();
+
+    // Add factory presets (built-in)
+    int id = 1;
+    presetSelector.addSectionHeading("Factory Presets");
+    presetSelector.addItem("Default", id++);
+    presetSelector.addItem("Warm Tube", id++);
+    presetSelector.addItem("Hard Clip", id++);
+    presetSelector.addItem("Soft Saturation", id++);
+    presetSelector.addItem("808 Safe", id++);
+    presetSelector.addSeparator();
+
+    // Add user presets
+    auto presetDir = getPresetDirectory();
+    auto presetFiles = presetDir.findChildFiles(juce::File::findFiles, false, "*.xml");
+
+    if (presetFiles.size() > 0)
+    {
+        presetSelector.addSectionHeading("User Presets");
+        for (auto& file : presetFiles)
+        {
+            presetSelector.addItem(file.getFileNameWithoutExtension(), id++);
+        }
+    }
+}
+
+void PluginEditor::loadFactoryPreset(const juce::String& presetName)
+{
+    // Clear all locks for factory presets
+    for (auto& pair : parameterLocks)
+    {
+        pair.second = false;
+    }
+    updateLockIcons();
+
+    // Helper lambda to set parameter values
+    auto setParam = [this](const juce::String& paramID, float value)
+    {
+        if (auto* param = audioProcessor.parameters.getParameter(paramID))
+        {
+            param->setValueNotifyingHost(param->convertTo0to1(value));
+        }
+    };
+
+    if (presetName == "Default")
+    {
+        // Default preset - neutral settings
+        setParam("inputGain", 50.0f);
+        setParam("outputGain", 50.0f);
+        setParam("distortionAmount", 0.0f);
+        setParam("highPassFreq", 20.0f);
+        setParam("bandSplitEnabled", 0.0f);
+        setParam("clipType", 0.0f);
+        setParam("distMix", 100.0f);
+        setParam("lfoRate", 0.0f);
+        setParam("lfoDepth", 0.0f);
+        setParam("compPeakReduction", 0.0f);
+        setParam("compMakeupGain", 50.0f);
+        setParam("compRatio", 0.0f);
+        setParam("compEnabled", 0.0f);
+        setParam("compWetDry", 50.0f);
+        setParam("compCrossover", 250.0f);
+    }
+    else if (presetName == "Warm Tube")
+    {
+        // Warm tube-like saturation
+        setParam("inputGain", 60.0f);
+        setParam("outputGain", 45.0f);
+        setParam("distortionAmount", 30.0f);
+        setParam("highPassFreq", 80.0f);
+        setParam("bandSplitEnabled", 0.0f);
+        setParam("clipType", 4.0f);  // Harmonic
+        setParam("distMix", 70.0f);
+        setParam("lfoRate", 0.0f);
+        setParam("lfoDepth", 0.0f);
+        setParam("compPeakReduction", 0.0f);
+        setParam("compMakeupGain", 50.0f);
+        setParam("compRatio", 0.0f);
+        setParam("compEnabled", 0.0f);
+        setParam("compWetDry", 50.0f);
+        setParam("compCrossover", 250.0f);
+    }
+    else if (presetName == "Hard Clip")
+    {
+        // Aggressive hard clipping
+        setParam("inputGain", 70.0f);
+        setParam("outputGain", 40.0f);
+        setParam("distortionAmount", 70.0f);
+        setParam("highPassFreq", 100.0f);
+        setParam("bandSplitEnabled", 1.0f);  // 808-safe enabled
+        setParam("clipType", 6.0f);  // Hard Limit
+        setParam("distMix", 100.0f);
+        setParam("lfoRate", 0.0f);
+        setParam("lfoDepth", 0.0f);
+        setParam("compPeakReduction", 30.0f);
+        setParam("compMakeupGain", 60.0f);
+        setParam("compRatio", 0.0f);
+        setParam("compEnabled", 1.0f);
+        setParam("compWetDry", 70.0f);
+        setParam("compCrossover", 250.0f);
+    }
+    else if (presetName == "Soft Saturation")
+    {
+        // Subtle soft saturation
+        setParam("inputGain", 55.0f);
+        setParam("outputGain", 48.0f);
+        setParam("distortionAmount", 20.0f);
+        setParam("highPassFreq", 40.0f);
+        setParam("bandSplitEnabled", 0.0f);
+        setParam("clipType", 1.0f);  // Soft Knee
+        setParam("distMix", 50.0f);  // Parallel blend
+        setParam("lfoRate", 0.0f);
+        setParam("lfoDepth", 0.0f);
+        setParam("compPeakReduction", 0.0f);
+        setParam("compMakeupGain", 50.0f);
+        setParam("compRatio", 0.0f);
+        setParam("compEnabled", 0.0f);
+        setParam("compWetDry", 50.0f);
+        setParam("compCrossover", 250.0f);
+    }
+    else if (presetName == "808 Safe")
+    {
+        // Clean sub, aggressive highs
+        setParam("inputGain", 65.0f);
+        setParam("outputGain", 45.0f);
+        setParam("distortionAmount", 60.0f);
+        setParam("highPassFreq", 150.0f);
+        setParam("bandSplitEnabled", 1.0f);  // 808-safe enabled
+        setParam("clipType", 3.0f);  // Multi-Stage
+        setParam("distMix", 100.0f);
+        setParam("lfoRate", 0.0f);
+        setParam("lfoDepth", 0.0f);
+        setParam("compPeakReduction", 0.0f);
+        setParam("compMakeupGain", 50.0f);
+        setParam("compRatio", 0.0f);
+        setParam("compEnabled", 0.0f);
+        setParam("compWetDry", 50.0f);
+        setParam("compCrossover", 250.0f);
+    }
 }

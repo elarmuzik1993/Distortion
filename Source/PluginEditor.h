@@ -87,12 +87,12 @@ public:
         // Lock buffer while drawing
         const juce::ScopedLock sl(bufferLock);
 
-        // Draw waveforms with glow effect
-        drawChannelWithGlow(g, 0, juce::Colour(0xff00d4ff)); // Cyan with glow
+        // Draw waveforms with neon red glow effect
+        drawChannelWithGlow(g, 0, juce::Colour(0xffFF0044)); // Neon red with glow
 
         if (cachedBuffer.getNumChannels() > 1)
         {
-            drawChannelWithGlow(g, 1, juce::Colour(0xffffbb00)); // Yellow/orange with glow
+            drawChannelWithGlow(g, 1, juce::Colour(0xffFF3366)); // Light neon red with glow
         }
 
         // Draw border
@@ -291,8 +291,8 @@ public:
 
         auto bounds = getLocalBounds().toFloat().reduced(2.0f);
 
-        // Draw lock icon
-        g.setColour(juce::Colours::yellow);
+        // Draw neon red lock icon
+        g.setColour(juce::Colour(0xFF, 0x00, 0x44));  // Neon red
 
         // Lock body (rectangle)
         auto body = bounds.removeFromBottom(bounds.getHeight() * 0.6f);
@@ -393,6 +393,12 @@ private:
 
     RandomizeButton randomizeButton;
 
+    // Preset selector components
+    juce::ComboBox presetSelector;
+    juce::TextButton savePresetButton;
+    juce::TextButton deletePresetButton;
+    juce::Label presetLabel;
+
     // Lock icons for each parameter
     LockIcon inputGainLock, outputGainLock, distortionAmountLock, highPassFreqLock;
     LockIcon distMixLock, lfoRateLock, lfoDepthLock;
@@ -431,6 +437,14 @@ private:
     void toggleParameterLock(const juce::String& paramID);
     void updateLockIcons();
     void setupKnobRightClick(juce::Component& component, const juce::String& paramID);
+
+    // Preset management methods
+    void savePreset(const juce::String& presetName);
+    void loadPreset(const juce::String& presetName);
+    void loadFactoryPreset(const juce::String& presetName);
+    void deletePreset(const juce::String& presetName);
+    void refreshPresetList();
+    juce::File getPresetDirectory();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginEditor)
 };
