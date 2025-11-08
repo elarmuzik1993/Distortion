@@ -31,16 +31,16 @@ namespace DSPConstants
     // DC blocking filter frequency
     constexpr float DC_BLOCKING_FREQ = 5.0f;                  // Remove DC offset at 5Hz (subsonic only)
 
-    // LA-2A Compressor optical cell simulation
-    constexpr float COMP_ATTACK_COEFF = 0.9995f;              // ~10ms attack (fast optical response)
-    constexpr float COMP_RELEASE_COEFF = 0.99995f;            // ~500ms release (slow optical decay)
+    // LA-2A Compressor optical cell simulation (time constants in seconds)
+    constexpr float COMP_ATTACK_TIME_S = 0.010f;              // 10ms attack (fast optical response)
+    constexpr float COMP_RELEASE_TIME_S = 0.500f;             // 500ms release (slow optical decay)
     constexpr float COMP_KNEE_WIDTH_DB = 2.0f;                // Soft knee for smooth compression
     constexpr float COMP_THRESHOLD_MIN_DB = -60.0f;           // Minimum threshold
     constexpr float COMP_THRESHOLD_RANGE_DB = 60.0f;          // Full range: -60dB to 0dB
     constexpr float COMP_MAKEUP_RANGE_DB = 12.0f;             // ±12dB makeup gain range
     constexpr float COMP_RATIO_COMPRESS = 3.0f;               // 3:1 compression ratio
     constexpr float COMP_RATIO_LIMIT = 12.0f;                 // 12:1 limiting ratio
-    constexpr float COMP_RMS_HISTORY_COEFF = 0.99f;           // RMS smoothing for program-dependent behavior
+    constexpr float COMP_RMS_HISTORY_TIME_S = 0.100f;         // 100ms RMS smoothing for program-dependent behavior
     constexpr float COMP_TUBE_BLEND = 0.15f;                  // 15% tube harmonic blend
     constexpr float COMP_TUBE_DRIVE = 1.5f;                   // Tube saturation drive amount
 
@@ -122,7 +122,7 @@ public:
 private:
     
     std::unique_ptr<juce::dsp::Oversampling<float>> oversampling;
-    double oversamplingFactor = 4.0;
+    size_t oversamplingFactor = 4;
     int currentNumChannels = 0;
 
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
@@ -158,7 +158,7 @@ private:
     juce::AudioBuffer<float> compHighBandBuffer;  // High band for compression split
     juce::AudioBuffer<float> compDryBuffer;       // Dry signal for parallel blend
 
-    juce::SmoothedValue<float> smoothedInputGain, smoothedOutputGain, smoothedDistortion;
+    juce::SmoothedValue<float> smoothedOutputGain;  // Only output gain uses SmoothedValue (normal rate)
 
     std::atomic<float>* inputGainParam = nullptr;
     std::atomic<float>* outputGainParam = nullptr;
@@ -196,20 +196,28 @@ private:
     float lfoPhase = 0.0f;
     float currentSampleRate = 44100.0f;
 
-    // Studio distortion DSP state (per-channel)
-    std::vector<float> dc_x1;  // DC block input history
-    std::vector<float> dc_y1;  // DC block output history
+    // Compression optical cell coefficients (sample-rate-dependent)
+    float compAttackCoeff = 0.9995f;
+    float compReleaseCoeff = 0.99995f;
+    float compRmsHistoryCoeff = 0.99f;
 
     // Cached filter parameters to avoid unnecessary coefficient updates
     float lastHighPassFreq = -1.0f;
+    float lastCompCrossoverFreq = -1.0f;
+    double lastSampleRate = 0.0;  // Track sample rate changes
+    double lastOversampledSampleRate = 0.0;  // Track oversampled rate for distortion filters
+
+    // Manual parameter smoothing for oversampled domain (to avoid SmoothedValue issues)
+    float lastInputGain = 1.0f;
+    float lastDistortionDrive = 1.0f;
 
     juce::AudioBuffer<float> scopeBuffer;
     juce::AbstractFifo scopeFifo;
     mutable juce::SpinLock scopeLock;
 
     // Helper methods for studio distortion DSP
-    inline float dcBlock(float sample, float& x1, float& y1);
     float applyStudioDistortion(float x, float gain, float drive, int clipType);
+    void updateSampleRateDependentCoefficients(double sampleRate);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginProcessor)
 };
