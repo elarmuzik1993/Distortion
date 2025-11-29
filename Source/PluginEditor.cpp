@@ -56,12 +56,6 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     lfoWaveformAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.parameters, "lfoWaveform", lfoWaveformComboBox);
 
-    addAndMakeVisible(lfoWaveformLabel);
-    lfoWaveformLabel.setText("LFO Shape", juce::dontSendNotification);
-    lfoWaveformLabel.setJustificationType(juce::Justification::centred);
-    lfoWaveformLabel.setColour(juce::Label::textColourId, juce::Colours::white);
-    lfoWaveformLabel.setFont(juce::Font(12.0f, juce::Font::bold));
-
     // Setup compressor knobs
     setupSlider(compPeakReductionSlider, compPeakReductionLabel, "Peak Reduction",
         compPeakReductionAttachment, "compPeakReduction");
@@ -128,12 +122,6 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 
     clipTypeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.parameters, "clipType", clipTypeComboBox);
-    
-    addAndMakeVisible(clipTypeLabel);
-    clipTypeLabel.setText("Clip Type", juce::dontSendNotification);
-    clipTypeLabel.setJustificationType(juce::Justification::centred);
-    clipTypeLabel.setColour(juce::Label::textColourId, juce::Colours::white);
-    clipTypeLabel.setFont(juce::Font(12.0f, juce::Font::bold));
 
     // Setup preset selector
     // Note: presetLabel removed - no "Preset:" text shown
@@ -167,6 +155,14 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 
     addAndMakeVisible(savePresetButton);
     savePresetButton.setButtonText("Save");
+
+    // Apply neon red styling
+    savePresetButton.setColour(juce::TextButton::buttonColourId, juce::Colours::black);
+    savePresetButton.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF, 0x00, 0x44));  // Neon red text
+    savePresetButton.setColour(juce::TextButton::textColourOnId, juce::Colours::white);  // White when pressed
+    savePresetButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xFF, 0x00, 0x44));  // Neon red when pressed
+    savePresetButton.setColour(juce::ComboBox::outlineColourId, juce::Colour(0xFF, 0x00, 0x44));  // Neon red outline
+
     savePresetButton.onClick = [this]()
     {
         auto* w = new juce::AlertWindow("Save Preset", "Enter preset name:", juce::AlertWindow::NoIcon);
@@ -191,6 +187,14 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 
     addAndMakeVisible(deletePresetButton);
     deletePresetButton.setButtonText("Delete");
+
+    // Apply neon red styling
+    deletePresetButton.setColour(juce::TextButton::buttonColourId, juce::Colours::black);
+    deletePresetButton.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF, 0x00, 0x44));  // Neon red text
+    deletePresetButton.setColour(juce::TextButton::textColourOnId, juce::Colours::white);  // White when pressed
+    deletePresetButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xFF, 0x00, 0x44));  // Neon red when pressed
+    deletePresetButton.setColour(juce::ComboBox::outlineColourId, juce::Colour(0xFF, 0x00, 0x44));  // Neon red outline
+
     deletePresetButton.onClick = [this]()
     {
         if (presetSelector.getSelectedId() > 0)
@@ -223,6 +227,13 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addAndMakeVisible(randomizeButton);
     randomizeButton.setButtonText("Randomize");
     randomizeButton.onClick = [this]() { randomizeAllParameters(); };
+
+    // Apply neon red styling
+    randomizeButton.setColour(juce::TextButton::buttonColourId, juce::Colours::black);
+    randomizeButton.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF, 0x00, 0x44));  // Neon red text
+    randomizeButton.setColour(juce::TextButton::textColourOnId, juce::Colours::white);  // White when pressed
+    randomizeButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xFF, 0x00, 0x44));  // Neon red when pressed
+    randomizeButton.setColour(juce::ComboBox::outlineColourId, juce::Colour(0xFF, 0x00, 0x44));  // Neon red outline
 
     // Add right-click menu for lock management
     randomizeButton.setMouseCursor(juce::MouseCursor::PointingHandCursor);
@@ -571,8 +582,8 @@ void PluginEditor::resized()
                           lfoDepthSlider.getY() + lockOffset, lockSize, lockSize);
 
     // ========== CLIP TYPE COMBOBOX POSITIONING ==========
-    const int comboBoxWidth = 54;
-    const int comboBoxHeight = 15;
+    const int comboBoxWidth = 50;
+    const int comboBoxHeight = 18;
 
     const int hiPassCenter = startX + 1 * (sliderWidth + spacing) + sliderWidth / 2;
     const int distortionCenter = startX + 2 * (sliderWidth + spacing) + sliderWidth / 2;
@@ -899,6 +910,9 @@ void PluginEditor::refreshPresetList()
             presetSelector.addItem(file.getFileNameWithoutExtension(), id++);
         }
     }
+
+    // Select "Default" preset by default (ID = 1)
+    presetSelector.setSelectedId(1, juce::dontSendNotification);
 }
 
 void PluginEditor::loadFactoryPreset(const juce::String& presetName)

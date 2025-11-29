@@ -348,13 +348,96 @@ public:
         setColour(juce::ComboBox::textColourId, juce::Colour(0xFF, 0x00, 0x44));  // Neon red
         setColour(juce::ComboBox::outlineColourId, juce::Colour(0xFF, 0x00, 0x44));  // Neon red border
         setColour(juce::ComboBox::buttonColourId, juce::Colours::black);
-        setColour(juce::ComboBox::arrowColourId, juce::Colour(0xFF, 0x00, 0x44));  // Neon red arrow
+        setColour(juce::ComboBox::arrowColourId, juce::Colours::transparentBlack);  // Hide arrow
 
         // Popup menu colors
         setColour(juce::PopupMenu::backgroundColourId, juce::Colours::black);
         setColour(juce::PopupMenu::textColourId, juce::Colour(0xFF, 0x00, 0x44));
         setColour(juce::PopupMenu::highlightedBackgroundColourId, juce::Colour(0xFF, 0x00, 0x44).withAlpha(0.3f));
         setColour(juce::PopupMenu::highlightedTextColourId, juce::Colours::white);
+    }
+
+    void drawComboBox(juce::Graphics& g, int width, int height, bool,
+                      int, int, int, int, juce::ComboBox& box) override
+    {
+        auto cornerSize = box.findColour(juce::ComboBox::outlineColourId)
+                              .contrasting().withAlpha(0.0f) != juce::Colours::transparentBlack ? 3.0f : 0.0f;
+        juce::Rectangle<int> boxBounds(0, 0, width, height);
+
+        g.setColour(box.findColour(juce::ComboBox::backgroundColourId));
+        g.fillRoundedRectangle(boxBounds.toFloat(), cornerSize);
+
+        g.setColour(box.findColour(juce::ComboBox::outlineColourId));
+        g.drawRoundedRectangle(boxBounds.toFloat().reduced(0.5f, 0.5f), cornerSize, 1.0f);
+
+        // Get initials based on selected item
+        juce::String displayText = getInitials(box);
+
+        // Draw initials text
+        g.setColour(box.findColour(juce::ComboBox::textColourId));
+        g.setFont(juce::Font(11.0f, juce::Font::bold));
+
+        auto textBounds = boxBounds.reduced(3, 0);
+        g.drawText(displayText, textBounds, juce::Justification::centred, true);
+    }
+
+    juce::String getInitials(juce::ComboBox& box)
+    {
+        int selectedId = box.getSelectedId();
+        juce::String selectedText = box.getText();
+
+        // Check if this is the clip type combo box (has items like "Brutal Fuzz")
+        if (selectedText.contains("Fuzz") || selectedText.contains("Overdrive") ||
+            selectedText.contains("Crusher") || selectedText.contains("Saturation") ||
+            selectedText.contains("Transformer") || selectedText.contains("Clipper") ||
+            selectedText.contains("Decimator"))
+        {
+            // Clip type initials
+            if (selectedId == 1) return "BF";  // Brutal Fuzz
+            if (selectedId == 2) return "TO";  // Tube Overdrive
+            if (selectedId == 3) return "BC";  // Bit Crusher
+            if (selectedId == 4) return "TS";  // Tape Saturation
+            if (selectedId == 5) return "TF";  // Transformer
+            if (selectedId == 6) return "DC";  // Diode Clipper
+            if (selectedId == 7) return "DM";  // Decimator
+        }
+        // Check if this is LFO waveform combo box
+        else if (selectedText.contains("Sine") || selectedText.contains("Triangle") ||
+                 selectedText.contains("Square") || selectedText.contains("Saw") ||
+                 selectedText.contains("Random"))
+        {
+            // LFO waveform initials
+            if (selectedId == 1) return "SI";  // Sine
+            if (selectedId == 2) return "TR";  // Triangle
+            if (selectedId == 3) return "SQ";  // Square
+            if (selectedId == 4) return "SW";  // Saw
+            if (selectedId == 5) return "RN";  // Random
+        }
+        // For preset selector and other combo boxes, return full text
+        else
+        {
+            return selectedText;
+        }
+
+        // Default fallback
+        return selectedText;
+    }
+
+    juce::Label* createComboBoxTextBox(juce::ComboBox&) override
+    {
+        auto* label = new juce::Label();
+        label->setJustificationType(juce::Justification::centred);
+        label->setInterceptsMouseClicks(false, false);
+        label->setColour(juce::Label::textColourId, juce::Colours::transparentBlack);
+        label->setColour(juce::Label::backgroundColourId, juce::Colours::transparentBlack);
+        label->setColour(juce::Label::outlineColourId, juce::Colours::transparentBlack);
+        label->setBounds(0, 0, 0, 0);  // Make it invisible
+        return label;
+    }
+
+    void positionComboBoxText(juce::ComboBox&, juce::Label& label) override
+    {
+        label.setBounds(0, 0, 0, 0);  // Keep label hidden
     }
 };
 
