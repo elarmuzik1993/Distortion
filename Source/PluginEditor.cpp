@@ -97,13 +97,13 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     bandSplitLabel.setFont(juce::Font(12.0f, juce::Font::bold));  // Bigger and bold
 
     addAndMakeVisible(clipTypeComboBox);
-    clipTypeComboBox.addItem("Studio Tanh", 1);
-    clipTypeComboBox.addItem("Soft Knee", 2);
-    clipTypeComboBox.addItem("Dynamic Compress", 3);
-    clipTypeComboBox.addItem("Multi-Stage", 4);
-    clipTypeComboBox.addItem("Harmonic", 5);
-    clipTypeComboBox.addItem("Asymmetric", 6);
-    clipTypeComboBox.addItem("Hard Limit", 7);
+    clipTypeComboBox.addItem("Brutal Fuzz", 1);
+    clipTypeComboBox.addItem("Tube Overdrive", 2);
+    clipTypeComboBox.addItem("Bit Crusher", 3);
+    clipTypeComboBox.addItem("Tape Saturation", 4);
+    clipTypeComboBox.addItem("Transformer", 5);
+    clipTypeComboBox.addItem("Diode Clipper", 6);
+    clipTypeComboBox.addItem("Decimator", 7);
     
     clipTypeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.parameters, "clipType", clipTypeComboBox);

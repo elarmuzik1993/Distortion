@@ -62,109 +62,153 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
 
     switch (clipType)
     {
-    case 0:  // Enhanced Tanh with asymmetric bias
+    case 0:  // BRUTAL FUZZ - Aggressive hard clipping with analog noise
     {
-        y = std::tanh(x * drive * 1.5f);
-        y = (y > 0.0f) ? y * (1.0f - 0.12f * y) : y * (1.0f - 0.05f * y);
-        y *= 0.9f;
+        // Heavy drive for maximum grit
+        y = x * drive * 4.5f;
+
+        // Hard clip with brutal threshold
+        const float threshold = 0.3f;  // Very low threshold for aggressive clipping
+        if (y > threshold)
+            y = threshold + std::atan((y - threshold) * 2.0f) * 0.2f;
+        else if (y < -threshold)
+            y = -threshold + std::atan((y + threshold) * 2.0f) * 0.2f;
+
+        // Add subtle analog noise for warmth
+        static juce::Random random;
+        y += random.nextFloat() * 0.005f - 0.0025f;
+
+        // Final saturation
+        y = std::tanh(y * 1.8f);
         break;
     }
-    case 1:  // Soft knee with compression above threshold
+    case 1:  // TUBE OVERDRIVE - Asymmetric tube saturation with harmonics
     {
-        y = x * drive * 1.3f;
-        const float abs_y = std::abs(y);
-        if (abs_y > 0.5f)
+        // Tube-style asymmetric clipping (positive clips harder)
+        y = x * drive * 2.8f;
+
+        // Asymmetric waveshaping (vintage tube behavior)
+        if (y > 0.0f)
         {
-            const float sign = (y > 0.0f) ? 1.0f : -1.0f;
-            const float over = abs_y - 0.5f;
-            const float compressed = 0.5f + over * 0.5f;
-            y = sign * std::tanh(compressed) * 0.92f;
+            // Positive: harder clipping with even harmonics
+            y = std::tanh(y * 1.6f) * 0.85f;
+            y += 0.15f * y * y;  // 2nd harmonic
         }
         else
         {
-            y = std::tanh(y) * 0.95f;
+            // Negative: softer clipping with odd harmonics
+            y = std::tanh(y * 1.2f) * 0.9f;
+            y += 0.08f * y * y * y;  // 3rd harmonic
         }
+
+        // Add subtle warmth
+        y = y + 0.05f * std::sin(y * juce::MathConstants<float>::pi);
         break;
     }
-    case 2:  // Dynamic ratio compression
+    case 2:  // BIT CRUSHER - Digital destruction with sample rate reduction
     {
-        y = x * drive * 1.8f;
+        // Extreme bit reduction for digital grit
+        const float bits = 6.0f;  // Brutal bit depth
+        const float maxValue = std::pow(2.0f, bits - 1.0f);
+
+        y = x * drive * 3.2f;
+
+        // Bit crushing
+        y = std::floor(y * maxValue) / maxValue;
+
+        // Add aliasing character
+        y = std::tanh(y * 2.5f);
+
+        // Hard clip for extra grit
+        y = juce::jlimit(-0.95f, 0.95f, y);
+        break;
+    }
+    case 3:  // TAPE SATURATION - Analog tape with hysteresis
+    {
+        // Tape-style soft saturation with magnetic hysteresis simulation
+        y = x * drive * 2.5f;
+
+        // Tape compression curve (progressive)
         const float abs_y = std::abs(y);
-        if (abs_y > 0.35f)
-        {
-            const float sign = (y > 0.0f) ? 1.0f : -1.0f;
-            const float ratio = 2.5f + abs_y * 2.0f;
-            const float over = abs_y - 0.35f;
-            const float compressed = 0.35f + over / ratio;
-            y = sign * compressed * 0.95f;
-        }
+        const float sign = (y > 0.0f) ? 1.0f : -1.0f;
+
+        if (abs_y < 0.4f)
+            y = y * 1.05f;  // Slight boost in quiet regions
+        else if (abs_y < 1.0f)
+            y = sign * (0.42f + (abs_y - 0.4f) * 0.7f);
         else
-        {
-            y *= 0.98f;
-        }
-        y = std::tanh(y);
-        break;
-    }
-    case 3:  // Multi-stage hard clipping
-    {
-        y = x * drive * 1.2f;
-        const float abs_y = std::abs(y);
-        float compressed;
-        if (abs_y < 0.5f)
-        {
-            compressed = abs_y;
-        }
-        else if (abs_y < 1.2f)
-        {
-            compressed = 0.5f + (abs_y - 0.5f) * 0.6f;
-        }
-        else
-        {
-            compressed = 0.92f + (abs_y - 1.2f) * 0.05f;
-            compressed = juce::jmin(compressed, 0.98f);
-        }
-        y = (x > 0.0f ? 1.0f : -1.0f) * compressed;
-        break;
-    }
-    case 4:  // Tanh with 2nd harmonic boost
-    {
-        y = std::tanh(x * drive * 1.4f);
-        y = y + 0.08f * y * y * (y > 0.0f ? 1.0f : -1.0f);
-        y = std::tanh(y * 1.2f) * 0.9f;
-        break;
-    }
-    case 5:  // Asymmetric clipping with different thresholds
-    {
-        y = x * drive * 2.0f;
-        if (y > 0.6f)
-        {
-            y = 0.6f + std::tanh((y - 0.6f) * 3.0f) * 0.3f;
-        }
-        else if (y < -0.7f)
-        {
-            y = -0.7f + std::tanh((y + 0.7f) * 2.5f) * 0.25f;
-        }
-        y *= 0.95f;
-        break;
-    }
-    case 6:  // Hard limiting (aggressive brick-wall style)
-    {
-        y = x * drive * 3.5f;  // Increased drive for more aggression
+            y = sign * (0.84f + std::tanh((abs_y - 1.0f) * 2.0f) * 0.15f);
 
-        // Brick-wall hard clipping with minimal soft knee
-        const float threshold = 0.65f;  // Lower threshold = more clipping
-        const float abs_y = std::abs(y);
+        // Add tape warmth (subtle even harmonics)
+        y += 0.12f * y * y * sign;
 
-        if (abs_y > threshold)
+        // Final soft saturation
+        y = std::tanh(y * 1.3f) * 0.92f;
+        break;
+    }
+    case 4:  // TRANSFORMER SATURATION - Heavy harmonic distortion
+    {
+        // Transformer-style saturation with rich harmonics
+        y = x * drive * 3.0f;
+
+        // Multi-stage waveshaping for complex harmonics
+        y = std::tanh(y * 1.5f);
+
+        // Add rich harmonic content
+        const float fundamental = y;
+        const float harmonic2 = 0.25f * fundamental * fundamental * (fundamental > 0.0f ? 1.0f : -1.0f);
+        const float harmonic3 = 0.15f * fundamental * fundamental * fundamental;
+        const float harmonic5 = 0.08f * std::pow(std::abs(fundamental), 5.0f) * (fundamental > 0.0f ? 1.0f : -1.0f);
+
+        y = fundamental + harmonic2 + harmonic3 + harmonic5;
+
+        // Final limiting
+        y = std::tanh(y * 1.4f) * 0.88f;
+        break;
+    }
+    case 5:  // DIODE CLIPPER - Asymmetric diode clipping with grit
+    {
+        // Asymmetric diode-style clipping (forward/reverse bias difference)
+        y = x * drive * 3.8f;
+
+        // Asymmetric clipping (simulating diode forward voltage)
+        if (y > 0.5f)
         {
-            const float sign = (y > 0.0f) ? 1.0f : -1.0f;
-            const float over = abs_y - threshold;
-            // Very minimal softening - mostly hard clip
-            y = sign * (threshold + over * 0.05f);  // Only 5% of overshoot allowed
+            // Forward bias: hard clip at ~0.7V
+            y = 0.5f + std::atan((y - 0.5f) * 4.0f) * 0.15f;
+        }
+        else if (y < -0.6f)
+        {
+            // Reverse bias: slightly different threshold
+            y = -0.6f + std::atan((y + 0.6f) * 3.5f) * 0.2f;
         }
 
-        // Final brick-wall limit at 0.85
-        y = juce::jlimit(-0.85f, 0.85f, y);
+        // Add crossover distortion character
+        if (std::abs(y) < 0.05f)
+            y *= 0.7f;  // Dead zone near zero crossing
+
+        // Final saturation
+        y = std::tanh(y * 2.2f) * 0.9f;
+        break;
+    }
+    case 6:  // DECIMATOR - Extreme digital destruction
+    {
+        // Brutal digital destruction with severe aliasing
+        y = x * drive * 5.0f;
+
+        // Sample & hold for brutal aliasing
+        const float foldback = 4.0f;
+        y = std::fmod(y + 2.0f, 2.0f * foldback) - foldback;
+
+        // Hard clip with fold-back
+        while (y > 1.0f) y = 2.0f - y;
+        while (y < -1.0f) y = -2.0f - y;
+
+        // Add harmonic distortion
+        y = std::tanh(y * 2.8f);
+
+        // Brutal final limiting
+        y = juce::jlimit(-0.9f, 0.9f, y);
         break;
     }
     default:  // Fallback: simple tanh
@@ -290,7 +334,7 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     const auto inGainParam = inputGainParam ? inputGainParam->load() : 50.0f;
     const auto distParam = distortionAmountParam ? distortionAmountParam->load() : 0.0f;
     lastInputGain = std::pow(inGainParam / 50.0f, 1.5f);  // Match processBlock calculation
-    lastDistortionDrive = 1.0f + (distParam / 100.0f) * 3.5f;  // Match processBlock calculation
+    lastDistortionDrive = 1.0f + (distParam / 100.0f) * 7.0f;  // Match processBlock calculation (brutal range)
 
     // Update all sample-rate-dependent coefficients (DC blocking, compression, etc.)
     updateSampleRateDependentCoefficients(sampleRate);
@@ -671,7 +715,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Apply LFO modulation to distortion amount
     const float lfoModulation = (lfoValue * lfoDepth / 100.0f);  // -1 to +1 scaled by depth
     const float modulatedDistortionParam = juce::jlimit(0.0f, 100.0f, distortionParam + lfoModulation * 50.0f);
-    const float distortionDrive = 1.0f + (modulatedDistortionParam / 100.0f) * 3.5f;  // Studio style: 1.0 to 4.5
+    const float distortionDrive = 1.0f + (modulatedDistortionParam / 100.0f) * 7.0f;  // Brutal range: 1.0 to 8.0
 
     // Mix amount for wet/dry blend
     const float mixAmount = distMix / 100.0f;  // 0.0 to 1.0
