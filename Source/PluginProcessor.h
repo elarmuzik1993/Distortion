@@ -168,6 +168,7 @@ private:
     std::atomic<float>* bandSplitEnabledParam = nullptr;
     std::atomic<float>* lfoRateParam = nullptr;
     std::atomic<float>* lfoDepthParam = nullptr;
+    std::atomic<float>* lfoWaveformParam = nullptr;  // LFO waveform type
 
     // Compressor parameters
     std::atomic<float>* compPeakReductionParam = nullptr;
@@ -218,6 +219,7 @@ private:
     // Helper methods for studio distortion DSP
     float applyStudioDistortion(float x, float gain, float drive, int clipType);
     void updateSampleRateDependentCoefficients(double sampleRate);
+    float generateLFOWaveform(float phase, int waveformType);  // Generate LFO waveforms
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginProcessor)
 };

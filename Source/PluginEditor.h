@@ -361,6 +361,8 @@ private:
     
     CustomKnob lfoRateSlider, lfoDepthSlider;
     juce::Label lfoRateLabel, lfoDepthLabel;
+    juce::ComboBox lfoWaveformComboBox;
+    juce::Label lfoWaveformLabel;
 
     CustomKnob compPeakReductionSlider, compMakeupGainSlider;
     juce::Label compPeakReductionLabel, compMakeupGainLabel;
@@ -419,6 +421,7 @@ private:
     juce::Image backgroundImage;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoRateAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoDepthAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lfoWaveformAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> compPeakReductionAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> compMakeupGainAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> compRatioAttachment;

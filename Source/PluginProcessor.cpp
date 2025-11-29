@@ -32,6 +32,7 @@ PluginProcessor::PluginProcessor()
     clipTypeParam = parameters.getRawParameterValue("clipType");
     lfoRateParam = parameters.getRawParameterValue("lfoRate");
     lfoDepthParam = parameters.getRawParameterValue("lfoDepth");
+    lfoWaveformParam = parameters.getRawParameterValue("lfoWaveform");
     compPeakReductionParam = parameters.getRawParameterValue("compPeakReduction");
     compMakeupGainParam = parameters.getRawParameterValue("compMakeupGain");
     compRatioParam = parameters.getRawParameterValue("compRatio");
@@ -42,7 +43,7 @@ PluginProcessor::PluginProcessor()
     // Verify all parameters were found
     jassert(inputGainParam && outputGainParam && distortionAmountParam
         && highPassFreqParam && bandSplitEnabledParam && clipTypeParam
-        && lfoRateParam && lfoDepthParam
+        && lfoRateParam && lfoDepthParam && lfoWaveformParam
         && compPeakReductionParam && compMakeupGainParam && compRatioParam && compEnabledParam && compWetDryParam && compCrossoverParam
         && distMixParam);
 }
@@ -217,6 +218,62 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
     }
 
     return y;
+}
+
+//==============================================================================
+// LFO Waveform Generator
+// Generates different waveform shapes from 0-1 phase input
+// Returns values in -1 to +1 range for modulation
+//==============================================================================
+float PluginProcessor::generateLFOWaveform(float phase, int waveformType)
+{
+    float value = 0.0f;
+
+    switch (waveformType)
+    {
+    case 0:  // Sine wave
+        value = std::sin(phase * 2.0f * juce::MathConstants<float>::pi);
+        break;
+
+    case 1:  // Triangle wave
+        if (phase < 0.25f)
+            value = phase * 4.0f;  // Rising 0 to 1
+        else if (phase < 0.75f)
+            value = 2.0f - (phase * 4.0f);  // Falling 1 to -1
+        else
+            value = -4.0f + (phase * 4.0f);  // Rising -1 to 0
+        break;
+
+    case 2:  // Square wave
+        value = (phase < 0.5f) ? 1.0f : -1.0f;
+        break;
+
+    case 3:  // Sawtooth wave (rising)
+        value = (phase * 2.0f) - 1.0f;  // Linear ramp from -1 to +1
+        break;
+
+    case 4:  // Random (sample & hold)
+    {
+        // Generate new random value at each cycle start
+        static float randomValue = 0.0f;
+        static float lastPhase = 1.0f;
+
+        // Detect phase reset (when phase wraps from ~1 to ~0)
+        if (phase < lastPhase)
+        {
+            static juce::Random random;
+            randomValue = random.nextFloat() * 2.0f - 1.0f;  // -1 to +1
+        }
+        lastPhase = phase;
+        value = randomValue;
+        break;
+    }
+    default:  // Fallback to sine
+        value = std::sin(phase * 2.0f * juce::MathConstants<float>::pi);
+        break;
+    }
+
+    return value;
 }
 
 //==============================================================================
@@ -672,6 +729,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const int clipType = static_cast<int>(clipTypeParam->load());
     const float lfoRate = lfoRateParam->load();
     const float lfoDepth = lfoDepthParam->load();
+    const int lfoWaveform = static_cast<int>(lfoWaveformParam->load());
     const float compPeakReduction = compPeakReductionParam->load();
     const float compMakeupGain = compMakeupGainParam->load();
     const int compRatioMode = static_cast<int>(compRatioParam->load());
@@ -696,11 +754,12 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     }
 
     // LFO modulation for dynamic distortion effects
-    // Calculate LFO value (sine wave from -1 to +1)
+    // Calculate LFO value using selected waveform (output -1 to +1)
     float lfoValue = 0.0f;
     if (lfoRate > 0.0f)  // Only compute LFO if rate > 0
     {
-        lfoValue = std::sin(lfoPhase * 2.0f * juce::MathConstants<float>::pi);
+        // Generate waveform based on selected type
+        lfoValue = generateLFOWaveform(lfoPhase, lfoWaveform);
 
         // Update phase for next block (sample-rate and block-size independent)
         // Phase increment per sample = frequency / sampleRate
@@ -1309,7 +1368,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "lfoRate", 1 },
         "LFO Rate",
-        juce::NormalisableRange<float>(0.1f, 10.0f, 0.1f),
+        juce::NormalisableRange<float>(0.1f, 50.0f, 0.1f),  // Increased from 10Hz to 50Hz for tremolo/ring mod
         0.0f));  // Default 0 = LFO off
 
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
@@ -1317,6 +1376,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         "LFO Depth",
         juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f),
         0.0f));  // Default 0 = no modulation
+
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID{ "lfoWaveform", 1 },
+        "LFO Waveform",
+        juce::StringArray{ "Sine", "Triangle", "Square", "Saw", "Random" },
+        0));  // Default 0 = Sine wave
 
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "compPeakReduction", 1 },

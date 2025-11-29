@@ -43,6 +43,24 @@ PluginEditor::PluginEditor(PluginProcessor& p)
         lfoRateAttachment, "lfoRate");
     setupSlider(lfoDepthSlider, lfoDepthLabel, "LFO Depth",
         lfoDepthAttachment, "lfoDepth");
+
+    // Setup LFO waveform selector
+    addAndMakeVisible(lfoWaveformComboBox);
+    lfoWaveformComboBox.addItem("Sine", 1);
+    lfoWaveformComboBox.addItem("Triangle", 2);
+    lfoWaveformComboBox.addItem("Square", 3);
+    lfoWaveformComboBox.addItem("Saw", 4);
+    lfoWaveformComboBox.addItem("Random", 5);
+
+    lfoWaveformAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.parameters, "lfoWaveform", lfoWaveformComboBox);
+
+    addAndMakeVisible(lfoWaveformLabel);
+    lfoWaveformLabel.setText("LFO Shape", juce::dontSendNotification);
+    lfoWaveformLabel.setJustificationType(juce::Justification::centred);
+    lfoWaveformLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+    lfoWaveformLabel.setFont(juce::Font(12.0f, juce::Font::bold));
+
     // Setup compressor knobs
     setupSlider(compPeakReductionSlider, compPeakReductionLabel, "Peak Reduction",
         compPeakReductionAttachment, "compPeakReduction");
@@ -381,7 +399,7 @@ void PluginEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xFF, 0x00, 0x44));
     g.setFont(juce::Font(18.0f, juce::Font::bold));
     const auto titleBounds = getLocalBounds().removeFromTop(50);
-    g.drawText(" Distortion", titleBounds, juce::Justification::centred, true);
+    g.drawText("MONOLIT BEATZ", titleBounds, juce::Justification::centred, true);
 
     // Draw neon red border
     g.setColour(juce::Colour(0xFF, 0x00, 0x44).withAlpha(0.7f));
@@ -568,6 +586,27 @@ void PluginEditor::resized()
         comboCenterX - comboBoxWidth / 2,
         comboY + comboBoxHeight + 2,
         comboBoxWidth,
+        14
+    );
+
+    // ========== LFO WAVEFORM SELECTOR POSITIONING ==========
+    const int lfoWaveformWidth = comboBoxWidth;  // Match clip type size (54px)
+    const int lfoWaveformHeight = comboBoxHeight;  // Match clip type height (15px)
+    const int lfoRateCenter = lfoRateSlider.getX() + sliderWidth / 2;
+    const int lfoDepthCenter = lfoDepthSlider.getX() + sliderWidth / 2;
+    const int lfoWaveformCenterX = (lfoRateCenter + lfoDepthCenter) / 2;
+
+    lfoWaveformComboBox.setBounds(
+        lfoWaveformCenterX - lfoWaveformWidth / 2,
+        comboY,
+        lfoWaveformWidth,
+        lfoWaveformHeight
+    );
+
+    lfoWaveformLabel.setBounds(
+        lfoWaveformCenterX - lfoWaveformWidth / 2,
+        comboY + lfoWaveformHeight + 2,
+        lfoWaveformWidth,
         14
     );
 
