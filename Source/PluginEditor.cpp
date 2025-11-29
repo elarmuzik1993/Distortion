@@ -115,8 +115,8 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     clipTypeLabel.setFont(juce::Font(12.0f, juce::Font::bold));
 
     // Setup preset selector
-    addAndMakeVisible(presetLabel);
-    presetLabel.setText("Preset:", juce::dontSendNotification);
+    // Note: presetLabel removed - no "Preset:" text shown
+    presetLabel.setText("", juce::dontSendNotification);
     presetLabel.setJustificationType(juce::Justification::centredRight);
     presetLabel.setColour(juce::Label::textColourId, juce::Colours::white);
     presetLabel.setFont(juce::Font(12.0f, juce::Font::bold));
@@ -404,7 +404,7 @@ void PluginEditor::resized()
     auto titleArea = bounds.removeFromTop(titleHeight);
 
     // ========== PRESET SELECTOR (TOP-LEFT) ==========
-    const int presetLabelWidth = 50;
+    // No label - preset selector starts at left edge
     const int presetSelectorWidth = 150;
     const int presetButtonWidth = 50;
     const int presetSpacing = 5;
@@ -413,13 +413,14 @@ void PluginEditor::resized()
     const int presetY = titleArea.getY() + (titleHeight - presetHeight) / 2;
     const int presetX = titleArea.getX();
 
-    presetLabel.setBounds(presetX, presetY, presetLabelWidth, presetHeight);
-    presetSelector.setBounds(presetX + presetLabelWidth + presetSpacing, presetY,
-                            presetSelectorWidth, presetHeight);
-    savePresetButton.setBounds(presetX + presetLabelWidth + presetSpacing + presetSelectorWidth + presetSpacing,
+    // Hide the label (set to zero width)
+    presetLabel.setBounds(0, 0, 0, 0);
+
+    // Preset selector starts at presetX (no label offset)
+    presetSelector.setBounds(presetX, presetY, presetSelectorWidth, presetHeight);
+    savePresetButton.setBounds(presetX + presetSelectorWidth + presetSpacing,
                                presetY, presetButtonWidth, presetHeight);
-    deletePresetButton.setBounds(presetX + presetLabelWidth + presetSpacing + presetSelectorWidth +
-                                 presetSpacing + presetButtonWidth + presetSpacing,
+    deletePresetButton.setBounds(presetX + presetSelectorWidth + presetSpacing + presetButtonWidth + presetSpacing,
                                  presetY, presetButtonWidth, presetHeight);
 
     auto contentArea = bounds;
