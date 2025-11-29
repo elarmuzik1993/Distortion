@@ -46,6 +46,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 
     // Setup LFO waveform selector
     addAndMakeVisible(lfoWaveformComboBox);
+    lfoWaveformComboBox.setLookAndFeel(&comboBoxLookAndFeel);  // Apply neon red styling
     lfoWaveformComboBox.addItem("Sine", 1);
     lfoWaveformComboBox.addItem("Triangle", 2);
     lfoWaveformComboBox.addItem("Square", 3);
@@ -73,6 +74,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 
     // Setup Compress/Limit dropdown
     addAndMakeVisible(compRatioComboBox);
+    compRatioComboBox.setLookAndFeel(&comboBoxLookAndFeel);  // Apply neon red styling
     compRatioComboBox.addItem("Compress", 1);  // 3:1 ratio
     compRatioComboBox.addItem("Limit", 2);     // 12:1 ratio
 
@@ -115,6 +117,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     bandSplitLabel.setFont(juce::Font(12.0f, juce::Font::bold));  // Bigger and bold
 
     addAndMakeVisible(clipTypeComboBox);
+    clipTypeComboBox.setLookAndFeel(&comboBoxLookAndFeel);  // Apply neon red styling
     clipTypeComboBox.addItem("Brutal Fuzz", 1);
     clipTypeComboBox.addItem("Tube Overdrive", 2);
     clipTypeComboBox.addItem("Bit Crusher", 3);
@@ -122,7 +125,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     clipTypeComboBox.addItem("Transformer", 5);
     clipTypeComboBox.addItem("Diode Clipper", 6);
     clipTypeComboBox.addItem("Decimator", 7);
-    
+
     clipTypeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.parameters, "clipType", clipTypeComboBox);
     
@@ -140,6 +143,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     presetLabel.setFont(juce::Font(12.0f, juce::Font::bold));
 
     addAndMakeVisible(presetSelector);
+    presetSelector.setLookAndFeel(&comboBoxLookAndFeel);  // Apply neon red styling
     presetSelector.setTextWhenNothingSelected("Select Preset...");
     presetSelector.onChange = [this]()
     {

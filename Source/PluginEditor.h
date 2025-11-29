@@ -337,6 +337,27 @@ public:
     }
 };
 
+// Custom LookAndFeel for neon red ComboBox styling
+class ComboBoxLookAndFeel : public juce::LookAndFeel_V4
+{
+public:
+    ComboBoxLookAndFeel()
+    {
+        // Neon red color scheme
+        setColour(juce::ComboBox::backgroundColourId, juce::Colours::black);
+        setColour(juce::ComboBox::textColourId, juce::Colour(0xFF, 0x00, 0x44));  // Neon red
+        setColour(juce::ComboBox::outlineColourId, juce::Colour(0xFF, 0x00, 0x44));  // Neon red border
+        setColour(juce::ComboBox::buttonColourId, juce::Colours::black);
+        setColour(juce::ComboBox::arrowColourId, juce::Colour(0xFF, 0x00, 0x44));  // Neon red arrow
+
+        // Popup menu colors
+        setColour(juce::PopupMenu::backgroundColourId, juce::Colours::black);
+        setColour(juce::PopupMenu::textColourId, juce::Colour(0xFF, 0x00, 0x44));
+        setColour(juce::PopupMenu::highlightedBackgroundColourId, juce::Colour(0xFF, 0x00, 0x44).withAlpha(0.3f));
+        setColour(juce::PopupMenu::highlightedTextColourId, juce::Colours::white);
+    }
+};
+
 class PluginEditor : public juce::AudioProcessorEditor
 {
 public:
@@ -354,6 +375,7 @@ private:
     Oscilloscope oscilloscope;
     GainReductionMeter gainReductionMeter;
     CheckboxLookAndFeel checkboxLookAndFeel;
+    ComboBoxLookAndFeel comboBoxLookAndFeel;  // Neon red styling for dropdowns
 
     // UI Components
     CustomKnob inputGainSlider, distortionAmountSlider, outputGainSlider, highPassFreqSlider, distMixSlider;
