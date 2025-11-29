@@ -169,6 +169,7 @@ private:
     std::atomic<float>* lfoRateParam = nullptr;
     std::atomic<float>* lfoDepthParam = nullptr;
     std::atomic<float>* lfoWaveformParam = nullptr;  // LFO waveform type
+    std::atomic<float>* waveshaperMixParam = nullptr;  // Waveshaper wet/dry mix (0-100)
 
     // Compressor parameters
     std::atomic<float>* compPeakReductionParam = nullptr;

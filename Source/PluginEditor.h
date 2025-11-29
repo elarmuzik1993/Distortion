@@ -469,6 +469,9 @@ private:
     juce::ComboBox lfoWaveformComboBox;
     juce::Label lfoWaveformLabel;
 
+    CustomKnob waveshaperSlider;
+    juce::Label waveshaperLabel;
+
     CustomKnob compPeakReductionSlider, compMakeupGainSlider;
     juce::Label compPeakReductionLabel, compMakeupGainLabel;
     juce::ComboBox compRatioComboBox;
@@ -527,6 +530,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoRateAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoDepthAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lfoWaveformAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> waveshaperAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> compPeakReductionAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> compMakeupGainAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> compRatioAttachment;

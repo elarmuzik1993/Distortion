@@ -17,9 +17,9 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addAndMakeVisible(oscilloscope);
     addAndMakeVisible(gainReductionMeter);
 
-    // Set fixed window size - no resizing allowed
-    setSize(802, 564);
-    setResizeLimits(802, 564, 802, 564);
+    // Set fixed window size - no resizing allowed (increased width to fit all controls)
+    setSize(960, 564);
+    setResizeLimits(960, 564, 960, 564);
     setResizable(false, false);
 
     // Load background image from Resources folder
@@ -55,6 +55,10 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 
     lfoWaveformAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.parameters, "lfoWaveform", lfoWaveformComboBox);
+
+    // Setup waveshaper mix knob
+    setupSlider(waveshaperSlider, waveshaperLabel, "Wave Mix",
+        waveshaperAttachment, "waveshaperMix");
 
     // Setup compressor knobs
     setupSlider(compPeakReductionSlider, compPeakReductionLabel, "Peak Reduction",
@@ -393,22 +397,8 @@ void PluginEditor::setupSlider(CustomKnob& slider,
 //==============================================================================
 void PluginEditor::paint(juce::Graphics& g)
 {
-    // Draw the background image
-    if (backgroundImage.isValid())
-    {
-        g.drawImage(backgroundImage, getLocalBounds().toFloat(),
-            juce::RectanglePlacement::fillDestination);
-    }
-    else
-    {
-        // Fallback - neon red gradient if image fails to load
-        juce::ColourGradient gradient(
-            juce::Colour(0xFF, 0x00, 0x00), 0, 0,
-            juce::Colour(0x80, 0x00, 0x00), 0, (float)getHeight(),
-            false);
-        g.setGradientFill(gradient);
-        g.fillAll();
-    }
+    // Black background
+    g.fillAll(juce::Colours::black);
 
     // Draw title in neon red
     g.setColour(juce::Colour(0xFF, 0x00, 0x44));
@@ -423,6 +413,9 @@ void PluginEditor::paint(juce::Graphics& g)
 
 void PluginEditor::resized()
 {
+    // ========== OSCILLOSCOPE FILLS ENTIRE WINDOW ==========
+    oscilloscope.setBounds(getLocalBounds());
+
     const int margin = 20;
     const int titleHeight = 50;
     const int compressionBarHeight = 90;  // NEW: Height for compression section
@@ -432,7 +425,7 @@ void PluginEditor::resized()
     const int spacing = 40;
     const int minScopeHeight = 100;
 
-    // Calculate available space
+    // Calculate available space for controls (overlaid on oscilloscope)
     auto bounds = getLocalBounds().reduced(margin);
     auto titleArea = bounds.removeFromTop(titleHeight);
 
@@ -460,6 +453,9 @@ void PluginEditor::resized()
 
     // ========== COMPRESSION BAR AT TOP (NEW SECTION) ==========
     auto compressionArea = contentArea.removeFromTop(compressionBarHeight);
+
+    // Calculate actual window height for footer positioning
+    const int actualWindowHeight = getHeight();
 
     // Compression section title
     auto compTitleArea = compressionArea.removeFromTop(20);
@@ -533,146 +529,89 @@ void PluginEditor::resized()
     randomizeButton.setBounds(randomizeButtonX, randomizeButtonY, randomizeButtonWidth, randomizeButtonHeight);
     // ===========================================================
 
-    // Calculate space needed for distortion controls
-    const int controlsHeight = sliderHeight + labelHeight + 20;
+    // ========== SINGLE ROW LAYOUT AT BOTTOM ==========
+    const int knobSize = 75;  // Large knob size
+    const int smallKnobSize = 45;  // Small knob size
+    const int controlSpacing = 8;  // Spacing between controls
+    const int bottomMargin = 20;
+    const int rowY = actualWindowHeight - bottomMargin - knobSize - labelHeight - 10;  // Bottom row position
 
-    // Allocate space: give oscilloscope what's left after compression bar and controls
-    int scopeHeight = contentArea.getHeight() - controlsHeight;
-    scopeHeight = juce::jmax(scopeHeight, minScopeHeight);
+    // Calculate total width to center controls
+    const int totalControlsWidth = 60 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 75;  // All controls + spacing
+    int currentX = (getWidth() - totalControlsWidth) / 2;  // Center horizontally
 
-    auto scopeArea = contentArea.removeFromTop(scopeHeight);
-    oscilloscope.setBounds(scopeArea.reduced(5));
+    // Clean Sub Toggle (24x24)
+    const int cleanSubToggleSize = 24;
+    const int toggleYOffset = (knobSize - cleanSubToggleSize) / 2;  // Center vertically with big knobs
+    bandSplitToggle.setBounds(currentX, rowY + toggleYOffset, cleanSubToggleSize, cleanSubToggleSize);
+    const int toggleLabelWidth = 60;  // Width for toggle area
+    bandSplitLabel.setBounds(currentX - (toggleLabelWidth - cleanSubToggleSize) / 2,
+                            rowY + toggleYOffset + cleanSubToggleSize + 5, toggleLabelWidth, 16);
+    bandSplitLock.setBounds(currentX + cleanSubToggleSize - 12, rowY + toggleYOffset, 12, 12);
+    currentX += toggleLabelWidth + controlSpacing;
 
-    // Position distortion sliders in the remaining bottom area
-    auto controlArea = contentArea;
+    // Input Gain (100x100)
+    inputGainSlider.setBounds(currentX, rowY, knobSize, knobSize);
+    inputGainLabel.setBounds(currentX, rowY + knobSize + 5, knobSize, labelHeight);
+    inputGainLock.setBounds(currentX + knobSize - 16 - 5, rowY + 5, 16, 16);
+    currentX += knobSize + controlSpacing;
 
-    const int totalSliderWidth = 6 * sliderWidth + 5 * spacing;  // 6 sliders (distMix moved to top)
-    const int startX = controlArea.getX() + (controlArea.getWidth() - totalSliderWidth) / 2;
-    const int sliderY = controlArea.getY() + (controlArea.getHeight() - sliderHeight - labelHeight) / 2;
+    // Clip Type Dropdown (45x18)
+    const int comboWidth = 45;  // Dropdown width
+    const int comboHeight = 18;
+    const int comboYOffset = (knobSize - comboHeight) / 2;
+    clipTypeComboBox.setBounds(currentX, rowY + comboYOffset, comboWidth, comboHeight);
+    clipTypeLabel.setBounds(currentX, rowY + comboYOffset + comboHeight + 2, comboWidth, 14);
+    clipTypeLock.setBounds(currentX + comboWidth - 12 - 2, rowY + comboYOffset, 12, 12);
+    currentX += comboWidth + controlSpacing;
 
-    // Position sliders and labels
-    auto positionSliderAndLabel = [&](juce::Slider& slider, juce::Label& label, int index)
-        {
-            const int x = startX + index * (sliderWidth + spacing);
-            slider.setBounds(x, sliderY, sliderWidth, sliderHeight);
-            label.setBounds(x, sliderY + sliderHeight + 5, sliderWidth, labelHeight);
-        };
+    // Hi-Pass Filter (100x100)
+    highPassFreqSlider.setBounds(currentX, rowY, knobSize, knobSize);
+    highPassFreqLabel.setBounds(currentX, rowY + knobSize + 5, knobSize, labelHeight);
+    highPassFreqLock.setBounds(currentX + knobSize - 16 - 5, rowY + 5, 16, 16);
+    currentX += knobSize + controlSpacing;
 
-    positionSliderAndLabel(inputGainSlider, inputGainLabel, 0);
-    positionSliderAndLabel(highPassFreqSlider, highPassFreqLabel, 1);
-    positionSliderAndLabel(distortionAmountSlider, distortionAmountLabel, 2);
-    positionSliderAndLabel(outputGainSlider, outputGainLabel, 3);
-    positionSliderAndLabel(lfoRateSlider, lfoRateLabel, 4);
-    positionSliderAndLabel(lfoDepthSlider, lfoDepthLabel, 5);
+    // Dist Mix (50x50)
+    const int smallKnobYOffset = (knobSize - smallKnobSize) / 2;
+    distMixSlider.setBounds(currentX, rowY + smallKnobYOffset, smallKnobSize, smallKnobSize);
+    distMixLabel.setBounds(currentX, rowY + smallKnobYOffset + smallKnobSize + 2, smallKnobSize, 14);
+    distMixLock.setBounds(currentX + smallKnobSize - 12 - 3, rowY + smallKnobYOffset + 3, 12, 12);
+    currentX += smallKnobSize + controlSpacing;
 
-    // Position lock icons for main sliders (top-right corner of each knob)
-    const int lockSize = 16;
-    const int lockOffset = 5;
-    inputGainLock.setBounds(inputGainSlider.getX() + sliderWidth - lockSize - lockOffset,
-                           inputGainSlider.getY() + lockOffset, lockSize, lockSize);
-    highPassFreqLock.setBounds(highPassFreqSlider.getX() + sliderWidth - lockSize - lockOffset,
-                              highPassFreqSlider.getY() + lockOffset, lockSize, lockSize);
-    distortionAmountLock.setBounds(distortionAmountSlider.getX() + sliderWidth - lockSize - lockOffset,
-                                  distortionAmountSlider.getY() + lockOffset, lockSize, lockSize);
-    outputGainLock.setBounds(outputGainSlider.getX() + sliderWidth - lockSize - lockOffset,
-                            outputGainSlider.getY() + lockOffset, lockSize, lockSize);
-    lfoRateLock.setBounds(lfoRateSlider.getX() + sliderWidth - lockSize - lockOffset,
-                         lfoRateSlider.getY() + lockOffset, lockSize, lockSize);
-    lfoDepthLock.setBounds(lfoDepthSlider.getX() + sliderWidth - lockSize - lockOffset,
-                          lfoDepthSlider.getY() + lockOffset, lockSize, lockSize);
+    // Distortion Amount (100x100)
+    distortionAmountSlider.setBounds(currentX, rowY, knobSize, knobSize);
+    distortionAmountLabel.setBounds(currentX, rowY + knobSize + 5, knobSize, labelHeight);
+    distortionAmountLock.setBounds(currentX + knobSize - 16 - 5, rowY + 5, 16, 16);
+    currentX += knobSize + controlSpacing;
 
-    // ========== CLIP TYPE COMBOBOX POSITIONING ==========
-    const int comboBoxWidth = 50;
-    const int comboBoxHeight = 18;
+    // Wave Mix (50x50)
+    waveshaperSlider.setBounds(currentX, rowY + smallKnobYOffset, smallKnobSize, smallKnobSize);
+    waveshaperLabel.setBounds(currentX, rowY + smallKnobYOffset + smallKnobSize + 2, smallKnobSize, 14);
+    currentX += smallKnobSize + controlSpacing;
 
-    const int hiPassCenter = startX + 1 * (sliderWidth + spacing) + sliderWidth / 2;
-    const int distortionCenter = startX + 2 * (sliderWidth + spacing) + sliderWidth / 2;
-    const int comboCenterX = (hiPassCenter + distortionCenter) / 2;
+    // Output Gain (100x100)
+    outputGainSlider.setBounds(currentX, rowY, knobSize, knobSize);
+    outputGainLabel.setBounds(currentX, rowY + knobSize + 5, knobSize, labelHeight);
+    outputGainLock.setBounds(currentX + knobSize - 16 - 5, rowY + 5, 16, 16);
+    currentX += knobSize + controlSpacing;
 
-    const int comboY = sliderY + 30;
-    clipTypeComboBox.setBounds(
-        comboCenterX - comboBoxWidth / 2,
-        comboY,
-        comboBoxWidth,
-        comboBoxHeight
-    );
+    // LFO Waveform Dropdown (50x18)
+    lfoWaveformComboBox.setBounds(currentX, rowY + comboYOffset, comboWidth, comboHeight);
+    lfoWaveformLabel.setBounds(currentX, rowY + comboYOffset + comboHeight + 2, comboWidth, 14);
+    currentX += comboWidth + controlSpacing;
 
-    clipTypeLabel.setBounds(
-        comboCenterX - comboBoxWidth / 2,
-        comboY + comboBoxHeight + 2,
-        comboBoxWidth,
-        14
-    );
+    // LFO Rate (100x100)
+    lfoRateSlider.setBounds(currentX, rowY, knobSize, knobSize);
+    lfoRateLabel.setBounds(currentX, rowY + knobSize + 5, knobSize, labelHeight);
+    lfoRateLock.setBounds(currentX + knobSize - 16 - 5, rowY + 5, 16, 16);
+    currentX += knobSize + controlSpacing;
 
-    // ========== LFO WAVEFORM SELECTOR POSITIONING ==========
-    const int lfoWaveformWidth = comboBoxWidth;  // Match clip type size (54px)
-    const int lfoWaveformHeight = comboBoxHeight;  // Match clip type height (15px)
-    const int lfoRateCenter = lfoRateSlider.getX() + sliderWidth / 2;
-    const int lfoDepthCenter = lfoDepthSlider.getX() + sliderWidth / 2;
-    const int lfoWaveformCenterX = (lfoRateCenter + lfoDepthCenter) / 2;
+    // LFO Depth (100x100)
+    lfoDepthSlider.setBounds(currentX, rowY, knobSize, knobSize);
+    lfoDepthLabel.setBounds(currentX, rowY + knobSize + 5, knobSize, labelHeight);
+    lfoDepthLock.setBounds(currentX + knobSize - 16 - 5, rowY + 5, 16, 16);
 
-    lfoWaveformComboBox.setBounds(
-        lfoWaveformCenterX - lfoWaveformWidth / 2,
-        comboY,
-        lfoWaveformWidth,
-        lfoWaveformHeight
-    );
-
-    lfoWaveformLabel.setBounds(
-        lfoWaveformCenterX - lfoWaveformWidth / 2,
-        comboY + lfoWaveformHeight + 2,
-        lfoWaveformWidth,
-        14
-    );
-
-    // ========== DIST MIX KNOB POSITIONING (between Distortion and Output) ==========
-    const int distortionKnobCenter = startX + 2 * (sliderWidth + spacing) + sliderWidth / 2;
-    const int outputKnobCenter = startX + 3 * (sliderWidth + spacing) + sliderWidth / 2;
-    const int distMixCenterX = (distortionKnobCenter + outputKnobCenter) / 2;
-
-    const int distMixKnobSize = 50;  // Smaller knob size to fit between main knobs
-    distMixSlider.setBounds(
-        distMixCenterX - distMixKnobSize / 2,
-        comboY - 5,  // Same Y level as clip type dropdown
-        distMixKnobSize,
-        distMixKnobSize
-    );
-
-    const int distMixLabelHeight = 14;
-    distMixLabel.setBounds(
-        distMixCenterX - distMixKnobSize / 2,
-        comboY - 5 + distMixKnobSize + 2,
-        distMixKnobSize,
-        distMixLabelHeight
-    );
-
-    // ========== 808-SAFE TOGGLE BUTTON POSITIONING ==========
-    const int safeToggleSize = 24;  // Changed from toggleSize
-
-    const int knob1Center = startX + sliderWidth / 2;
-    const int knob2Center = startX + sliderWidth + spacing + sliderWidth / 2;
-    const int safeCenterX = (knob1Center + knob2Center) / 2;  // Changed from centerX
-
-    const int safeToggleX = safeCenterX - safeToggleSize / 2;  // Changed from toggleX
-    const int safeToggleY = comboY + (comboBoxHeight / 2) - (safeToggleSize / 2);  // Changed from toggleY
-    bandSplitToggle.setBounds(safeToggleX, safeToggleY, safeToggleSize, safeToggleSize);
-
-    const int labelWidth = 80;
-    bandSplitLabel.setBounds(
-        safeCenterX - labelWidth / 2,  // Changed from centerX
-        safeToggleY + safeToggleSize + 5,  // Changed variables
-        labelWidth,
-        16
-    );
-
-    // Position remaining lock icons
-    const int smallLockSize = 12;
-    distMixLock.setBounds(distMixSlider.getX() + distMixKnobSize - smallLockSize - 3,
-                         distMixSlider.getY() + 3, smallLockSize, smallLockSize);
-    clipTypeLock.setBounds(clipTypeComboBox.getX() + comboBoxWidth - smallLockSize - 2,
-                          clipTypeComboBox.getY(), smallLockSize, smallLockSize);
-    bandSplitLock.setBounds(bandSplitToggle.getX() + safeToggleSize - smallLockSize,
-                           bandSplitToggle.getY(), smallLockSize, smallLockSize);
+    // All controls and lock icons positioned above in single row layout
 }
 
 bool PluginEditor::isParameterLocked(const juce::String& paramID) const

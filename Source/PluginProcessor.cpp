@@ -33,6 +33,7 @@ PluginProcessor::PluginProcessor()
     lfoRateParam = parameters.getRawParameterValue("lfoRate");
     lfoDepthParam = parameters.getRawParameterValue("lfoDepth");
     lfoWaveformParam = parameters.getRawParameterValue("lfoWaveform");
+    waveshaperMixParam = parameters.getRawParameterValue("waveshaperMix");
     compPeakReductionParam = parameters.getRawParameterValue("compPeakReduction");
     compMakeupGainParam = parameters.getRawParameterValue("compMakeupGain");
     compRatioParam = parameters.getRawParameterValue("compRatio");
@@ -43,7 +44,7 @@ PluginProcessor::PluginProcessor()
     // Verify all parameters were found
     jassert(inputGainParam && outputGainParam && distortionAmountParam
         && highPassFreqParam && bandSplitEnabledParam && clipTypeParam
-        && lfoRateParam && lfoDepthParam && lfoWaveformParam
+        && lfoRateParam && lfoDepthParam && lfoWaveformParam && waveshaperMixParam
         && compPeakReductionParam && compMakeupGainParam && compRatioParam && compEnabledParam && compWetDryParam && compCrossoverParam
         && distMixParam);
 }
@@ -1168,6 +1169,65 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         }
     }
 
+    // MUSICAL WAVESHAPER - Smooth harmonics with buttery fuzz and pleasant hiss
+    const float waveshaperMix = *waveshaperMixParam;
+    if (waveshaperMix > 0.0f)
+    {
+        const float wetAmount = waveshaperMix / 100.0f;  // 0.0 to 1.0
+        const float dryAmount = 1.0f - wetAmount;
+
+        // Simple random generator for tape-like hiss
+        static juce::Random random;
+
+        for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+        {
+            auto* channelData = buffer.getWritePointer(channel);
+            for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+            {
+                const float dry = channelData[sample];
+                float wet = dry;
+
+                // Stage 1: Gentle pre-emphasis for detail (3x instead of 8x)
+                wet *= 3.0f;
+
+                // Stage 2: Smooth tube-like saturation with even harmonics
+                // Generates 2nd harmonic (warm, musical)
+                const float x2 = wet * wet;  // 2nd harmonic
+                wet = wet + (x2 * 0.15f * juce::dsp::FastMathApproximations::tanh(wet));
+
+                // Stage 3: Buttery soft-knee saturation
+                const float absWet = std::abs(wet);
+                if (absWet > 0.4f)
+                {
+                    // Smooth compression above threshold
+                    const float excess = absWet - 0.4f;
+                    const float compressed = 0.4f + std::tanh(excess * 1.2f) * 0.4f;
+                    wet = (wet > 0.0f ? compressed : -compressed);
+                }
+
+                // Stage 4: Add smooth 3rd harmonic for richness
+                wet = wet + std::sin(wet * 3.0f) * 0.08f;
+
+                // Stage 5: Pleasant tape-like hiss (subtle high-frequency enhancement)
+                const float hiss = random.nextFloat() * 0.003f - 0.0015f;  // Very subtle
+                wet += hiss * absWet;  // Program-dependent hiss
+
+                // Stage 6: Gentle wave folding for silky harmonics
+                wet = wet + std::sin(wet * 1.5f) * 0.12f;
+
+                // Stage 7: Final smooth saturation
+                wet = std::tanh(wet * 0.85f);
+
+                // Stage 8: Subtle asymmetry for analog character
+                if (wet > 0.0f)
+                    wet *= 0.98f;  // Slightly compress positive peaks
+
+                // Blend dry and wet signals
+                channelData[sample] = dryAmount * dry + wetAmount * wet;
+            }
+        }
+    }
+
     // Check final output
     float maxFinalOutput = 0.0f;
     for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
@@ -1382,6 +1442,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         "LFO Waveform",
         juce::StringArray{ "Sine", "Triangle", "Square", "Saw", "Random" },
         0));  // Default 0 = Sine wave
+
+    // Waveshaper parameter (mix knob 0-100%)
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "waveshaperMix", 1 },
+        "Waveshaper Mix",
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f),
+        0.0f));  // Default 0 = no waveshaping
 
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "compPeakReduction", 1 },
