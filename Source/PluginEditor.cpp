@@ -91,8 +91,8 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 
     // Setup section title label
     addAndMakeVisible(compSectionLabel);
-    compSectionLabel.setText("LOW-END COMPRESSION", juce::dontSendNotification);
-    compSectionLabel.setJustificationType(juce::Justification::centred);
+    compSectionLabel.setText("COMPRESSION", juce::dontSendNotification);
+    compSectionLabel.setJustificationType(juce::Justification::centredRight);
     compSectionLabel.setColour(juce::Label::textColourId, juce::Colour(0xFF, 0x00, 0x44));  // Neon red
     compSectionLabel.setFont(juce::Font(14.0f, juce::Font::bold));
     
