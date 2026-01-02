@@ -1,0 +1,159 @@
+═══════════════════════════════════════════════════════════════════════════
+  DISTORTION PLUGIN - 44.1kHz DEBUG TEST PROCEDURE
+═══════════════════════════════════════════════════════════════════════════
+
+This plugin now has COMPREHENSIVE DEBUG LOGGING that will help identify the
+exact problem. Follow these steps PRECISELY:
+
+═══════════════════════════════════════════════════════════════════════════
+STEP 1: SETUP DebugView++
+═══════════════════════════════════════════════════════════════════════════
+
+1. Download DebugView++ (if you don't have it):
+   https://github.com/CobaltFusion/DebugViewPP/releases
+
+2. Run DebugView++ as Administrator
+
+3. Clear all existing logs (Ctrl+X or Edit → Clear)
+
+4. Enable "Capture Win32" and "Capture Global Win32"
+
+5. Click "Start Capture" (Play button)
+
+═══════════════════════════════════════════════════════════════════════════
+STEP 2: PREPARE YOUR DAW
+═══════════════════════════════════════════════════════════════════════════
+
+1. Open your DAW (FL Studio, Ableton, etc.)
+
+2. Create a NEW PROJECT
+
+3. Set the project sample rate to 44100 Hz (44.1kHz)
+   - In FL Studio: Options → Audio Settings → Sample Rate → 44100 Hz
+
+4. Verify sample rate is actually 44100 Hz
+
+5. Create an audio track or insert
+
+═══════════════════════════════════════════════════════════════════════════
+STEP 3: TEST #1 - CLEAN LOAD
+═══════════════════════════════════════════════════════════════════════════
+
+1. Load the Distortion plugin on the track
+   Location: C:\Program Files\Common Files\VST3\Distortion.vst3
+
+2. DO NOT TOUCH ANY CONTROLS YET
+
+3. Play some audio (sine wave or simple sound)
+
+4. Let it run for 10-15 seconds
+
+5. Check DebugView++ - you should see logs like:
+   === prepareToPlay called ===
+   Sample rate: 44100 Hz
+   === BLOCK 100 ===
+   SR: 44100 | BlockSize: 512 | InputGain: 1.000 | DistParam: 0.0
+   Input peak: 0.xxxx
+   After distortion peak: 0.xxxx
+   After downsample peak: 0.xxxx
+   Final output peak: 0.xxxx
+
+═══════════════════════════════════════════════════════════════════════════
+STEP 4: TEST #2 - DISTORTION AMOUNT CHANGE
+═══════════════════════════════════════════════════════════════════════════
+
+1. With audio playing, slowly increase "Distortion Amount" to 50
+
+2. Watch DebugView++ for any messages containing:
+   - "CORRUPTED"
+   - "CRITICAL"
+   - "ERROR"
+   - Peak values > 2.0
+
+3. Note the EXACT BLOCK NUMBER where the problem occurs
+
+4. Copy the log messages from that block
+
+═══════════════════════════════════════════════════════════════════════════
+STEP 5: TEST #3 - COMPRESSOR ENABLE
+═══════════════════════════════════════════════════════════════════════════
+
+1. Reset plugin (reload it fresh)
+
+2. Set Distortion Amount = 0 (off)
+
+3. Play audio
+
+4. Enable the COMPRESSOR toggle
+
+5. Increase "Peak Reduction" to 50
+
+6. Watch DebugView++ for problems
+
+7. Copy any error logs
+
+═══════════════════════════════════════════════════════════════════════════
+STEP 6: COLLECT THE LOGS
+═══════════════════════════════════════════════════════════════════════════
+
+1. In DebugView++, select all logs (Ctrl+A)
+
+2. Copy to clipboard (Ctrl+C)
+
+3. Save to a text file:
+   C:\Users\boris\Desktop\DISTORTION_DEBUG_LOG_44KHZ.txt
+
+4. Send me this file
+
+═══════════════════════════════════════════════════════════════════════════
+WHAT TO LOOK FOR IN THE LOGS:
+═══════════════════════════════════════════════════════════════════════════
+
+The logs will show EXACTLY where the problem happens:
+
+✓ Input peak should be < 1.0 (normal audio levels)
+✓ After distortion peak should be < 2.0 (with distortion on)
+✓ After downsample peak should be similar to distortion peak
+✓ Final output peak should be < 2.0
+
+❌ If you see:
+   - "CORRUPTED" messages
+   - Peak > 10.0
+   - NaN: true
+   - Inf: true
+   - Peak values suddenly jumping from 0.5 to 50.0
+
+This will tell me EXACTLY which stage is causing the explosion.
+
+═══════════════════════════════════════════════════════════════════════════
+ALTERNATIVE: Use Standalone App for Faster Testing
+═══════════════════════════════════════════════════════════════════════════
+
+1. Run: Builds\VisualStudio2022\x64\Release\Standalone Plugin\Distortion.exe
+
+2. Set sample rate in Audio Settings to 44100 Hz
+
+3. Play a test tone
+
+4. Follow same test steps above
+
+5. Standalone logs go to same DebugView++
+
+═══════════════════════════════════════════════════════════════════════════
+EXPECTED LOG OUTPUT (Normal Operation):
+═══════════════════════════════════════════════════════════════════════════
+
+=== BLOCK 100 ===
+SR: 44100 | BlockSize: 512 | InputGain: 1.000 | DistParam: 0.0 | CompEnabled: NO
+Input peak: 0.5234
+After distortion peak: 0.5234
+After downsample peak: 0.5234
+Final output peak: 0.5234 | OutputGain: 1.000
+=========================================
+
+If the problem occurs, you'll see something like:
+After distortion peak: 47.2834  ← THIS IS THE BUG!
+
+═══════════════════════════════════════════════════════════════════════════
+
+Send me the debug log file and I'll know EXACTLY what's wrong!

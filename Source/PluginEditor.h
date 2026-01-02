@@ -25,8 +25,6 @@ public:
         setOpaque(true);
         setBufferedToImage(true);
         startTimerHz(DSPConstants::SCOPE_REFRESH_RATE_HZ);
-        displayBuffer.setSize(2, DSPConstants::SCOPE_DISPLAY_POINTS);
-        displayBuffer.clear();
         cachedBuffer.setSize(2, DSPConstants::SCOPE_DISPLAY_POINTS);
         cachedBuffer.clear();
     }
@@ -112,7 +110,6 @@ public:
 
 private:
     PluginProcessor& processor;
-    juce::AudioBuffer<float> displayBuffer;  // Not used anymore
     juce::AudioBuffer<float> cachedBuffer;   // Use this for drawing
     juce::CriticalSection bufferLock;
 
@@ -445,7 +442,7 @@ class PluginEditor : public juce::AudioProcessorEditor
 {
 public:
     explicit PluginEditor(PluginProcessor&);
-    ~PluginEditor() override = default;
+    ~PluginEditor() override;
 
     //==============================================================================
     void paint(juce::Graphics&) override;
@@ -459,6 +456,7 @@ private:
     GainReductionMeter gainReductionMeter;
     CheckboxLookAndFeel checkboxLookAndFeel;
     ComboBoxLookAndFeel comboBoxLookAndFeel;  // Neon red styling for dropdowns
+    juce::Label titleLabel;  // Title text "MONOLIT BEATZ"
 
     // UI Components
     CustomKnob inputGainSlider, distortionAmountSlider, outputGainSlider, highPassFreqSlider, distMixSlider;

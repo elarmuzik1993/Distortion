@@ -10,6 +10,11 @@
 #include "PluginEditor.h"
 #include <memory>
 
+// Include test header in debug builds (tests run from separate test runner)
+#if JUCE_DEBUG
+#include "Tests/DistortionTests.h"
+#endif
+
 //==============================================================================
 PluginProcessor::PluginProcessor()
     : AudioProcessor(BusesProperties()
@@ -47,6 +52,7 @@ PluginProcessor::PluginProcessor()
         && lfoRateParam && lfoDepthParam && lfoWaveformParam && waveshaperMixParam
         && compPeakReductionParam && compMakeupGainParam && compRatioParam && compEnabledParam && compWetDryParam && compCrossoverParam
         && distMixParam);
+
 }
 
 PluginProcessor::~PluginProcessor()
@@ -76,9 +82,8 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
         else if (y < -threshold)
             y = -threshold + std::atan((y + threshold) * 2.0f) * 0.2f;
 
-        // Add subtle analog noise for warmth
-        static juce::Random random;
-        y += random.nextFloat() * 0.005f - 0.0025f;
+        // Add subtle analog noise for warmth (using instance member, not static)
+        y += distortionRandom.nextFloat() * 0.005f - 0.0025f;
 
         // Final saturation
         y = std::tanh(y * 1.8f);
@@ -255,18 +260,14 @@ float PluginProcessor::generateLFOWaveform(float phase, int waveformType)
 
     case 4:  // Random (sample & hold)
     {
-        // Generate new random value at each cycle start
-        static float randomValue = 0.0f;
-        static float lastPhase = 1.0f;
-
         // Detect phase reset (when phase wraps from ~1 to ~0)
-        if (phase < lastPhase)
+        // Using instance member variables instead of static to support multi-instance
+        if (phase < lfoLastPhase)
         {
-            static juce::Random random;
-            randomValue = random.nextFloat() * 2.0f - 1.0f;  // -1 to +1
+            lfoRandomValue = distortionRandom.nextFloat() * 2.0f - 1.0f;  // -1 to +1
         }
-        lastPhase = phase;
-        value = randomValue;
+        lfoLastPhase = phase;
+        value = lfoRandomValue;
         break;
     }
     default:  // Fallback to sine
@@ -689,7 +690,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         return;
 
     // DEBUG: Log every 100th block with detailed diagnostics
-    static int debugBlockCounter = 0;
     const bool shouldLog = (++debugBlockCounter % 100 == 0);
 
     // CRITICAL: Detect sample rate changes and update coefficients
@@ -845,7 +845,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     float currentDrive = lastDistortionDrive;
 
     // DEBUG: Log the delta calculations
-    static int deltaLogCounter = 0;
     if (++deltaLogCounter % 100 == 0)
     {
         juce::Logger::writeToLog("Deltas - gainDelta: " + juce::String(gainDelta, 6)
@@ -1176,8 +1175,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         const float wetAmount = waveshaperMix / 100.0f;  // 0.0 to 1.0
         const float dryAmount = 1.0f - wetAmount;
 
-        // Simple random generator for tape-like hiss
-        static juce::Random random;
+        // Using instance member random generator for tape-like hiss (not static)
 
         for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
         {
@@ -1209,7 +1207,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                 wet = wet + std::sin(wet * 3.0f) * 0.08f;
 
                 // Stage 5: Pleasant tape-like hiss (subtle high-frequency enhancement)
-                const float hiss = random.nextFloat() * 0.003f - 0.0015f;  // Very subtle
+                const float hiss = waveshaperRandom.nextFloat() * 0.003f - 0.0015f;  // Very subtle
                 wet += hiss * absWet;  // Program-dependent hiss
 
                 // Stage 6: Gentle wave folding for silky harmonics

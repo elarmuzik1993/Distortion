@@ -17,6 +17,13 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addAndMakeVisible(oscilloscope);
     addAndMakeVisible(gainReductionMeter);
 
+    // Setup title label
+    addAndMakeVisible(titleLabel);
+    titleLabel.setText("MONOLIT BEATZ", juce::dontSendNotification);
+    titleLabel.setFont(juce::Font(24.0f, juce::Font::bold));
+    titleLabel.setColour(juce::Label::textColourId, juce::Colour(0xFF, 0x00, 0x44));
+    titleLabel.setJustificationType(juce::Justification::centred);
+
     // Set fixed window size - no resizing allowed (increased width to fit all controls)
     setSize(960, 564);
     setResizeLimits(960, 564, 960, 564);
@@ -354,6 +361,18 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     setupKnobRightClick(compEnableToggle, "compEnabled");
 }
 
+PluginEditor::~PluginEditor()
+{
+    // Reset LookAndFeel to nullptr before destruction to prevent crash
+    // Components must not reference a LookAndFeel that may be destroyed before them
+    bandSplitToggle.setLookAndFeel(nullptr);
+    compEnableToggle.setLookAndFeel(nullptr);
+    clipTypeComboBox.setLookAndFeel(nullptr);
+    compRatioComboBox.setLookAndFeel(nullptr);
+    lfoWaveformComboBox.setLookAndFeel(nullptr);
+    presetSelector.setLookAndFeel(nullptr);
+}
+
 //==============================================================================
 void PluginEditor::setupSlider(CustomKnob& slider,  
     juce::Label& label,
@@ -402,9 +421,8 @@ void PluginEditor::paint(juce::Graphics& g)
 
     // Draw title in neon red
     g.setColour(juce::Colour(0xFF, 0x00, 0x44));
-    g.setFont(juce::Font(18.0f, juce::Font::bold));
-    const auto titleBounds = getLocalBounds().removeFromTop(50);
-    g.drawText("MONOLIT BEATZ", titleBounds, juce::Justification::centred, true);
+    g.setFont(juce::Font(24.0f, juce::Font::bold));
+    g.drawText("MONOLIT BEATZ", 0, 10, getWidth(), 40, juce::Justification::centred, true);
 
     // Draw neon red border
     g.setColour(juce::Colour(0xFF, 0x00, 0x44).withAlpha(0.7f));
@@ -413,17 +431,18 @@ void PluginEditor::paint(juce::Graphics& g)
 
 void PluginEditor::resized()
 {
-    // ========== OSCILLOSCOPE FILLS ENTIRE WINDOW ==========
-    oscilloscope.setBounds(getLocalBounds());
-
-    const int margin = 20;
+    // ========== LAYOUT CONSTANTS ==========
     const int titleHeight = 50;
-    const int compressionBarHeight = 90;  // NEW: Height for compression section
-    const int sliderWidth = 100;
-    const int sliderHeight = 100;
+    const int bottomControlsHeight = 130;
+    const int margin = 20;
+    const int compressionBarHeight = 90;
+
+    // ========== TITLE LABEL ==========
+    titleLabel.setBounds(0, 0, getWidth(), titleHeight);
+
+    // ========== OSCILLOSCOPE (below title, above controls) ==========
+    oscilloscope.setBounds(0, titleHeight, getWidth(), getHeight() - titleHeight - bottomControlsHeight);
     const int labelHeight = 20;
-    const int spacing = 40;
-    const int minScopeHeight = 100;
 
     // Calculate available space for controls (overlaid on oscilloscope)
     auto bounds = getLocalBounds().reduced(margin);

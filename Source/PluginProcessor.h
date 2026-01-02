@@ -65,8 +65,34 @@ namespace DSPConstants
     constexpr double COMP_GR_SMOOTH_TIME_S = 0.5;             // 500ms for gain reduction display
 }
 
+// Forward declarations for test classes
+#if JUCE_DEBUG
+class DistortionDSPTests;
+class CompressionDSPTests;
+class LFOTests;
+class ProcessBlockTests;
+class ParameterTests;
+class SampleRateTests;
+class ThreadSafetyTests;
+class StateIOTests;
+class GoldenAudioTests;
+#endif
+
 class PluginProcessor : public juce::AudioProcessor
 {
+#if JUCE_DEBUG
+    // Grant test classes access to private members for unit testing
+    friend class DistortionDSPTests;
+    friend class CompressionDSPTests;
+    friend class LFOTests;
+    friend class ProcessBlockTests;
+    friend class ParameterTests;
+    friend class SampleRateTests;
+    friend class ThreadSafetyTests;
+    friend class StateIOTests;
+    friend class GoldenAudioTests;
+#endif
+
 public:
     //==============================================================================
     PluginProcessor();
@@ -197,6 +223,18 @@ private:
 
     float lfoPhase = 0.0f;
     float currentSampleRate = 44100.0f;
+
+    // Per-instance random generators (NOT static to avoid multi-instance bugs)
+    juce::Random distortionRandom;
+    juce::Random waveshaperRandom;
+
+    // LFO Random waveform state (per-instance, not static)
+    float lfoRandomValue = 0.0f;
+    float lfoLastPhase = 1.0f;
+
+    // Debug counters (per-instance, not static to avoid multi-instance bugs)
+    int debugBlockCounter = 0;
+    int deltaLogCounter = 0;
 
     // Compression optical cell coefficients (sample-rate-dependent)
     float compAttackCoeff = 0.9995f;
