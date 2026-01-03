@@ -374,8 +374,10 @@ void ProcessBlockTests::testTrueBypass()
     processor.prepareToPlay(44100.0, 512);
 
     // Set distortion to minimum and compression off (true bypass)
-    processor.parameters.getParameter("distortionAmount")->setValueNotifyingHost(0.0f);
-    processor.parameters.getParameter("compEnabled")->setValueNotifyingHost(0.0f);
+    if (auto* param = processor.parameters.getParameter("distortionAmount"))
+        param->setValueNotifyingHost(0.0f);
+    if (auto* param = processor.parameters.getParameter("compEnabled"))
+        param->setValueNotifyingHost(0.0f);
 
     // Create input signal
     auto inputBuffer = generateSineWave(440.0, 44100.0, 512, 0.5f);
@@ -400,8 +402,10 @@ void ProcessBlockTests::test808SafeMode()
     processor.prepareToPlay(44100.0, 512);
 
     // Enable 808-safe mode and distortion
-    processor.parameters.getParameter("bandSplitEnabled")->setValueNotifyingHost(1.0f);
-    processor.parameters.getParameter("distortionAmount")->setValueNotifyingHost(0.7f);
+    if (auto* param = processor.parameters.getParameter("bandSplitEnabled"))
+        param->setValueNotifyingHost(1.0f);
+    if (auto* param = processor.parameters.getParameter("distortionAmount"))
+        param->setValueNotifyingHost(0.7f);
 
     // Create low frequency input (should bypass distortion)
     auto lowFreqBuffer = generateSineWave(60.0, 44100.0, 2048, 0.7f);
@@ -420,7 +424,8 @@ void ProcessBlockTests::testOversampling()
     processor.prepareToPlay(44100.0, 512);
 
     // Enable distortion (which uses oversampling)
-    processor.parameters.getParameter("distortionAmount")->setValueNotifyingHost(0.5f);
+    if (auto* param = processor.parameters.getParameter("distortionAmount"))
+        param->setValueNotifyingHost(0.5f);
 
     auto buffer = generateSineWave(1000.0, 44100.0, 512, 0.8f);
     juce::MidiBuffer midi;
@@ -438,7 +443,8 @@ void ProcessBlockTests::testDCBlocking()
     processor.prepareToPlay(44100.0, 512);
 
     // Enable distortion
-    processor.parameters.getParameter("distortionAmount")->setValueNotifyingHost(0.5f);
+    if (auto* param = processor.parameters.getParameter("distortionAmount"))
+        param->setValueNotifyingHost(0.5f);
 
     // Create signal with DC offset
     auto buffer = generateDCOffset(2048, 0.5f);
@@ -471,10 +477,12 @@ void ProcessBlockTests::testWetDryMix()
     processor.prepareToPlay(44100.0, 512);
 
     // Enable distortion
-    processor.parameters.getParameter("distortionAmount")->setValueNotifyingHost(0.7f);
+    if (auto* param = processor.parameters.getParameter("distortionAmount"))
+        param->setValueNotifyingHost(0.7f);
 
     // Test 0% wet (dry only)
-    processor.parameters.getParameter("distMix")->setValueNotifyingHost(0.0f);
+    if (auto* param = processor.parameters.getParameter("distMix"))
+        param->setValueNotifyingHost(0.0f);
 
     auto dryBuffer = generateSineWave(1000.0, 44100.0, 512, 0.5f);
     auto originalDry = dryBuffer;
@@ -484,7 +492,8 @@ void ProcessBlockTests::testWetDryMix()
     float dryPeak = calculatePeak(dryBuffer);
 
     // Test 100% wet
-    processor.parameters.getParameter("distMix")->setValueNotifyingHost(1.0f);
+    if (auto* param = processor.parameters.getParameter("distMix"))
+        param->setValueNotifyingHost(1.0f);
 
     auto wetBuffer = generateSineWave(1000.0, 44100.0, 512, 0.5f);
     processor.processBlock(wetBuffer, midi);
@@ -516,7 +525,8 @@ void ProcessBlockTests::testOutputGain()
     processor.prepareToPlay(44100.0, 512);
 
     // Set output gain to maximum
-    processor.parameters.getParameter("outputGain")->setValueNotifyingHost(1.0f);
+    if (auto* param = processor.parameters.getParameter("outputGain"))
+        param->setValueNotifyingHost(1.0f);
 
     auto buffer = generateSineWave(1000.0, 44100.0, 512, 0.3f);
     juce::MidiBuffer midi;
@@ -527,7 +537,8 @@ void ProcessBlockTests::testOutputGain()
     expect(calculatePeak(buffer) > 0.3f, "Maximum output gain should boost signal");
 
     // Set output gain to minimum
-    processor.parameters.getParameter("outputGain")->setValueNotifyingHost(0.0f);
+    if (auto* param = processor.parameters.getParameter("outputGain"))
+        param->setValueNotifyingHost(0.0f);
 
     buffer = generateSineWave(1000.0, 44100.0, 512, 0.5f);
     processor.processBlock(buffer, midi);
