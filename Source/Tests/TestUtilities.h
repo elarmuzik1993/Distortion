@@ -16,10 +16,17 @@ namespace TestUtilities
                             const juce::String& paramID,
                             float value)
     {
-        // Directly set the value in the ValueTree state
-        // This updates the raw parameter value that atomic pointers read from
-        auto paramValue = apvts.getParameterAsValue(paramID);
-        paramValue.setValue(value);
+        // CRITICAL: Use getParameter() to directly access the RangedAudioParameter,
+        // then setValueNotifyingHost() to update both the parameter AND the atomic pointer.
+        // The old method using getParameterAsValue() had a race condition where the
+        // atomic pointer wouldn't be immediately updated, causing NaN in tests.
+        auto* param = apvts.getParameter(paramID);
+        if (param != nullptr)
+        {
+            // Convert to normalized value (0-1) for setValueNotifyingHost
+            const auto normalizedValue = param->convertTo0to1(value);
+            param->setValueNotifyingHost(normalizedValue);
+        }
     }
 
     //==============================================================================

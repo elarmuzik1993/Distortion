@@ -9,6 +9,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include <memory>
+#include <iostream>
 
 // Include test header in debug builds (tests run from separate test runner)
 #if JUCE_DEBUG
@@ -288,12 +289,37 @@ void PluginProcessor::updateSampleRateDependentCoefficients(double sampleRate)
     juce::Logger::writeToLog("--- Updating sample-rate-dependent coefficients ---");
     juce::Logger::writeToLog("Base sample rate: " + juce::String(sampleRate, 1) + " Hz");
 
+    // SAFETY: Validate sample rate to prevent NaN in coefficient calculation
+    // Valid audio sample rates are typically 8kHz to 384kHz
+    if (sampleRate < 1000.0 || sampleRate > 500000.0 || std::isnan(sampleRate) || std::isinf(sampleRate))
+    {
+        juce::Logger::writeToLog("ERROR: Invalid sample rate " + juce::String(sampleRate) + " Hz! Using 44100 Hz fallback.");
+        sampleRate = 44100.0;  // Safe fallback
+    }
+
     // Calculate sample-rate-dependent compression coefficients
     // Formula: coeff = exp(-1.0 / (timeConstant * sampleRate))
     // These work at normal sample rate (after downsampling)
     compAttackCoeff = std::exp(-1.0f / (DSPConstants::COMP_ATTACK_TIME_S * static_cast<float>(sampleRate)));
     compReleaseCoeff = std::exp(-1.0f / (DSPConstants::COMP_RELEASE_TIME_S * static_cast<float>(sampleRate)));
     compRmsHistoryCoeff = std::exp(-1.0f / (DSPConstants::COMP_RMS_HISTORY_TIME_S * static_cast<float>(sampleRate)));
+
+    // SAFETY: Validate calculated coefficients (should always be between 0 and 1)
+    if (std::isnan(compAttackCoeff) || compAttackCoeff < 0.0f || compAttackCoeff > 1.0f)
+    {
+        juce::Logger::writeToLog("ERROR: Invalid compAttackCoeff! Using fallback 0.9995");
+        compAttackCoeff = 0.9995f;
+    }
+    if (std::isnan(compReleaseCoeff) || compReleaseCoeff < 0.0f || compReleaseCoeff > 1.0f)
+    {
+        juce::Logger::writeToLog("ERROR: Invalid compReleaseCoeff! Using fallback 0.99995");
+        compReleaseCoeff = 0.99995f;
+    }
+    if (std::isnan(compRmsHistoryCoeff) || compRmsHistoryCoeff < 0.0f || compRmsHistoryCoeff > 1.0f)
+    {
+        juce::Logger::writeToLog("ERROR: Invalid compRmsHistoryCoeff! Using fallback 0.99");
+        compRmsHistoryCoeff = 0.99f;
+    }
 
     juce::Logger::writeToLog("Compression coefficients - Attack: " + juce::String(compAttackCoeff, 6)
         + ", Release: " + juce::String(compReleaseCoeff, 6)
@@ -432,37 +458,42 @@ if (!oversampling || currentNumChannels != numChannels) {
     spec.maximumBlockSize = static_cast<juce::uint32>(samplesPerBlock * oversamplingFactor);
     spec.numChannels = static_cast<juce::uint32>(numChannels);
 
+    // CRITICAL: For JUCE IIR ProcessorDuplicator filters, the order MUST be:
+    // 1. prepare() - creates the internal state
+    // 2. set coefficients - applies to the created state
+    // 3. reset() - clears the filter history
+
     // Initialize with default frequency, but DON'T cache it to lastHighPassFreq
     // This allows the first processBlock to set the correct frequency after state restoration
-    *preHighPassFilter.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, DSPConstants::DEFAULT_HIPASS_FREQ);
     preHighPassFilter.prepare(spec);
+    *preHighPassFilter.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, DSPConstants::DEFAULT_HIPASS_FREQ);
     preHighPassFilter.reset();
 
     // Force filter update on first processBlock (especially important for DAW state restoration)
     lastHighPassFreq = -1.0f;
 
     // DC BLOCKING 1
-    *dcBlockingFilter.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, DSPConstants::DC_BLOCKING_FREQ);
     dcBlockingFilter.prepare(spec);
+    *dcBlockingFilter.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, DSPConstants::DC_BLOCKING_FREQ);
     dcBlockingFilter.reset();
 
     // 808-Safe distortion filters (Linkwitz-Riley crossover, oversampled domain)
     const float crossoverFreq = DSPConstants::DISTORTION_CROSSOVER_FREQ;
 
-    *lowPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, crossoverFreq);
     lowPassFilter1.prepare(spec);
+    *lowPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, crossoverFreq);
     lowPassFilter1.reset();
 
-    *lowPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, crossoverFreq);
     lowPassFilter2.prepare(spec);
+    *lowPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, crossoverFreq);
     lowPassFilter2.reset();
 
-    *highPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, crossoverFreq);
     highPassFilter1.prepare(spec);
+    *highPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, crossoverFreq);
     highPassFilter1.reset();
 
-    *highPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, crossoverFreq);
     highPassFilter2.prepare(spec);
+    *highPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, crossoverFreq);
     highPassFilter2.reset();
 
     // Store oversampled sample rate for change detection
@@ -474,27 +505,27 @@ if (!oversampling || currentNumChannels != numChannels) {
     normalSpec.maximumBlockSize = static_cast<juce::uint32>(samplesPerBlock);
     normalSpec.numChannels = static_cast<juce::uint32>(numChannels);
 
-    *dcBlockingFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(normalSpec.sampleRate, DSPConstants::DC_BLOCKING_FREQ);
     dcBlockingFilter2.prepare(normalSpec);
+    *dcBlockingFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(normalSpec.sampleRate, DSPConstants::DC_BLOCKING_FREQ);
     dcBlockingFilter2.reset();
 
     // Compression crossover filters (normal sample rate)
     const float compCrossoverFreq = compCrossoverParam ? compCrossoverParam->load() : DSPConstants::DEFAULT_COMP_CROSSOVER;
 
-    *compLowPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(normalSpec.sampleRate, compCrossoverFreq);
     compLowPassFilter1.prepare(normalSpec);
+    *compLowPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(normalSpec.sampleRate, compCrossoverFreq);
     compLowPassFilter1.reset();
 
-    *compLowPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(normalSpec.sampleRate, compCrossoverFreq);
     compLowPassFilter2.prepare(normalSpec);
+    *compLowPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(normalSpec.sampleRate, compCrossoverFreq);
     compLowPassFilter2.reset();
 
-    *compHighPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(normalSpec.sampleRate, compCrossoverFreq);
     compHighPassFilter1.prepare(normalSpec);
+    *compHighPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(normalSpec.sampleRate, compCrossoverFreq);
     compHighPassFilter1.reset();
 
-    *compHighPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(normalSpec.sampleRate, compCrossoverFreq);
     compHighPassFilter2.prepare(normalSpec);
+    *compHighPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(normalSpec.sampleRate, compCrossoverFreq);
     compHighPassFilter2.reset();
 
 
@@ -723,22 +754,43 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     }
 
     // Load parameters and scale them
+    // SAFETY: Validate all parameter loads to prevent NaN propagation
     const auto inGainParam = inputGainParam->load();
     const auto outGainParam = outputGainParam->load();
     const auto distortionParam = distortionAmountParam->load();
-    const auto highPassFreq = highPassFreqParam->load();
+
+    // Emergency NaN detection - if parameters are corrupted, use safe defaults
+    if (std::isnan(inGainParam) || std::isnan(outGainParam) || std::isnan(distortionParam))
+    {
+        juce::Logger::writeToLog("CRITICAL: NaN detected in core parameters!");
+        juce::Logger::writeToLog("inGainParam=" + juce::String(inGainParam)
+            + ", outGainParam=" + juce::String(outGainParam)
+            + ", distortionParam=" + juce::String(distortionParam));
+        return;  // Skip this block to prevent NaN propagation
+    }
+    auto highPassFreq = highPassFreqParam->load();
     const bool bandSplitEnabled = bandSplitEnabledParam->load() > 0.5f;
     const int clipType = static_cast<int>(clipTypeParam->load());
-    const float lfoRate = lfoRateParam->load();
-    const float lfoDepth = lfoDepthParam->load();
+    auto lfoRate = lfoRateParam->load();
+    auto lfoDepth = lfoDepthParam->load();
     const int lfoWaveform = static_cast<int>(lfoWaveformParam->load());
-    const float compPeakReduction = compPeakReductionParam->load();
-    const float compMakeupGain = compMakeupGainParam->load();
+    auto compPeakReduction = compPeakReductionParam->load();
+    auto compMakeupGain = compMakeupGainParam->load();
     const int compRatioMode = static_cast<int>(compRatioParam->load());
     const bool compEnabled = compEnabledParam->load() > 0.5f;
-    const float compWetDry = compWetDryParam->load();
-    const float compCrossover = compCrossoverParam->load();
-    const float distMix = distMixParam->load();
+    auto compWetDry = compWetDryParam->load();
+    auto compCrossover = compCrossoverParam->load();
+    auto distMix = distMixParam->load();
+
+    // SAFETY: Validate all parameter values to prevent NaN propagation
+    if (std::isnan(highPassFreq)) highPassFreq = DSPConstants::DEFAULT_HIPASS_FREQ;
+    if (std::isnan(lfoRate)) lfoRate = 0.0f;
+    if (std::isnan(lfoDepth)) lfoDepth = 0.0f;
+    if (std::isnan(compPeakReduction)) compPeakReduction = 0.0f;
+    if (std::isnan(compMakeupGain)) compMakeupGain = 50.0f;
+    if (std::isnan(compWetDry)) compWetDry = 100.0f;
+    if (std::isnan(compCrossover)) compCrossover = DSPConstants::DEFAULT_COMP_CROSSOVER;
+    if (std::isnan(distMix)) distMix = 100.0f;
 
     // Scale to actual ranges for processing (studio distortion style)
     const float inputGain = std::pow(inGainParam / 50.0f, 1.5f);  // Unity at 50, range 0-2.83
@@ -758,10 +810,14 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // LFO modulation for dynamic distortion effects
     // Calculate LFO value using selected waveform (output -1 to +1)
     float lfoValue = 0.0f;
-    if (lfoRate > 0.0f)  // Only compute LFO if rate > 0
+    if (lfoRate > 0.0f && currentSampleRate > 0.0f)  // Only compute LFO if rate > 0 AND sample rate is valid
     {
         // Generate waveform based on selected type
         lfoValue = generateLFOWaveform(lfoPhase, lfoWaveform);
+
+        // SAFETY: Validate LFO output
+        if (std::isnan(lfoValue) || std::isinf(lfoValue))
+            lfoValue = 0.0f;
 
         // Update phase for next block (sample-rate and block-size independent)
         // Phase increment per sample = frequency / sampleRate
@@ -770,13 +826,30 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         lfoPhase += totalPhaseIncrement;
 
         // Keep phase in 0-1 range (handle multiple wraps for safety)
-        lfoPhase = std::fmod(lfoPhase, 1.0f);
+        if (lfoPhase >= 0.0f)  // Only fmod if phase is valid
+            lfoPhase = std::fmod(lfoPhase, 1.0f);
+        else
+            lfoPhase = 0.0f;
     }
 
     // Apply LFO modulation to distortion amount
     const float lfoModulation = (lfoValue * lfoDepth / 100.0f);  // -1 to +1 scaled by depth
-    const float modulatedDistortionParam = juce::jlimit(0.0f, 100.0f, distortionParam + lfoModulation * 50.0f);
-    const float distortionDrive = 1.0f + (modulatedDistortionParam / 100.0f) * 7.0f;  // Brutal range: 1.0 to 8.0
+
+    // SAFETY: Validate modulation calculation
+    float modulatedDistortionParam = distortionParam;
+    if (!std::isnan(lfoModulation) && !std::isinf(lfoModulation))
+        modulatedDistortionParam = juce::jlimit(0.0f, 100.0f, distortionParam + lfoModulation * 50.0f);
+
+    float distortionDrive = 1.0f + (modulatedDistortionParam / 100.0f) * 7.0f;  // Brutal range: 1.0 to 8.0
+
+    // SAFETY: Final validation of distortion drive (critical parameter)
+    if (std::isnan(distortionDrive) || std::isinf(distortionDrive) || distortionDrive < 1.0f)
+    {
+        juce::Logger::writeToLog("WARNING: Invalid distortionDrive=" + juce::String(distortionDrive) +
+                                 ", modulatedDistortionParam=" + juce::String(modulatedDistortionParam) +
+                                 ", using fallback 1.0");
+        distortionDrive = 1.0f;  // Safe fallback
+    }
 
     // Mix amount for wet/dry blend
     const float mixAmount = distMix / 100.0f;  // 0.0 to 1.0
@@ -836,6 +909,26 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         return;
     }
 
+    // DEBUG: Check for NaN after oversampling
+    bool hasNaNAfterOversampling = false;
+    for (size_t ch = 0; ch < oversampledBlock.getNumChannels(); ++ch)
+    {
+        const float* data = oversampledBlock.getChannelPointer(ch);
+        for (size_t i = 0; i < actualOversampledSamples; ++i)
+        {
+            if (std::isnan(data[i]) || std::isinf(data[i]))
+            {
+                hasNaNAfterOversampling = true;
+                break;
+            }
+        }
+        if (hasNaNAfterOversampling) break;
+    }
+    if (hasNaNAfterOversampling)
+    {
+        std::cout << "NaN DETECTED after oversampling!\n";
+    }
+
     // CRITICAL FIX: Manual linear interpolation for parameters consumed in oversampled domain
     // Calculate step size from LAST block's final value to THIS block's target value
     const float gainDelta = (inputGain - lastInputGain) / static_cast<float>(actualOversampledSamples);
@@ -844,6 +937,15 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Start from last block's values
     float currentInputGain = lastInputGain;
     float currentDrive = lastDistortionDrive;
+
+    // DEBUG: Check for NaN in parameters
+    if (std::isnan(inputGain) || std::isnan(distortionDrive) || std::isnan(gainDelta) || std::isnan(driveDelta))
+    {
+        std::cout << "NaN in parameters! inputGain=" << inputGain
+            << ", distortionDrive=" << distortionDrive
+            << ", gainDelta=" << gainDelta
+            << ", driveDelta=" << driveDelta << "\n";
+    }
 
     // DEBUG: Log the delta calculations
     if (++deltaLogCounter % 100 == 0)
@@ -888,17 +990,97 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     }
 
     // Update pre-filter coefficients if frequency changed
-    if (!preHighPassFilter.state || std::abs(highPassFreq - lastHighPassFreq) > 0.01f)
+    if (std::abs(highPassFreq - lastHighPassFreq) > 0.01f)
     {
-        // Update coefficients IN-PLACE (dereference both sides)
-        *preHighPassFilter.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(oversampledSR, highPassFreq);
-
-        lastHighPassFreq = highPassFreq;
+        // SAFETY: Validate oversampledSR and highPassFreq before creating filter
+        if (oversampledSR < 1000.0 || oversampledSR > 1000000.0 || std::isnan(oversampledSR))
+        {
+            juce::Logger::writeToLog("ERROR: Invalid oversampledSR=" + juce::String(oversampledSR) + "! Cannot create filter coefficients.");
+        }
+        else if (highPassFreq < 1.0f || highPassFreq > (oversampledSR / 2.0f) || std::isnan(highPassFreq))
+        {
+            juce::Logger::writeToLog("ERROR: Invalid highPassFreq=" + juce::String(highPassFreq) +
+                                     " for sampleRate=" + juce::String(oversampledSR) + "! Cannot create filter coefficients.");
+        }
+        else if (preHighPassFilter.state)
+        {
+            // Update coefficients IN-PLACE (dereference both sides)
+            *preHighPassFilter.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(oversampledSR, highPassFreq);
+            lastHighPassFreq = highPassFreq;
+        }
+        else
+        {
+            juce::Logger::writeToLog("ERROR: preHighPassFilter.state is null! Cannot update coefficients.");
+        }
     }
 
-    // Pre-filtering
-    preHighPassFilter.process(juce::dsp::ProcessContextReplacing<float>(oversampledBlock));
+    // DEBUG: Check for NaN BEFORE pre-highpass filter
+    bool hasNaNBeforePreFilter = false;
+    for (size_t ch = 0; ch < oversampledBlock.getNumChannels(); ++ch)
+    {
+        const float* data = oversampledBlock.getChannelPointer(ch);
+        for (size_t i = 0; i < actualOversampledSamples; ++i)
+        {
+            if (std::isnan(data[i]) || std::isinf(data[i]))
+            {
+                hasNaNBeforePreFilter = true;
+                break;
+            }
+        }
+        if (hasNaNBeforePreFilter) break;
+    }
+    if (hasNaNBeforePreFilter)
+    {
+        std::cout << "WARNING: NaN detected BEFORE pre-highpass filter (from oversampling)!\n";
+        // Clear the buffer before filtering
+        for (size_t ch = 0; ch < oversampledBlock.getNumChannels(); ++ch)
+        {
+            float* data = oversampledBlock.getChannelPointer(ch);
+            for (size_t i = 0; i < actualOversampledSamples; ++i)
+                data[i] = 0.0f;
+        }
+    }
 
+    // Pre-filtering (only if state is valid)
+    if (preHighPassFilter.state)
+        preHighPassFilter.process(juce::dsp::ProcessContextReplacing<float>(oversampledBlock));
+    else
+        juce::Logger::writeToLog("ERROR: Skipping pre-highpass filter - state is null!");
+
+    // DEBUG: Check for NaN after pre-highpass filter
+    bool hasNaNAfterPreFilter = false;
+    for (size_t ch = 0; ch < oversampledBlock.getNumChannels(); ++ch)
+    {
+        const float* data = oversampledBlock.getChannelPointer(ch);
+        for (size_t i = 0; i < actualOversampledSamples; ++i)
+        {
+            if (std::isnan(data[i]) || std::isinf(data[i]))
+            {
+                hasNaNAfterPreFilter = true;
+                break;
+            }
+        }
+        if (hasNaNAfterPreFilter) break;
+    }
+    if (hasNaNAfterPreFilter)
+    {
+        std::cout << "NaN DETECTED after pre-highpass filter! Resetting filter and clearing buffer.\n";
+
+        // CRITICAL FIX: Reset the filter to clear corrupted state
+        if (preHighPassFilter.state)
+        {
+            preHighPassFilter.reset();
+            juce::Logger::writeToLog("Pre-highpass filter state reset due to NaN detection");
+        }
+
+        // Clear the buffer to prevent NaN propagation
+        for (size_t ch = 0; ch < oversampledBlock.getNumChannels(); ++ch)
+        {
+            float* data = oversampledBlock.getChannelPointer(ch);
+            for (size_t i = 0; i < actualOversampledSamples; ++i)
+                data[i] = 0.0f;
+        }
+    }
 
     const size_t numSamples = oversampledBlock.getNumSamples();
     const size_t numChannels = oversampledBlock.getNumChannels();
