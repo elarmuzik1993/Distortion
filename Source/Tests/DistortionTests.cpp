@@ -374,11 +374,8 @@ void ProcessBlockTests::testTrueBypass()
     processor.prepareToPlay(44100.0, 512);
 
     // Set distortion to minimum and compression off (true bypass)
-    // Use direct atomic writes to avoid host notification deadlock
-    if (processor.distortionAmountParam)
-        processor.distortionAmountParam->store(0.0f);
-    if (processor.compEnabledParam)
-        processor.compEnabledParam->store(0.0f);
+    setParameter(processor.parameters, "distortionAmount", 0.0f);
+    setParameter(processor.parameters, "compEnabled", 0.0f);
 
     // Create input signal
     auto inputBuffer = generateSineWave(440.0, 44100.0, 512, 0.5f);
@@ -403,10 +400,8 @@ void ProcessBlockTests::test808SafeMode()
     processor.prepareToPlay(44100.0, 2048);  // Match buffer size
 
     // Enable 808-safe mode and distortion
-    if (processor.bandSplitEnabledParam)
-        processor.bandSplitEnabledParam->store(1.0f);
-    if (processor.distortionAmountParam)
-        processor.distortionAmountParam->store(0.7f);
+    setParameter(processor.parameters, "bandSplitEnabled", 1.0f);
+    setParameter(processor.parameters, "distortionAmount", 70.0f);
 
     // Create low frequency input (should bypass distortion)
     auto lowFreqBuffer = generateSineWave(60.0, 44100.0, 2048, 0.7f);
@@ -425,8 +420,7 @@ void ProcessBlockTests::testOversampling()
     processor.prepareToPlay(44100.0, 512);
 
     // Enable distortion (which uses oversampling)
-    if (processor.distortionAmountParam)
-        processor.distortionAmountParam->store(0.5f);
+    setParameter(processor.parameters, "distortionAmount", 50.0f);
 
     auto buffer = generateSineWave(1000.0, 44100.0, 512, 0.8f);
     juce::MidiBuffer midi;
@@ -444,8 +438,7 @@ void ProcessBlockTests::testDCBlocking()
     processor.prepareToPlay(44100.0, 512);
 
     // Enable distortion
-    if (processor.distortionAmountParam)
-        processor.distortionAmountParam->store(0.5f);
+    setParameter(processor.parameters, "distortionAmount", 50.0f);
 
     // Create signal with DC offset
     auto buffer = generateDCOffset(2048, 0.5f);
@@ -478,12 +471,10 @@ void ProcessBlockTests::testWetDryMix()
     processor.prepareToPlay(44100.0, 512);
 
     // Enable distortion
-    if (processor.distortionAmountParam)
-        processor.distortionAmountParam->store(0.7f);
+    setParameter(processor.parameters, "distortionAmount", 70.0f);
 
     // Test 0% wet (dry only)
-    if (processor.distMixParam)
-        processor.distMixParam->store(0.0f);
+    setParameter(processor.parameters, "distMix", 0.0f);
 
     auto dryBuffer = generateSineWave(1000.0, 44100.0, 512, 0.5f);
     auto originalDry = dryBuffer;
@@ -493,8 +484,7 @@ void ProcessBlockTests::testWetDryMix()
     float dryPeak = calculatePeak(dryBuffer);
 
     // Test 100% wet
-    if (processor.distMixParam)
-        processor.distMixParam->store(100.0f);
+    setParameter(processor.parameters, "distMix", 100.0f);
 
     auto wetBuffer = generateSineWave(1000.0, 44100.0, 512, 0.5f);
     processor.processBlock(wetBuffer, midi);
@@ -526,8 +516,7 @@ void ProcessBlockTests::testOutputGain()
     processor.prepareToPlay(44100.0, 512);
 
     // Set output gain to maximum
-    if (processor.outputGainParam)
-        processor.outputGainParam->store(1.0f);
+    setParameter(processor.parameters, "outputGain", 100.0f);
 
     auto buffer = generateSineWave(1000.0, 44100.0, 512, 0.3f);
     juce::MidiBuffer midi;
@@ -538,8 +527,7 @@ void ProcessBlockTests::testOutputGain()
     expect(calculatePeak(buffer) > 0.3f, "Maximum output gain should boost signal");
 
     // Set output gain to minimum
-    if (processor.outputGainParam)
-        processor.outputGainParam->store(0.0f);
+    setParameter(processor.parameters, "outputGain", 0.0f);
 
     buffer = generateSineWave(1000.0, 44100.0, 512, 0.5f);
     processor.processBlock(buffer, midi);
@@ -672,8 +660,8 @@ void SampleRateTests::testSampleRate(double sampleRate)
     processor.prepareToPlay(sampleRate, 512);
 
     // Enable all processing
-    processor.parameters.getParameter("distortionAmount")->setValueNotifyingHost(0.5f);
-    processor.parameters.getParameter("compEnabled")->setValueNotifyingHost(1.0f);
+    setParameter(processor.parameters, "distortionAmount", 50.0f);
+    setParameter(processor.parameters, "compEnabled", 1.0f);
 
     // Create test signal at this sample rate
     auto buffer = generateSineWave(1000.0, sampleRate, 512, 0.7f);
@@ -694,7 +682,7 @@ void SampleRateTests::testRuntimeSampleRateChange()
 
     // Start at 44.1kHz
     processor.prepareToPlay(44100.0, 512);
-    processor.parameters.getParameter("distortionAmount")->setValueNotifyingHost(0.5f);
+    setParameter(processor.parameters, "distortionAmount", 50.0f);
 
     auto buffer = generateSineWave(1000.0, 44100.0, 512, 0.7f);
     juce::MidiBuffer midi;
@@ -779,8 +767,8 @@ void ThreadSafetyTests::testMultiInstanceIndependence()
     processor2.prepareToPlay(44100.0, 512);
 
     // Set different parameters
-    processor1.parameters.getParameter("distortionAmount")->setValueNotifyingHost(0.3f);
-    processor2.parameters.getParameter("distortionAmount")->setValueNotifyingHost(0.8f);
+    setParameter(processor1.parameters, "distortionAmount", 30.0f);
+    setParameter(processor2.parameters, "distortionAmount", 80.0f);
 
     // Process different signals
     auto buffer1 = generateSineWave(440.0, 44100.0, 512, 0.5f);
@@ -811,10 +799,10 @@ void ThreadSafetyTests::testPerInstanceRandomGenerators()
     processor2.prepareToPlay(44100.0, 512);
 
     // Both use distortion which has random noise injection
-    processor1.parameters.getParameter("distortionAmount")->setValueNotifyingHost(0.5f);
-    processor2.parameters.getParameter("distortionAmount")->setValueNotifyingHost(0.5f);
-    processor1.parameters.getParameter("clipType")->setValueNotifyingHost(0.0f);  // Brutal Fuzz has noise
-    processor2.parameters.getParameter("clipType")->setValueNotifyingHost(0.0f);
+    setParameter(processor1.parameters, "distortionAmount", 50.0f);
+    setParameter(processor2.parameters, "distortionAmount", 50.0f);
+    setParameter(processor1.parameters, "clipType", 0.0f);  // Brutal Fuzz has noise
+    setParameter(processor2.parameters, "clipType", 0.0f);
 
     // Process identical signals
     auto buffer1 = generateSineWave(1000.0, 44100.0, 512, 0.5f);
@@ -988,9 +976,8 @@ void GoldenAudioTests::testDistortionOutput(int clipType, const juce::String& na
     processor.prepareToPlay(44100.0, 512);
 
     // Enable distortion with this clip type
-    processor.parameters.getParameter("distortionAmount")->setValueNotifyingHost(0.6f);
-    processor.parameters.getParameter("clipType")->setValueNotifyingHost(
-        static_cast<float>(clipType) / 6.0f);
+    setParameter(processor.parameters, "distortionAmount", 60.0f);
+    setParameter(processor.parameters, "clipType", static_cast<float>(clipType));
 
     // Generate test signal
     auto buffer = generateSineWave(1000.0, 44100.0, 512, 0.7f);
@@ -1021,8 +1008,8 @@ void GoldenAudioTests::test808BandSplit()
     processor.prepareToPlay(44100.0, 2048);
 
     // Enable 808-safe mode
-    processor.parameters.getParameter("bandSplitEnabled")->setValueNotifyingHost(1.0f);
-    processor.parameters.getParameter("distortionAmount")->setValueNotifyingHost(0.7f);
+    setParameter(processor.parameters, "bandSplitEnabled", 1.0f);
+    setParameter(processor.parameters, "distortionAmount", 70.0f);
 
     // Low frequency test (should pass through clean)
     auto lowBuffer = generateSineWave(60.0, 44100.0, 2048, 0.7f);
