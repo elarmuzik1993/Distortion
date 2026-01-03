@@ -16,23 +16,10 @@ namespace TestUtilities
                             const juce::String& paramID,
                             float value)
     {
-        // Get the parameter object
-        auto* param = apvts.getParameter(paramID);
-        if (param != nullptr)
-        {
-            // Get the range to normalize the value
-            auto range = param->getNormalisableRange();
-            float normalizedValue = range.convertTo0to1(value);
-
-            // Use beginChangeGesture to indicate we're changing the parameter
-            param->beginChangeGesture();
-
-            // Set value without notifying host (avoids deadlock in tests)
-            param->setValue(normalizedValue);
-
-            // End the gesture
-            param->endChangeGesture();
-        }
+        // Directly set the value in the ValueTree state
+        // This updates the raw parameter value that atomic pointers read from
+        auto paramValue = apvts.getParameterAsValue(paramID);
+        paramValue.setValue(value);
     }
 
     //==============================================================================

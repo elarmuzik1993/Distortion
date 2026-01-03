@@ -1,6 +1,7 @@
 #if JUCE_DEBUG
 
 #include "DistortionTests.h"
+#include <iostream>
 
 using namespace TestUtilities;
 
@@ -440,15 +441,35 @@ void ProcessBlockTests::testDCBlocking()
     // Enable distortion
     setParameter(processor.parameters, "distortionAmount", 50.0f);
 
+    // Verify parameter was set correctly
+    float actualDistortion = processor.distortionAmountParam->load();
+    std::cout << "DC Blocking Test - Distortion param set to: " << actualDistortion << "\n";
+
     // Create signal with DC offset
-    auto buffer = generateDCOffset(2048, 0.5f);
+    auto buffer = generateDCOffset(512, 0.5f);
     juce::MidiBuffer midi;
 
     // Process multiple blocks to let DC filter settle
     for (int i = 0; i < 10; ++i)
     {
         buffer = generateDCOffset(512, 0.5f);
+
+        // Check input is valid
+        if (containsInvalidSamples(buffer))
+        {
+            std::cout << "Input buffer has NaN/Inf!\n";
+        }
+
         processor.processBlock(buffer, midi);
+
+        // Check each block for NaN
+        if (containsInvalidSamples(buffer))
+        {
+            std::cout << "Block " << i << " produced NaN/Inf!\n";
+            float peak = calculatePeak(buffer);
+            std::cout << "Peak: " << peak << "\n";
+            break;
+        }
     }
 
     // Check for valid samples first
@@ -464,6 +485,8 @@ void ProcessBlockTests::testDCBlocking()
     }
     dcLevel /= static_cast<float>(buffer.getNumSamples() * buffer.getNumChannels());
 
+    std::cout << "Final DC level: " << dcLevel << "\n";
+
     expect(std::abs(dcLevel) < 0.3f, "DC blocking should reduce DC offset. Remaining: " +
            juce::String(dcLevel));
 }
@@ -476,22 +499,40 @@ void ProcessBlockTests::testWetDryMix()
     // Enable distortion
     setParameter(processor.parameters, "distortionAmount", 70.0f);
 
+    std::cout << "Wet/Dry Test - Distortion param: " << processor.distortionAmountParam->load() << "\n";
+
     // Test 0% wet (dry only)
     setParameter(processor.parameters, "distMix", 0.0f);
+
+    std::cout << "Wet/Dry Test - DistMix param: " << processor.distMixParam->load() << "\n";
 
     auto dryBuffer = generateSineWave(1000.0, 44100.0, 512, 0.5f);
     auto originalDry = dryBuffer;
     juce::MidiBuffer midi;
 
     processor.processBlock(dryBuffer, midi);
+
+    if (containsInvalidSamples(dryBuffer))
+    {
+        std::cout << "Wet/Dry Test - Dry buffer (0% mix) produced NaN/Inf!\n";
+    }
+
     float dryPeak = calculatePeak(dryBuffer);
+    std::cout << "Wet/Dry Test - Dry peak (0% mix): " << dryPeak << "\n";
 
     // Test 100% wet
     setParameter(processor.parameters, "distMix", 100.0f);
 
     auto wetBuffer = generateSineWave(1000.0, 44100.0, 512, 0.5f);
     processor.processBlock(wetBuffer, midi);
+
+    if (containsInvalidSamples(wetBuffer))
+    {
+        std::cout << "Wet/Dry Test - Wet buffer (100% mix) produced NaN/Inf!\n";
+    }
+
     float wetPeak = calculatePeak(wetBuffer);
+    std::cout << "Wet/Dry Test - Wet peak (100% mix): " << wetPeak << "\n";
 
     // Both should produce valid output
     expect(!containsInvalidSamples(dryBuffer), "Dry mix produced invalid samples");
@@ -518,12 +559,15 @@ void ProcessBlockTests::testOutputGain()
     PluginProcessor processor;
     processor.prepareToPlay(44100.0, 512);
 
+    // Enable distortion slightly to avoid bypass mode (bypass happens when distortion < 0.5%)
+    setParameter(processor.parameters, "distortionAmount", 1.0f);
+
     // Set output gain to maximum
     setParameter(processor.parameters, "outputGain", 100.0f);
 
     // Process a few blocks to let smoothed parameters settle
     juce::MidiBuffer midi;
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < 10; ++i)
     {
         auto dummyBuffer = generateSineWave(1000.0, 44100.0, 512, 0.3f);
         processor.processBlock(dummyBuffer, midi);
@@ -532,17 +576,32 @@ void ProcessBlockTests::testOutputGain()
     auto buffer = generateSineWave(1000.0, 44100.0, 512, 0.3f);
     processor.processBlock(buffer, midi);
 
+    float peakWithMaxGain = calculatePeak(buffer);
+    std::cout << "Output Gain Test - Distortion param: " << processor.distortionAmountParam->load() << "\n";
+    std::cout << "Output Gain Test - Output gain param: " << processor.outputGainParam->load() << "\n";
+    std::cout << "Output Gain Test - Peak with max gain (100): " << peakWithMaxGain << "\n";
+
     // Output should be louder than input (output gain > 50 should boost)
-    expect(calculatePeak(buffer) > 0.35f, "Maximum output gain should boost signal");
+    expect(peakWithMaxGain > 0.35f, "Maximum output gain should boost signal. Peak: " + juce::String(peakWithMaxGain));
 
     // Set output gain to minimum
     setParameter(processor.parameters, "outputGain", 0.0f);
 
+    // Process a few blocks to let smoothed parameter settle
+    for (int i = 0; i < 10; ++i)
+    {
+        auto dummyBuffer = generateSineWave(1000.0, 44100.0, 512, 0.5f);
+        processor.processBlock(dummyBuffer, midi);
+    }
+
     buffer = generateSineWave(1000.0, 44100.0, 512, 0.5f);
     processor.processBlock(buffer, midi);
 
+    float peakWithMinGain = calculatePeak(buffer);
+    std::cout << "Output Gain Test - Peak with min gain (0): " << peakWithMinGain << "\n";
+
     // Output should be quieter
-    expect(calculatePeak(buffer) < 0.5f, "Minimum output gain should reduce signal");
+    expect(peakWithMinGain < 0.1f, "Minimum output gain should significantly reduce signal. Peak: " + juce::String(peakWithMinGain));
 }
 
 //==============================================================================

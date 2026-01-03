@@ -385,6 +385,7 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 
     // Output gain is applied AFTER downsampling at normal sample rate
     smoothedOutputGain.reset(sampleRate, DSPConstants::GAIN_SMOOTH_TIME_S);
+    smoothedOutputGain.setCurrentAndTargetValue(1.0f);  // Initialize to unity gain
     compEnvelopeState = 0.0f;
     compRmsHistory = 0.0f;
     tubeWarmth = 0.0f;
