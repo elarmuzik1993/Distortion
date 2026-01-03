@@ -245,7 +245,7 @@ inline void registerAllTests()
     static DistortionDSPTests distortionDSPTests;
     static CompressionDSPTests compressionDSPTests;
     static LFOTests lfoTests;
-    // static ProcessBlockTests processBlockTests;  // CRASHES - needs investigation
+    static ProcessBlockTests processBlockTests;
     static ParameterTests parameterTests;
     static SampleRateTests sampleRateTests;
     static ThreadSafetyTests threadSafetyTests;
