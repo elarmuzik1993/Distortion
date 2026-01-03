@@ -8,6 +8,18 @@
 namespace TestUtilities
 {
     //==============================================================================
+    // Parameter Helper Functions
+    //==============================================================================
+
+    /** Set parameter value via ValueTree (proper way for tests - avoids deadlock) */
+    inline void setParameter(juce::AudioProcessorValueTreeState& apvts,
+                            const juce::String& paramID,
+                            float value)
+    {
+        apvts.state.setProperty(paramID, value, nullptr);
+    }
+
+    //==============================================================================
     // Audio Buffer Generation
     //==============================================================================
 
