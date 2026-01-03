@@ -264,3 +264,63 @@ for (size_t channel = 0; channel < numChannels; ++channel)
 - Hi-pass filter initialization bug fixed (missing pointer dereference)
 - Thread-safe scope buffer access improvements
 - Dual-stage DC blocking implementation
+
+## NaN Root Cause Investigation & Fixes (Latest)
+
+**Investigation Summary**:
+Comprehensive investigation identified and fixed 6 critical NaN sources affecting test reliability. Initial test suite had 100+ failures; after fixes: **1487 PASSED, 28 FAILED (98.2% pass rate)**.
+
+**Root Causes Identified**:
+
+1. **Test Parameter Setting Race Condition** (`Source/Tests/TestUtilities.h:19-30`)
+   - **Problem**: `setParameter()` used `getParameterAsValue()` which created a `juce::Value` proxy. Calling `setValue()` didn't immediately update atomic pointers in `PluginProcessor`, creating race condition where tests processed with stale/uninitialized parameters.
+   - **Fix**: Changed to direct `getParameter()` + `setValueNotifyingHost()` for atomic pointer synchronization
+   - **Impact**: Eliminated parameter-related NaN propagation
+
+2. **Sample Rate Coefficient Calculation** (`Source/PluginProcessor.cpp:287-332`)
+   - **Problem**: Compression envelope coefficients calculated via `exp(-1.0 / (timeConstant * sampleRate))` could produce NaN if sample rate was invalid (0, NaN, Inf, or extreme values)
+   - **Fix**: Added sample rate validation (1kHz-500kHz range), NaN/Inf detection, fallback to 44.1kHz, and coefficient validation (must be 0-1)
+   - **Impact**: Prevents NaN in compression processing
+
+3. **Parameter Loading Without Validation** (`Source/PluginProcessor.cpp:756-793`)
+   - **Problem**: All parameter loads could contain NaN if atomic pointers were corrupted, causing NaN to propagate through entire processing chain
+   - **Fix**: Added comprehensive NaN checks for all parameters with safe default fallbacks
+   - **Impact**: Prevents NaN from propagating past parameter loading
+
+4. **LFO Modulation Calculation** (`Source/PluginProcessor.cpp:810-852`)
+   - **Problem**: LFO calculation chain could produce NaN at multiple points: LFO output validation, phase increment division, modulated parameter calculation, and final distortion drive
+   - **Fix**:
+     - Validate LFO output values
+     - Check sample rate > 0 before division
+     - Validate modulation calculation
+     - Validate final distortion drive with safe fallback (1.0)
+   - **Impact**: Prevents distortion drive from becoming NaN
+
+5. **Filter State Management** (`Source/PluginProcessor.cpp:992-1015`)
+   - **Problem**: Filter coefficients were created with `makeHighPass()` without validating oversampledSR and highPassFreq parameters, potentially creating invalid IIR coefficients
+   - **Fix**:
+     - Validate oversampledSR (1kHz-1MHz range)
+     - Validate highPassFreq relative to sample rate (1Hz to Nyquist)
+     - Check state exists before dereferencing
+   - **Impact**: Prevents invalid filter coefficient creation
+
+6. **Automatic NaN Recovery System** (`Source/PluginProcessor.cpp:1041-1047`)
+   - **Problem**: Once NaN entered filter's internal state, it persisted forever, corrupting all subsequent audio
+   - **Fix**:
+     - Detect NaN after filter processing
+     - Automatically reset filter state
+     - Clear buffer with zeros to prevent propagation
+   - **Impact**: Graceful degradation when edge cases occur
+
+**Testing Infrastructure**:
+- Unit test framework: JUCE UnitTest runner
+- Test runner: `Builds/VisualStudio2022_Tests/x64/Debug/ConsoleApp/DistortionTests.exe`
+- Build command: `MSBuild DistortionTests_ConsoleApp.vcxproj -p:Configuration=Debug -p:Platform=x64`
+- Test categories: DSP, Compression, LFO, ProcessBlock, Parameters, SampleRate, ThreadSafety, StateIO, GoldenAudio
+
+**Remaining 28 Failures**:
+All related to pre-highpass filter creating NaN from valid input in specific edge cases. The automatic NaN recovery system prevents propagation, but the underlying JUCE IIR filter behavior in edge cases needs further investigation (likely related to coefficient stability at extreme filter frequencies).
+
+**Files Modified**:
+- `Source/PluginProcessor.cpp`: 240 lines added/modified (6 major safety check locations)
+- `Source/Tests/TestUtilities.h`: 15 lines modified (parameter setting fix)
