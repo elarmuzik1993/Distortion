@@ -11,12 +11,28 @@ namespace TestUtilities
     // Parameter Helper Functions
     //==============================================================================
 
-    /** Set parameter value via ValueTree (proper way for tests - avoids deadlock) */
+    /** Set parameter value for tests (bypasses host notification) */
     inline void setParameter(juce::AudioProcessorValueTreeState& apvts,
                             const juce::String& paramID,
                             float value)
     {
-        apvts.state.setProperty(paramID, value, nullptr);
+        // Get the parameter object
+        auto* param = apvts.getParameter(paramID);
+        if (param != nullptr)
+        {
+            // Get the range to normalize the value
+            auto range = param->getNormalisableRange();
+            float normalizedValue = range.convertTo0to1(value);
+
+            // Use beginChangeGesture to indicate we're changing the parameter
+            param->beginChangeGesture();
+
+            // Set value without notifying host (avoids deadlock in tests)
+            param->setValue(normalizedValue);
+
+            // End the gesture
+            param->endChangeGesture();
+        }
     }
 
     //==============================================================================

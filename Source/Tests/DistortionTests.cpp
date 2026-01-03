@@ -451,6 +451,9 @@ void ProcessBlockTests::testDCBlocking()
         processor.processBlock(buffer, midi);
     }
 
+    // Check for valid samples first
+    expect(!containsInvalidSamples(buffer), "DC blocking produced invalid samples (NaN/Inf)");
+
     // DC should be significantly reduced after several blocks
     float dcLevel = 0.0f;
     for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
@@ -518,13 +521,19 @@ void ProcessBlockTests::testOutputGain()
     // Set output gain to maximum
     setParameter(processor.parameters, "outputGain", 100.0f);
 
-    auto buffer = generateSineWave(1000.0, 44100.0, 512, 0.3f);
+    // Process a few blocks to let smoothed parameters settle
     juce::MidiBuffer midi;
+    for (int i = 0; i < 5; ++i)
+    {
+        auto dummyBuffer = generateSineWave(1000.0, 44100.0, 512, 0.3f);
+        processor.processBlock(dummyBuffer, midi);
+    }
 
+    auto buffer = generateSineWave(1000.0, 44100.0, 512, 0.3f);
     processor.processBlock(buffer, midi);
 
-    // Output should be louder than input
-    expect(calculatePeak(buffer) > 0.3f, "Maximum output gain should boost signal");
+    // Output should be louder than input (output gain > 50 should boost)
+    expect(calculatePeak(buffer) > 0.35f, "Maximum output gain should boost signal");
 
     // Set output gain to minimum
     setParameter(processor.parameters, "outputGain", 0.0f);
