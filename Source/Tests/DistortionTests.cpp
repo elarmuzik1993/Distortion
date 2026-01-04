@@ -305,9 +305,6 @@ void LFOTests::testWaveformShape(PluginProcessor& processor, int waveformType, c
 void LFOTests::testRandomSampleHold(PluginProcessor& processor)
 {
     // Random S&H should change value only when phase resets
-    float lastPhase = 0.0f;
-    float lastValue = processor.generateLFOWaveform(0.0f, 4);
-
     // Simulate phase progression without reset
     for (float phase = 0.1f; phase < 0.9f; phase += 0.1f)
     {
