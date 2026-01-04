@@ -100,12 +100,14 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     compEnableAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
         audioProcessor.parameters, "compEnabled", compEnableToggle);
 
-    // Setup section title label
-    addAndMakeVisible(compSectionLabel);
-    compSectionLabel.setText("COMPRESSION", juce::dontSendNotification);
-    compSectionLabel.setJustificationType(juce::Justification::centredRight);
-    compSectionLabel.setColour(juce::Label::textColourId, juce::Colour(0xFF, 0x00, 0x44));  // Neon red
-    compSectionLabel.setFont(juce::Font(14.0f, juce::Font::bold));
+    // Setup collapsible compression tab header
+    addAndMakeVisible(compressionTabHeader);
+    compressionTabHeader.onToggle = [this](bool expanded)
+    {
+        isCompressionExpanded = expanded;
+        updateCompressionVisibility();
+        resized(); // Recalculate layout with new height
+    };
     
     // Setup 808-Safe Mode toggle
     addAndMakeVisible(bandSplitToggle);
@@ -359,6 +361,9 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     setupKnobRightClick(clipTypeComboBox, "clipType");
     setupKnobRightClick(compRatioComboBox, "compRatio");
     setupKnobRightClick(compEnableToggle, "compEnabled");
+
+    // Initialize compression section visibility
+    updateCompressionVisibility();
 }
 
 PluginEditor::~PluginEditor()
@@ -419,11 +424,6 @@ void PluginEditor::paint(juce::Graphics& g)
     // Black background
     g.fillAll(juce::Colours::black);
 
-    // Draw title in neon red
-    g.setColour(juce::Colour(0xFF, 0x00, 0x44));
-    g.setFont(juce::Font(24.0f, juce::Font::bold));
-    g.drawText("MONOLIT BEATZ", 0, 10, getWidth(), 40, juce::Justification::centred, true);
-
     // Draw neon red border
     g.setColour(juce::Colour(0xFF, 0x00, 0x44).withAlpha(0.7f));
     g.drawRect(getLocalBounds(), 2);
@@ -468,84 +468,105 @@ void PluginEditor::resized()
     deletePresetButton.setBounds(presetX + presetSelectorWidth + presetSpacing + presetButtonWidth + presetSpacing,
                                  presetY, presetButtonWidth, presetHeight);
 
+    // Randomize button top-right (opposite preset selector, same size as preset dropdown)
+    const int randomizeButtonWidth = presetSelectorWidth;   // Match preset dropdown width (150px)
+    const int randomizeButtonHeight = presetHeight;         // Match preset dropdown height (24px)
+    const int randomizeButtonX = getWidth() - randomizeButtonWidth - 20;  // Right-aligned, 20px margin
+    const int randomizeButtonY = presetY;  // Same height as preset row
+    randomizeButton.setBounds(randomizeButtonX, randomizeButtonY,
+                             randomizeButtonWidth, randomizeButtonHeight);
+
     auto contentArea = bounds;
 
-    // ========== COMPRESSION BAR AT TOP (NEW SECTION) ==========
-    auto compressionArea = contentArea.removeFromTop(compressionBarHeight);
+    // ========== COMPRESSION SECTION (COLLAPSIBLE) ==========
+    const int tabHeaderHeight = 25;
+    const int expandedCompressionHeight = 90;
+
+    // Dynamic height based on collapse state
+    const int compressionSectionHeight = isCompressionExpanded
+        ? expandedCompressionHeight
+        : tabHeaderHeight;
+
+    auto compressionArea = contentArea.removeFromTop(compressionSectionHeight);
 
     // Calculate actual window height for footer positioning
     const int actualWindowHeight = getHeight();
 
-    // Compression section title
-    auto compTitleArea = compressionArea.removeFromTop(20);
-    compSectionLabel.setBounds(compTitleArea);
+    // Tab header (always visible, clickable) - sized to fit text
+    auto tabArea = compressionArea.removeFromTop(tabHeaderHeight);
 
-    // ========== COMPRESSION CONTROLS LAYOUT (4 knobs + dropdown + toggle) ==========
-    const int compKnobSize = 60;
-    const int compSpacing = 15;
-    const int compControlsWidth = (4 * compKnobSize) + (3 * compSpacing) + 60 + 30;  // 4 knobs + dropdown + toggle
-    const int compStartX = compressionArea.getRight() - compControlsWidth - 20;
-    const int compKnobY = compressionArea.getY() + 5;
+    // Calculate width for "COMPRESSION" text + padding + chevron
+    const int tabTextWidth = 120;  // Width for text
+    const int tabChevronWidth = 30;  // Space for chevron
+    const int tabTotalWidth = tabTextWidth + tabChevronWidth;
+    const int tabX = (getWidth() - tabTotalWidth) / 2;  // Center horizontally
 
-    // Peak Reduction knob
-    compPeakReductionSlider.setBounds(compStartX, compKnobY, compKnobSize, compKnobSize);
-    compPeakReductionLabel.setBounds(compStartX, compKnobY + compKnobSize, compKnobSize, 15);
+    compressionTabHeader.setBounds(tabX, tabArea.getY(), tabTotalWidth, tabHeaderHeight);
+    compressionTabHeader.setExpanded(isCompressionExpanded);
 
-    // Makeup Gain knob
-    const int makeupX = compStartX + compKnobSize + compSpacing;
-    compMakeupGainSlider.setBounds(makeupX, compKnobY, compKnobSize, compKnobSize);
-    compMakeupGainLabel.setBounds(makeupX, compKnobY + compKnobSize, compKnobSize, 15);
+    // Only layout controls if expanded
+    if (isCompressionExpanded)
+    {
+        // ========== COMPRESSION CONTROLS LAYOUT (4 knobs + dropdown + toggle) ==========
+        const int compKnobSize = 60;
+        const int compSpacing = 15;
+        const int compControlsWidth = (4 * compKnobSize) + (3 * compSpacing) + 60 + 30;
+        const int compStartX = compressionArea.getRight() - compControlsWidth - 20;
+        const int compKnobY = compressionArea.getY() + 5;
 
-    // Wet/Dry knob (Compression)
-    const int wetDryX = makeupX + compKnobSize + compSpacing;
-    compWetDrySlider.setBounds(wetDryX, compKnobY, compKnobSize, compKnobSize);
-    compWetDryLabel.setBounds(wetDryX, compKnobY + compKnobSize, compKnobSize, 15);
+        // Peak Reduction knob
+        compPeakReductionSlider.setBounds(compStartX, compKnobY, compKnobSize, compKnobSize);
+        compPeakReductionLabel.setBounds(compStartX, compKnobY + compKnobSize, compKnobSize, 15);
 
-    // Crossover knob
-    const int crossoverX = wetDryX + compKnobSize + compSpacing;
-    compCrossoverSlider.setBounds(crossoverX, compKnobY, compKnobSize, compKnobSize);
-    compCrossoverLabel.setBounds(crossoverX, compKnobY + compKnobSize, compKnobSize, 15);
+        // Makeup Gain knob
+        const int makeupX = compStartX + compKnobSize + compSpacing;
+        compMakeupGainSlider.setBounds(makeupX, compKnobY, compKnobSize, compKnobSize);
+        compMakeupGainLabel.setBounds(makeupX, compKnobY + compKnobSize, compKnobSize, 15);
 
-    // Compress/Limit dropdown
-    const int dropdownX = crossoverX + compKnobSize + compSpacing;
-    const int dropdownWidth = 60;
-    compRatioComboBox.setBounds(dropdownX, compKnobY + 15, dropdownWidth, 20);
-    compRatioLabel.setBounds(dropdownX, compKnobY + 37, dropdownWidth, 12);
+        // Wet/Dry knob (Compression)
+        const int wetDryX = makeupX + compKnobSize + compSpacing;
+        compWetDrySlider.setBounds(wetDryX, compKnobY, compKnobSize, compKnobSize);
+        compWetDryLabel.setBounds(wetDryX, compKnobY + compKnobSize, compKnobSize, 15);
 
-    // Enable toggle
-    const int toggleX = dropdownX + dropdownWidth + 15;
-    const int toggleSize = 24;
-    compEnableToggle.setBounds(toggleX, compKnobY + 15, toggleSize, toggleSize);
+        // Crossover knob
+        const int crossoverX = wetDryX + compKnobSize + compSpacing;
+        compCrossoverSlider.setBounds(crossoverX, compKnobY, compKnobSize, compKnobSize);
+        compCrossoverLabel.setBounds(crossoverX, compKnobY + compKnobSize, compKnobSize, 15);
 
-    // Position compression lock icons
-    const int compLockSize = 14;
-    const int compLockOffset = 3;
-    compPeakReductionLock.setBounds(compStartX + compKnobSize - compLockSize - compLockOffset,
-                                   compKnobY + compLockOffset, compLockSize, compLockSize);
-    compMakeupGainLock.setBounds(makeupX + compKnobSize - compLockSize - compLockOffset,
+        // Compress/Limit dropdown
+        const int dropdownX = crossoverX + compKnobSize + compSpacing;
+        const int dropdownWidth = 60;
+        compRatioComboBox.setBounds(dropdownX, compKnobY + 15, dropdownWidth, 20);
+        compRatioLabel.setBounds(dropdownX, compKnobY + 37, dropdownWidth, 12);
+
+        // Enable toggle
+        const int toggleX = dropdownX + dropdownWidth + 15;
+        const int toggleSize = 24;
+        compEnableToggle.setBounds(toggleX, compKnobY + 15, toggleSize, toggleSize);
+
+        // Position compression lock icons
+        const int compLockSize = 14;
+        const int compLockOffset = 3;
+        compPeakReductionLock.setBounds(compStartX + compKnobSize - compLockSize - compLockOffset,
+                                       compKnobY + compLockOffset, compLockSize, compLockSize);
+        compMakeupGainLock.setBounds(makeupX + compKnobSize - compLockSize - compLockOffset,
+                                    compKnobY + compLockOffset, compLockSize, compLockSize);
+        compWetDryLock.setBounds(wetDryX + compKnobSize - compLockSize - compLockOffset,
                                 compKnobY + compLockOffset, compLockSize, compLockSize);
-    compWetDryLock.setBounds(wetDryX + compKnobSize - compLockSize - compLockOffset,
-                            compKnobY + compLockOffset, compLockSize, compLockSize);
-    compCrossoverLock.setBounds(crossoverX + compKnobSize - compLockSize - compLockOffset,
-                               compKnobY + compLockOffset, compLockSize, compLockSize);
-    compRatioLock.setBounds(dropdownX + dropdownWidth - compLockSize - 2,
-                           compKnobY + 15, compLockSize, compLockSize);
-    compEnableLock.setBounds(toggleX + toggleSize - compLockSize,
-                            compKnobY + 15, compLockSize, compLockSize);
+        compCrossoverLock.setBounds(crossoverX + compKnobSize - compLockSize - compLockOffset,
+                                   compKnobY + compLockOffset, compLockSize, compLockSize);
+        compRatioLock.setBounds(dropdownX + dropdownWidth - compLockSize - 2,
+                               compKnobY + 15, compLockSize, compLockSize);
+        compEnableLock.setBounds(toggleX + toggleSize - compLockSize,
+                                compKnobY + 15, compLockSize, compLockSize);
 
-    // ========== GAIN REDUCTION METER (RIGHT SIDE, AFTER COMPRESSION CONTROLS) ==========
-    const int meterWidth = 40;
-    const int meterHeight = 65;
-    const int meterX = toggleX + toggleSize + 20;  // Position after the enable toggle
-    const int meterY = compressionArea.getY() + 5;
-    gainReductionMeter.setBounds(meterX, meterY, meterWidth, meterHeight);
-
-    // ========== RANDOMIZE BUTTON (LEFT SIDE OF COMPRESSION SECTION) ==========
-    const int randomizeButtonWidth = 90;
-    const int randomizeButtonHeight = 30;
-    const int randomizeButtonX = compressionArea.getX() + 10;
-    const int randomizeButtonY = compressionArea.getY() + 30;
-    randomizeButton.setBounds(randomizeButtonX, randomizeButtonY, randomizeButtonWidth, randomizeButtonHeight);
+        // ========== GAIN REDUCTION METER (LEFT OF PEAK REDUCTION) ==========
+        const int meterWidth = 40;
+        const int meterHeight = 65;
+        const int meterX = compStartX - meterWidth - 15;
+        const int meterY = compressionArea.getY() + 5;
+        gainReductionMeter.setBounds(meterX, meterY, meterWidth, meterHeight);
+    }
     // ===========================================================
 
     // ========== SINGLE ROW LAYOUT AT BOTTOM ==========
@@ -688,6 +709,35 @@ void PluginEditor::mouseUp(const juce::MouseEvent& e)
             }
         }
     }
+}
+
+void PluginEditor::updateCompressionVisibility()
+{
+    const bool visible = isCompressionExpanded;
+
+    // 4 knobs + labels
+    compPeakReductionSlider.setVisible(visible);
+    compPeakReductionLabel.setVisible(visible);
+    compMakeupGainSlider.setVisible(visible);
+    compMakeupGainLabel.setVisible(visible);
+    compWetDrySlider.setVisible(visible);
+    compWetDryLabel.setVisible(visible);
+    compCrossoverSlider.setVisible(visible);
+    compCrossoverLabel.setVisible(visible);
+
+    // Dropdown, toggle, meter
+    compRatioComboBox.setVisible(visible);
+    compRatioLabel.setVisible(visible);
+    compEnableToggle.setVisible(visible);
+    gainReductionMeter.setVisible(visible);
+
+    // 6 lock icons
+    compPeakReductionLock.setVisible(visible);
+    compMakeupGainLock.setVisible(visible);
+    compWetDryLock.setVisible(visible);
+    compCrossoverLock.setVisible(visible);
+    compRatioLock.setVisible(visible);
+    compEnableLock.setVisible(visible);
 }
 
 void PluginEditor::randomizeAllParameters()

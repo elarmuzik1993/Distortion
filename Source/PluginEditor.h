@@ -334,6 +334,91 @@ public:
     }
 };
 
+// Collapsible Tab Header for compression section
+class CollapsibleTabHeader : public juce::Component
+{
+public:
+    CollapsibleTabHeader(const juce::String& labelText)
+    {
+        label.setText(labelText, juce::dontSendNotification);
+        label.setJustificationType(juce::Justification::centredRight);
+        label.setColour(juce::Label::textColourId, juce::Colour(0xFF, 0x00, 0x44)); // Neon red
+        label.setFont(juce::Font(14.0f, juce::Font::bold));
+        label.setInterceptsMouseClicks(false, false); // Let parent handle clicks
+        addAndMakeVisible(label);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        auto bounds = getLocalBounds().toFloat();
+
+        // Dark background
+        g.setColour(juce::Colour(0xff1a1a1a));
+        g.fillRoundedRectangle(bounds, 4.0f);
+
+        // Neon red border (subtle)
+        g.setColour(juce::Colour(0xFF, 0x00, 0x44).withAlpha(0.5f));
+        g.drawRoundedRectangle(bounds.reduced(0.5f), 4.0f, 1.5f);
+
+        // Draw chevron indicator on right side
+        drawChevron(g, bounds.removeFromRight(25).reduced(5));
+    }
+
+    void mouseDown(const juce::MouseEvent&) override
+    {
+        isExpanded = !isExpanded;
+        repaint();
+
+        if (onToggle)
+            onToggle(isExpanded);
+    }
+
+    void setExpanded(bool expanded)
+    {
+        isExpanded = expanded;
+        repaint();
+    }
+
+    bool getExpanded() const { return isExpanded; }
+
+    std::function<void(bool)> onToggle; // Callback for state change
+
+private:
+    juce::Label label;
+    bool isExpanded = true; // Default: expanded
+
+    void drawChevron(juce::Graphics& g, juce::Rectangle<float> bounds)
+    {
+        juce::Path chevron;
+        auto centre = bounds.getCentre();
+
+        if (isExpanded)
+        {
+            // V shape (down chevron) - expanded state
+            chevron.startNewSubPath(centre.x - 6, centre.y - 3);
+            chevron.lineTo(centre.x, centre.y + 3);
+            chevron.lineTo(centre.x + 6, centre.y - 3);
+        }
+        else
+        {
+            // > shape (right chevron) - collapsed state
+            chevron.startNewSubPath(centre.x - 3, centre.y - 6);
+            chevron.lineTo(centre.x + 3, centre.y);
+            chevron.lineTo(centre.x - 3, centre.y + 6);
+        }
+
+        g.setColour(juce::Colour(0xFF, 0x00, 0x44)); // Neon red
+        g.strokePath(chevron, juce::PathStrokeType(2.0f));
+    }
+
+    void resized() override
+    {
+        auto bounds = getLocalBounds();
+        // Label takes all space except chevron area
+        label.setBounds(bounds.removeFromLeft(bounds.getWidth() - 30));
+    }
+};
+
 // Custom LookAndFeel for neon red ComboBox styling
 class ComboBoxLookAndFeel : public juce::LookAndFeel_V4
 {
@@ -475,7 +560,11 @@ private:
     juce::ComboBox compRatioComboBox;
     juce::Label compRatioLabel;
     juce::ToggleButton compEnableToggle;
-    juce::Label compSectionLabel;  // "LOW-END COMPRESSION" title
+
+    // Collapsible compression section
+    bool isCompressionExpanded = true;  // Default: expanded
+    CollapsibleTabHeader compressionTabHeader{"COMPRESSION"};
+
     CustomKnob compWetDrySlider, compCrossoverSlider;
     juce::Label compWetDryLabel, compCrossoverLabel;
     juce::ToggleButton bandSplitToggle;
@@ -547,6 +636,7 @@ private:
     void toggleParameterLock(const juce::String& paramID);
     void updateLockIcons();
     void setupKnobRightClick(juce::Component& component, const juce::String& paramID);
+    void updateCompressionVisibility();
 
     // Preset management methods
     void savePreset(const juce::String& presetName);
