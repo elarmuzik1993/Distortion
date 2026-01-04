@@ -515,12 +515,6 @@ if (!oversampling || currentNumChannels != numChannels) {
     normalSpec.maximumBlockSize = static_cast<juce::uint32>(samplesPerBlock);
     normalSpec.numChannels = static_cast<juce::uint32>(numChannels);
 
-    // Note: dcBlockingFilter2 is no longer used - replaced by manual DC blocker
-    // which is more numerically stable at very low cutoff frequencies
-    dcBlockingFilter2.prepare(normalSpec);
-    *dcBlockingFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(normalSpec.sampleRate, DSPConstants::DC_BLOCKING_FREQ);
-    dcBlockingFilter2.reset();
-
     // Compression crossover filters (normal sample rate)
     const float compCrossoverFreq = compCrossoverParam ? compCrossoverParam->load() : DSPConstants::DEFAULT_COMP_CROSSOVER;
 
@@ -574,7 +568,6 @@ void PluginProcessor::releaseResources()
     oversampling.reset();
     preHighPassFilter.reset();
     dcBlockingFilter.reset();
-    dcBlockingFilter2.reset();
 
     // Reset manual DC blocker state
     for (int ch = 0; ch < 2; ++ch)
@@ -760,9 +753,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         // Update smoothed values for new sample rate
         smoothedOutputGain.reset(currentSR, DSPConstants::GAIN_SMOOTH_TIME_S);
         smoothedGainReduction.reset(currentSR, DSPConstants::COMP_GR_SMOOTH_TIME_S);
-
-        // Update normal-rate DC blocking filter
-        *dcBlockingFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(currentSR, DSPConstants::DC_BLOCKING_FREQ);
 
         // Force update of all dynamic filters on next use
         lastCompCrossoverFreq = -1.0f;
@@ -1174,7 +1164,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // REMOVED: DC blocking before downsampling causes instability at 44.1kHz
     // The DC blocking filter at 5Hz with 176.4kHz oversampled rate creates
     // extremely resonant poles that interact badly with the downsampler
-    // DC blocking is applied AFTER downsampling instead (dcBlockingFilter2)
+    // DC blocking is applied AFTER downsampling via manual one-pole DC blocker
 
     // Downsample back into original buffer
     oversampling->processSamplesDown(inputBlock);
@@ -1269,7 +1259,10 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Manual DC blocker - simple one-pole filter that's extremely stable
     // y[n] = x[n] - x[n-1] + R * y[n-1], where R ≈ 0.995 for ~35Hz cutoff at 44.1kHz
     constexpr float R = 0.995f;  // Higher = lower cutoff, more stable
-    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+    // CRITICAL: Clamp to 2 channels max to prevent array out-of-bounds access
+    // (manualDCBlockerPrevInput/Output arrays are fixed size [2])
+    const int dcBlockerChannels = juce::jmin(buffer.getNumChannels(), 2);
+    for (int ch = 0; ch < dcBlockerChannels; ++ch)
     {
         auto* data = buffer.getWritePointer(ch);
         for (int i = 0; i < buffer.getNumSamples(); ++i)
@@ -1484,8 +1477,6 @@ void PluginProcessor::setStateInformation(const void* data, int sizeInBytes)
             preHighPassFilter.reset();
         if (dcBlockingFilter.state)
             dcBlockingFilter.reset();
-        if (dcBlockingFilter2.state)
-            dcBlockingFilter2.reset();
         if (lowPassFilter1.state)
             lowPassFilter1.reset();
         if (lowPassFilter2.state)

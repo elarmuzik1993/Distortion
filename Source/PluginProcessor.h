@@ -157,8 +157,6 @@ private:
     juce::dsp::IIR::Coefficients<float>> preHighPassFilter;
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
     juce::dsp::IIR::Coefficients<float>> dcBlockingFilter;
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> dcBlockingFilter2;
 
     // Manual DC blocker state (simple one-pole, extremely stable)
     // y[n] = x[n] - x[n-1] + R * y[n-1], where R ≈ 0.995 for ~35Hz cutoff at 44.1kHz
