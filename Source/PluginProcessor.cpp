@@ -416,6 +416,13 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     compRmsHistory = 0.0f;
     tubeWarmth = 0.0f;
 
+    // Reset manual DC blocker state
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        manualDCBlockerPrevInput[ch] = 0.0f;
+        manualDCBlockerPrevOutput[ch] = 0.0f;
+    }
+
     // Initialize parameter interpolation state to current parameter values
     const auto inGainParam = inputGainParam ? inputGainParam->load() : 50.0f;
     const auto distParam = distortionAmountParam ? distortionAmountParam->load() : 0.0f;
@@ -465,16 +472,19 @@ if (!oversampling || currentNumChannels != numChannels) {
 
     // Initialize with default frequency, but DON'T cache it to lastHighPassFreq
     // This allows the first processBlock to set the correct frequency after state restoration
+    // CRITICAL: Use first-order filter for numerical stability at low frequencies in oversampled domain
+    // Second-order (biquad) filters become unstable at very low frequency ratios (e.g., 20Hz at 176.4kHz)
     preHighPassFilter.prepare(spec);
-    *preHighPassFilter.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, DSPConstants::DEFAULT_HIPASS_FREQ);
+    *preHighPassFilter.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(spec.sampleRate, DSPConstants::DEFAULT_HIPASS_FREQ);
     preHighPassFilter.reset();
 
     // Force filter update on first processBlock (especially important for DAW state restoration)
     lastHighPassFreq = -1.0f;
 
-    // DC BLOCKING 1
+    // DC BLOCKING 1 (oversampled rate)
+    // CRITICAL: Use first-order filter for numerical stability at 5Hz with oversampled rate (~176kHz)
     dcBlockingFilter.prepare(spec);
-    *dcBlockingFilter.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, DSPConstants::DC_BLOCKING_FREQ);
+    *dcBlockingFilter.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(spec.sampleRate, DSPConstants::DC_BLOCKING_FREQ);
     dcBlockingFilter.reset();
 
     // 808-Safe distortion filters (Linkwitz-Riley crossover, oversampled domain)
@@ -505,8 +515,10 @@ if (!oversampling || currentNumChannels != numChannels) {
     normalSpec.maximumBlockSize = static_cast<juce::uint32>(samplesPerBlock);
     normalSpec.numChannels = static_cast<juce::uint32>(numChannels);
 
+    // Note: dcBlockingFilter2 is no longer used - replaced by manual DC blocker
+    // which is more numerically stable at very low cutoff frequencies
     dcBlockingFilter2.prepare(normalSpec);
-    *dcBlockingFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(normalSpec.sampleRate, DSPConstants::DC_BLOCKING_FREQ);
+    *dcBlockingFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(normalSpec.sampleRate, DSPConstants::DC_BLOCKING_FREQ);
     dcBlockingFilter2.reset();
 
     // Compression crossover filters (normal sample rate)
@@ -563,6 +575,13 @@ void PluginProcessor::releaseResources()
     preHighPassFilter.reset();
     dcBlockingFilter.reset();
     dcBlockingFilter2.reset();
+
+    // Reset manual DC blocker state
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        manualDCBlockerPrevInput[ch] = 0.0f;
+        manualDCBlockerPrevOutput[ch] = 0.0f;
+    }
 }
 
 #ifndef JucePlugin_PreferredChannelConfigurations
@@ -743,7 +762,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         smoothedGainReduction.reset(currentSR, DSPConstants::COMP_GR_SMOOTH_TIME_S);
 
         // Update normal-rate DC blocking filter
-        *dcBlockingFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(currentSR, DSPConstants::DC_BLOCKING_FREQ);
+        *dcBlockingFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(currentSR, DSPConstants::DC_BLOCKING_FREQ);
 
         // Force update of all dynamic filters on next use
         lastCompCrossoverFreq = -1.0f;
@@ -909,26 +928,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         return;
     }
 
-    // DEBUG: Check for NaN after oversampling
-    bool hasNaNAfterOversampling = false;
-    for (size_t ch = 0; ch < oversampledBlock.getNumChannels(); ++ch)
-    {
-        const float* data = oversampledBlock.getChannelPointer(ch);
-        for (size_t i = 0; i < actualOversampledSamples; ++i)
-        {
-            if (std::isnan(data[i]) || std::isinf(data[i]))
-            {
-                hasNaNAfterOversampling = true;
-                break;
-            }
-        }
-        if (hasNaNAfterOversampling) break;
-    }
-    if (hasNaNAfterOversampling)
-    {
-        std::cout << "NaN DETECTED after oversampling!\n";
-    }
-
     // CRITICAL FIX: Manual linear interpolation for parameters consumed in oversampled domain
     // Calculate step size from LAST block's final value to THIS block's target value
     const float gainDelta = (inputGain - lastInputGain) / static_cast<float>(actualOversampledSamples);
@@ -937,15 +936,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Start from last block's values
     float currentInputGain = lastInputGain;
     float currentDrive = lastDistortionDrive;
-
-    // DEBUG: Check for NaN in parameters
-    if (std::isnan(inputGain) || std::isnan(distortionDrive) || std::isnan(gainDelta) || std::isnan(driveDelta))
-    {
-        std::cout << "NaN in parameters! inputGain=" << inputGain
-            << ", distortionDrive=" << distortionDrive
-            << ", gainDelta=" << gainDelta
-            << ", driveDelta=" << driveDelta << "\n";
-    }
 
     // DEBUG: Log the delta calculations
     if (++deltaLogCounter % 100 == 0)
@@ -983,7 +973,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         *lowPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(oversampledSR, crossoverFreq);
         *highPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(oversampledSR, crossoverFreq);
         *highPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(oversampledSR, crossoverFreq);
-        *dcBlockingFilter.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(oversampledSR, DSPConstants::DC_BLOCKING_FREQ);
+        *dcBlockingFilter.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(oversampledSR, DSPConstants::DC_BLOCKING_FREQ);
         lastOversampledSampleRate = oversampledSR;
 
         juce::Logger::writeToLog("Updated distortion filters for oversampled rate: " + juce::String(oversampledSR));
@@ -1005,7 +995,8 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         else if (preHighPassFilter.state)
         {
             // Update coefficients IN-PLACE (dereference both sides)
-            *preHighPassFilter.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(oversampledSR, highPassFreq);
+            // CRITICAL: Use first-order filter for numerical stability at low frequencies
+            *preHighPassFilter.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(oversampledSR, highPassFreq);
             lastHighPassFreq = highPassFreq;
         }
         else
@@ -1014,73 +1005,11 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         }
     }
 
-    // DEBUG: Check for NaN BEFORE pre-highpass filter
-    bool hasNaNBeforePreFilter = false;
-    for (size_t ch = 0; ch < oversampledBlock.getNumChannels(); ++ch)
-    {
-        const float* data = oversampledBlock.getChannelPointer(ch);
-        for (size_t i = 0; i < actualOversampledSamples; ++i)
-        {
-            if (std::isnan(data[i]) || std::isinf(data[i]))
-            {
-                hasNaNBeforePreFilter = true;
-                break;
-            }
-        }
-        if (hasNaNBeforePreFilter) break;
-    }
-    if (hasNaNBeforePreFilter)
-    {
-        std::cout << "WARNING: NaN detected BEFORE pre-highpass filter (from oversampling)!\n";
-        // Clear the buffer before filtering
-        for (size_t ch = 0; ch < oversampledBlock.getNumChannels(); ++ch)
-        {
-            float* data = oversampledBlock.getChannelPointer(ch);
-            for (size_t i = 0; i < actualOversampledSamples; ++i)
-                data[i] = 0.0f;
-        }
-    }
-
     // Pre-filtering (only if state is valid)
     if (preHighPassFilter.state)
         preHighPassFilter.process(juce::dsp::ProcessContextReplacing<float>(oversampledBlock));
     else
         juce::Logger::writeToLog("ERROR: Skipping pre-highpass filter - state is null!");
-
-    // DEBUG: Check for NaN after pre-highpass filter
-    bool hasNaNAfterPreFilter = false;
-    for (size_t ch = 0; ch < oversampledBlock.getNumChannels(); ++ch)
-    {
-        const float* data = oversampledBlock.getChannelPointer(ch);
-        for (size_t i = 0; i < actualOversampledSamples; ++i)
-        {
-            if (std::isnan(data[i]) || std::isinf(data[i]))
-            {
-                hasNaNAfterPreFilter = true;
-                break;
-            }
-        }
-        if (hasNaNAfterPreFilter) break;
-    }
-    if (hasNaNAfterPreFilter)
-    {
-        std::cout << "NaN DETECTED after pre-highpass filter! Resetting filter and clearing buffer.\n";
-
-        // CRITICAL FIX: Reset the filter to clear corrupted state
-        if (preHighPassFilter.state)
-        {
-            preHighPassFilter.reset();
-            juce::Logger::writeToLog("Pre-highpass filter state reset due to NaN detection");
-        }
-
-        // Clear the buffer to prevent NaN propagation
-        for (size_t ch = 0; ch < oversampledBlock.getNumChannels(); ++ch)
-        {
-            float* data = oversampledBlock.getChannelPointer(ch);
-            for (size_t i = 0; i < actualOversampledSamples; ++i)
-                data[i] = 0.0f;
-        }
-    }
 
     const size_t numSamples = oversampledBlock.getNumSamples();
     const size_t numChannels = oversampledBlock.getNumChannels();
@@ -1251,13 +1180,14 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     oversampling->processSamplesDown(inputBlock);
 
     // Check buffer after downsampling
-    float maxAfterDownsample = 0.0f;
-    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-        for (int i = 0; i < buffer.getNumSamples(); ++i)
-            maxAfterDownsample = juce::jmax(maxAfterDownsample, std::abs(buffer.getSample(ch, i)));
-
     if (shouldLog)
+    {
+        float maxAfterDownsample = 0.0f;
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            for (int i = 0; i < buffer.getNumSamples(); ++i)
+                maxAfterDownsample = juce::jmax(maxAfterDownsample, std::abs(buffer.getSample(ch, i)));
         juce::Logger::writeToLog("After downsample peak: " + juce::String(maxAfterDownsample, 4));
+    }
 
     // Parallel compression (LA-2A style, normal sample rate)
     if (compEnabled && compPeakReduction > 0.0f)
@@ -1336,9 +1266,31 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         }
     }
 
-    // DC blocking filter #2 (after compression, normal sample rate)
-    auto normalBlock = juce::dsp::AudioBlock<float>(buffer);
-    dcBlockingFilter2.process(juce::dsp::ProcessContextReplacing<float>(normalBlock));
+    // Manual DC blocker - simple one-pole filter that's extremely stable
+    // y[n] = x[n] - x[n-1] + R * y[n-1], where R ≈ 0.995 for ~35Hz cutoff at 44.1kHz
+    constexpr float R = 0.995f;  // Higher = lower cutoff, more stable
+    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+    {
+        auto* data = buffer.getWritePointer(ch);
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+        {
+            const float input = data[i];
+            const float output = input - manualDCBlockerPrevInput[ch] + R * manualDCBlockerPrevOutput[ch];
+
+            // Safety check for NaN/Inf (should never happen with this simple filter)
+            if (std::isnan(output) || std::isinf(output))
+            {
+                data[i] = 0.0f;
+                manualDCBlockerPrevOutput[ch] = 0.0f;
+            }
+            else
+            {
+                data[i] = output;
+                manualDCBlockerPrevOutput[ch] = output;
+            }
+            manualDCBlockerPrevInput[ch] = input;
+        }
+    }
 
     // Apply output gain to the final downsampled result
     for (int sample = 0; sample < buffer.getNumSamples(); ++sample)

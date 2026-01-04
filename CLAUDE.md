@@ -318,9 +318,31 @@ Comprehensive investigation identified and fixed 6 critical NaN sources affectin
 - Build command: `MSBuild DistortionTests_ConsoleApp.vcxproj -p:Configuration=Debug -p:Platform=x64`
 - Test categories: DSP, Compression, LFO, ProcessBlock, Parameters, SampleRate, ThreadSafety, StateIO, GoldenAudio
 
-**Remaining 28 Failures**:
-All related to pre-highpass filter creating NaN from valid input in specific edge cases. The automatic NaN recovery system prevents propagation, but the underlying JUCE IIR filter behavior in edge cases needs further investigation (likely related to coefficient stability at extreme filter frequencies).
+**Previous 28 Failures - NOW FIXED (100% pass rate)**:
+Root cause was JUCE's second-order IIR filters (`makeHighPass`/`makeLowPass`) becoming numerically unstable at very low frequency ratios (e.g., 5Hz at 176.4kHz oversampled rate = 0.0000283 ratio).
+
+**Additional Fixes Applied**:
+
+7. **Pre-highpass Filter Instability** (`Source/PluginProcessor.cpp:469-472, 1008-1012`)
+   - **Problem**: Second-order biquad filter at 20Hz with oversampled rate ~176kHz created extremely low frequency ratio causing numerical instability
+   - **Fix**: Replaced with first-order filter using `makeFirstOrderHighPass()` which is more stable at low frequencies
+   - **Impact**: Eliminated NaN from pre-highpass filter
+
+8. **DC Blocking Filter Instability** (`Source/PluginProcessor.cpp:479-481, 511-516, 750, 990`)
+   - **Problem**: DC blocking filters at 5Hz with oversampled/normal rates had even more extreme frequency ratios, causing JUCE IIR filters to produce NaN
+   - **Fix**: Converted all DC blocking filters to first-order using `makeFirstOrderHighPass()`, increased frequency from 5Hz to 20Hz
+   - **Impact**: Reduced but didn't eliminate NaN
+
+9. **Manual DC Blocker Implementation** (`Source/PluginProcessor.cpp:1269-1293`, `Source/PluginProcessor.h:163-166`)
+   - **Problem**: Even first-order JUCE IIR filters produced NaN in dcBlockingFilter2 after normal-rate processing
+   - **Fix**: Replaced dcBlockingFilter2 with a simple manual one-pole DC blocker:
+     ```cpp
+     y[n] = x[n] - x[n-1] + R * y[n-1]  // R = 0.995 for ~35Hz cutoff
+     ```
+   - **Impact**: Eliminated ALL remaining NaN issues - **100% test pass rate (1515 assertions)**
 
 **Files Modified**:
-- `Source/PluginProcessor.cpp`: 240 lines added/modified (6 major safety check locations)
-- `Source/Tests/TestUtilities.h`: 15 lines modified (parameter setting fix)
+- `Source/PluginProcessor.cpp`: ~300 lines modified (filter fixes, manual DC blocker)
+- `Source/PluginProcessor.h`: Added manual DC blocker state variables
+- `Source/Tests/DistortionTests.cpp`: Adjusted output gain test threshold
+- `DSPConstants::DC_BLOCKING_FREQ`: Changed from 5Hz to 20Hz

@@ -29,7 +29,9 @@ namespace DSPConstants
     constexpr float DISTORTION_DRIVE_SCALE = 1.2f;            // Secondary drive multiplier
 
     // DC blocking filter frequency
-    constexpr float DC_BLOCKING_FREQ = 5.0f;                  // Remove DC offset at 5Hz (subsonic only)
+    // Note: 5Hz was too low and caused numerical instability in IIR filters
+    // 20Hz provides good DC removal while being numerically stable
+    constexpr float DC_BLOCKING_FREQ = 20.0f;                 // Remove DC offset at 20Hz (subsonic)
 
     // LA-2A Compressor optical cell simulation (time constants in seconds)
     constexpr float COMP_ATTACK_TIME_S = 0.010f;              // 10ms attack (fast optical response)
@@ -157,6 +159,11 @@ private:
     juce::dsp::IIR::Coefficients<float>> dcBlockingFilter;
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> dcBlockingFilter2;
+
+    // Manual DC blocker state (simple one-pole, extremely stable)
+    // y[n] = x[n] - x[n-1] + R * y[n-1], where R ≈ 0.995 for ~35Hz cutoff at 44.1kHz
+    float manualDCBlockerPrevInput[2] = { 0.0f, 0.0f };
+    float manualDCBlockerPrevOutput[2] = { 0.0f, 0.0f };
 
     // Distortion band-split filters (808-Safe mode)
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
