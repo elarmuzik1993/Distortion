@@ -419,6 +419,56 @@ private:
     }
 };
 
+// Invisible XY Morph Pad overlay for oscilloscope
+class XYMorphPad : public juce::Component
+{
+public:
+    XYMorphPad()
+    {
+        setInterceptsMouseClicks(true, false);
+        setOpaque(false);
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        if (e.mods.isLeftButtonDown())
+        {
+            isDragging = true;
+            updatePosition(e);
+        }
+    }
+
+    void mouseDrag(const juce::MouseEvent& e) override
+    {
+        if (isDragging)
+            updatePosition(e);
+    }
+
+    void mouseUp(const juce::MouseEvent&) override
+    {
+        isDragging = false;
+    }
+
+    // Callback when position changes
+    std::function<void(float x, float y)> onPositionChanged;
+
+private:
+    bool isDragging = false;
+
+    void updatePosition(const juce::MouseEvent& e)
+    {
+        auto bounds = getLocalBounds().toFloat();
+        if (bounds.getWidth() < 1 || bounds.getHeight() < 1)
+            return;
+
+        float normX = juce::jlimit(0.0f, 1.0f, e.position.x / bounds.getWidth());
+        float normY = juce::jlimit(0.0f, 1.0f, 1.0f - e.position.y / bounds.getHeight()); // Invert Y
+
+        if (onPositionChanged)
+            onPositionChanged(normX, normY);
+    }
+};
+
 // Custom LookAndFeel for neon red ComboBox styling
 class ComboBoxLookAndFeel : public juce::LookAndFeel_V4
 {
@@ -538,6 +588,7 @@ private:
     
     PluginProcessor& audioProcessor;
     Oscilloscope oscilloscope;
+    XYMorphPad xyMorphPad;  // Invisible XY pad overlay on oscilloscope
     GainReductionMeter gainReductionMeter;
     CheckboxLookAndFeel checkboxLookAndFeel;
     ComboBoxLookAndFeel comboBoxLookAndFeel;  // Neon red styling for dropdowns
@@ -637,6 +688,7 @@ private:
     void updateLockIcons();
     void setupKnobRightClick(juce::Component& component, const juce::String& paramID);
     void updateCompressionVisibility();
+    void morphDistortionParameters(float x, float y);  // XY Morph Pad callback
 
     // Preset management methods
     void savePreset(const juce::String& presetName);

@@ -15,6 +15,14 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     : AudioProcessorEditor(&p), audioProcessor(p), oscilloscope(p), gainReductionMeter(p)
 {
     addAndMakeVisible(oscilloscope);
+
+    // XY Morph Pad overlay (invisible, on top of oscilloscope)
+    addAndMakeVisible(xyMorphPad);
+    xyMorphPad.onPositionChanged = [this](float x, float y)
+    {
+        morphDistortionParameters(x, y);
+    };
+
     addAndMakeVisible(gainReductionMeter);
 
     // Setup title label
@@ -442,6 +450,10 @@ void PluginEditor::resized()
 
     // ========== OSCILLOSCOPE (below title, above controls) ==========
     oscilloscope.setBounds(0, titleHeight, getWidth(), getHeight() - titleHeight - bottomControlsHeight);
+
+    // XY Morph Pad - same bounds as oscilloscope (invisible overlay)
+    xyMorphPad.setBounds(oscilloscope.getBounds());
+
     const int labelHeight = 20;
 
     // Calculate available space for controls (overlaid on oscilloscope)
@@ -738,6 +750,43 @@ void PluginEditor::updateCompressionVisibility()
     compCrossoverLock.setVisible(visible);
     compRatioLock.setVisible(visible);
     compEnableLock.setVisible(visible);
+}
+
+void PluginEditor::morphDistortionParameters(float x, float y)
+{
+    // Helper lambda to set parameters (respecting locks)
+    auto setParam = [this](const juce::String& paramID, float value)
+    {
+        if (isParameterLocked(paramID)) return;  // Respect locks
+
+        if (auto* param = audioProcessor.parameters.getParameter(paramID))
+        {
+            param->setValueNotifyingHost(param->convertTo0to1(value));
+        }
+    };
+
+    // Morph formulas based on XY position
+    // X = distortion intensity/character (left=subtle, right=aggressive)
+    // Y = brightness/filter (bottom=dark, top=bright)
+
+    // Distortion Amount: X drives it heavily, Y adds slight boost
+    // Range: 0-100
+    setParam("distortionAmount", x * 80.0f + y * 20.0f);
+
+    // Input Gain: X drives input harder (30-70 range for headroom)
+    setParam("inputGain", 30.0f + x * 40.0f);
+
+    // Hi-Pass Filter: Y controls brightness (20-300Hz)
+    setParam("highPassFreq", 20.0f + y * 280.0f);
+
+    // Dist Mix: Both axes contribute (50-100%)
+    setParam("distMix", 50.0f + x * 25.0f + y * 25.0f);
+
+    // Waveshaper Mix: X is main driver (0-80%)
+    setParam("waveshaperMix", x * 60.0f + y * 20.0f);
+
+    // Output Gain: Compensate for increased distortion (70-30 inverse)
+    setParam("outputGain", 70.0f - x * 30.0f - y * 10.0f);
 }
 
 void PluginEditor::randomizeAllParameters()
