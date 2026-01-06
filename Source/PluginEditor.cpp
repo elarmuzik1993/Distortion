@@ -551,10 +551,17 @@ void PluginEditor::resized()
         compRatioComboBox.setBounds(dropdownX, compKnobY + 15, dropdownWidth, 20);
         compRatioLabel.setBounds(dropdownX, compKnobY + 37, dropdownWidth, 12);
 
-        // Enable toggle
-        const int toggleX = dropdownX + dropdownWidth + 15;
+        // ========== ENABLE TOGGLE (LEFT OF PEAK REDUCTION) ==========
         const int toggleSize = 24;
+        const int toggleX = compStartX - toggleSize - 15;
         compEnableToggle.setBounds(toggleX, compKnobY + 15, toggleSize, toggleSize);
+
+        // ========== GAIN REDUCTION METER (RIGHT, AFTER DROPDOWN - SLIM) ==========
+        const int meterWidth = 20;  // Slim meter
+        const int meterHeight = 55;
+        const int meterX = dropdownX + dropdownWidth + 15;
+        const int meterY = compKnobY + 5;
+        gainReductionMeter.setBounds(meterX, meterY, meterWidth, meterHeight);
 
         // Position compression lock icons
         const int compLockSize = 14;
@@ -571,13 +578,6 @@ void PluginEditor::resized()
                                compKnobY + 15, compLockSize, compLockSize);
         compEnableLock.setBounds(toggleX + toggleSize - compLockSize,
                                 compKnobY + 15, compLockSize, compLockSize);
-
-        // ========== GAIN REDUCTION METER (LEFT OF PEAK REDUCTION) ==========
-        const int meterWidth = 40;
-        const int meterHeight = 65;
-        const int meterX = compStartX - meterWidth - 15;
-        const int meterY = compressionArea.getY() + 5;
-        gainReductionMeter.setBounds(meterX, meterY, meterWidth, meterHeight);
     }
     // ===========================================================
 
