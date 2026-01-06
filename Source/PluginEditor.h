@@ -420,13 +420,20 @@ private:
 };
 
 // Invisible XY Morph Pad overlay for oscilloscope
-class XYMorphPad : public juce::Component
+// Uses timer-based smoothing to prevent zipper noise during fast mouse movements
+class XYMorphPad : public juce::Component, public juce::Timer
 {
 public:
     XYMorphPad()
     {
         setInterceptsMouseClicks(true, false);
         setOpaque(false);
+        startTimerHz(30);  // 30Hz update rate for smooth parameter changes
+    }
+
+    ~XYMorphPad() override
+    {
+        stopTimer();
     }
 
     void mouseDown(const juce::MouseEvent& e) override
@@ -434,14 +441,19 @@ public:
         if (e.mods.isLeftButtonDown())
         {
             isDragging = true;
-            updatePosition(e);
+            updateTargetPosition(e);
+            // Snap to target immediately on initial click (no lag)
+            currentX = targetX;
+            currentY = targetY;
+            if (onPositionChanged)
+                onPositionChanged(currentX, currentY);
         }
     }
 
     void mouseDrag(const juce::MouseEvent& e) override
     {
         if (isDragging)
-            updatePosition(e);
+            updateTargetPosition(e);  // Only updates target, timer does smoothing
     }
 
     void mouseUp(const juce::MouseEvent&) override
@@ -449,23 +461,35 @@ public:
         isDragging = false;
     }
 
+    void timerCallback() override
+    {
+        if (isDragging && onPositionChanged)
+        {
+            // Smooth interpolation toward target position
+            constexpr float smoothing = 0.3f;  // 0-1, higher = faster response
+            currentX += (targetX - currentX) * smoothing;
+            currentY += (targetY - currentY) * smoothing;
+
+            onPositionChanged(currentX, currentY);
+        }
+    }
+
     // Callback when position changes
     std::function<void(float x, float y)> onPositionChanged;
 
 private:
     bool isDragging = false;
+    float targetX = 0.0f, targetY = 0.0f;    // Where mouse is pointing
+    float currentX = 0.0f, currentY = 0.0f;  // Smoothed output position
 
-    void updatePosition(const juce::MouseEvent& e)
+    void updateTargetPosition(const juce::MouseEvent& e)
     {
         auto bounds = getLocalBounds().toFloat();
         if (bounds.getWidth() < 1 || bounds.getHeight() < 1)
             return;
 
-        float normX = juce::jlimit(0.0f, 1.0f, e.position.x / bounds.getWidth());
-        float normY = juce::jlimit(0.0f, 1.0f, 1.0f - e.position.y / bounds.getHeight()); // Invert Y
-
-        if (onPositionChanged)
-            onPositionChanged(normX, normY);
+        targetX = juce::jlimit(0.0f, 1.0f, e.position.x / bounds.getWidth());
+        targetY = juce::jlimit(0.0f, 1.0f, 1.0f - e.position.y / bounds.getHeight()); // Invert Y
     }
 };
 
