@@ -619,8 +619,8 @@ private:
     juce::Label titleLabel;  // Title text "MONOLIT BEATZ"
 
     // UI Components
-    CustomKnob inputGainSlider, distortionAmountSlider, outputGainSlider, highPassFreqSlider, distMixSlider;
-    juce::Label inputGainLabel, distortionAmountLabel, outputGainLabel, highPassFreqLabel, distMixLabel;
+    CustomKnob inputGainSlider, distortionAmountSlider, outputGainSlider, highPassFreqSlider, distMixSlider, toneSlider;
+    juce::Label inputGainLabel, distortionAmountLabel, outputGainLabel, highPassFreqLabel, distMixLabel, toneLabel;
     
     CustomKnob lfoRateSlider, lfoDepthSlider;
     juce::Label lfoRateLabel, lfoDepthLabel;
@@ -686,6 +686,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputGainAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> highPassFreqAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> distMixAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> toneAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bandSplitAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> clipTypeAttachment;
     juce::Image backgroundImage;

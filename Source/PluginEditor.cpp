@@ -50,6 +50,8 @@ PluginEditor::PluginEditor(PluginProcessor& p)
         distortionAmountAttachment, "distortionAmount");
     setupSlider(distMixSlider, distMixLabel, "Dist Mix",
         distMixAttachment, "distMix");
+    setupSlider(toneSlider, toneLabel, "Tone",
+        toneAttachment, "tone");
     setupSlider(outputGainSlider, outputGainLabel, "Output Gain",
         outputGainAttachment, "outputGain");
     setupSlider(highPassFreqSlider, highPassFreqLabel, "Hi-Pass Filter",
@@ -635,6 +637,11 @@ void PluginEditor::resized()
     distortionAmountLabel.setBounds(currentX, rowY + knobSize + 5, knobSize, labelHeight);
     distortionAmountLock.setBounds(currentX + knobSize - 16 - 5, rowY + 5, 16, 16);
     currentX += knobSize + controlSpacing;
+
+    // Tone (50x50) - post-distortion darkness/brightness
+    toneSlider.setBounds(currentX, rowY + smallKnobYOffset, smallKnobSize, smallKnobSize);
+    toneLabel.setBounds(currentX, rowY + smallKnobYOffset + smallKnobSize + 2, smallKnobSize, 14);
+    currentX += smallKnobSize + controlSpacing;
 
     // Wave Mix (50x50)
     waveshaperSlider.setBounds(currentX, rowY + smallKnobYOffset, smallKnobSize, smallKnobSize);

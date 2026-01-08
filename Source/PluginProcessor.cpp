@@ -47,12 +47,13 @@ PluginProcessor::PluginProcessor()
     compWetDryParam = parameters.getRawParameterValue("compWetDry");
     compCrossoverParam = parameters.getRawParameterValue("compCrossover");
     distMixParam = parameters.getRawParameterValue("distMix");
+    toneParam = parameters.getRawParameterValue("tone");
     // Verify all parameters were found
     jassert(inputGainParam && outputGainParam && distortionAmountParam
         && highPassFreqParam && bandSplitEnabledParam && clipTypeParam
         && lfoRateParam && lfoDepthParam && lfoWaveformParam && waveshaperMixParam
         && compPeakReductionParam && compMakeupGainParam && compRatioParam && compEnabledParam && compWetDryParam && compCrossoverParam
-        && distMixParam);
+        && distMixParam && toneParam);
 
 }
 
@@ -487,6 +488,13 @@ if (!oversampling || currentNumChannels != numChannels) {
     *dcBlockingFilter.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(spec.sampleRate, DSPConstants::DC_BLOCKING_FREQ);
     dcBlockingFilter.reset();
 
+    // Post-distortion tone filter (oversampled rate) - lowpass for darkness/brightness control
+    toneFilter.prepare(spec);
+    const float initialToneFreq = toneParam ? toneParam->load() : 20000.0f;
+    *toneFilter.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, initialToneFreq);
+    toneFilter.reset();
+    lastToneFreq = initialToneFreq;
+
     // 808-Safe distortion filters (Linkwitz-Riley crossover, oversampled domain)
     const float crossoverFreq = DSPConstants::DISTORTION_CROSSOVER_FREQ;
 
@@ -568,6 +576,7 @@ void PluginProcessor::releaseResources()
     oversampling.reset();
     preHighPassFilter.reset();
     dcBlockingFilter.reset();
+    toneFilter.reset();
 
     // Reset manual DC blocker state
     for (int ch = 0; ch < 2; ++ch)
@@ -1166,6 +1175,26 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // extremely resonant poles that interact badly with the downsampler
     // DC blocking is applied AFTER downsampling via manual one-pole DC blocker
 
+    // ========== POST-DISTORTION TONE FILTER (oversampled domain) ==========
+    // Apply lowpass filter for darkness/brightness control (2-20kHz)
+    const float toneFreq = toneParam ? toneParam->load() : 20000.0f;
+
+    // Update tone filter coefficients if frequency changed
+    if (std::abs(toneFreq - lastToneFreq) > 1.0f && toneFilter.state != nullptr)
+    {
+        const double toneSampleRate = currentSampleRate * oversamplingFactor;
+        // Clamp frequency to valid range (well below Nyquist)
+        const float clampedToneFreq = juce::jlimit(2000.0f, std::min(20000.0f, (float)(toneSampleRate * 0.45)), toneFreq);
+        *toneFilter.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(toneSampleRate, clampedToneFreq);
+        lastToneFreq = toneFreq;
+    }
+
+    // Apply tone filter (only if not at maximum/bypass)
+    if (toneFreq < 19500.0f && toneFilter.state != nullptr)
+    {
+        toneFilter.process(juce::dsp::ProcessContextReplacing<float>(oversampledBlock));
+    }
+
     // Downsample back into original buffer
     oversampling->processSamplesDown(inputBlock);
 
@@ -1177,6 +1206,61 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             for (int i = 0; i < buffer.getNumSamples(); ++i)
                 maxAfterDownsample = juce::jmax(maxAfterDownsample, std::abs(buffer.getSample(ch, i)));
         juce::Logger::writeToLog("After downsample peak: " + juce::String(maxAfterDownsample, 4));
+    }
+
+    // ========== WAVESHAPER (before compression for more musical interaction) ==========
+    // Smooth harmonics with buttery fuzz and pleasant hiss
+    const float waveshaperMix = *waveshaperMixParam;
+    if (waveshaperMix > 0.0f)
+    {
+        const float wetAmount = waveshaperMix / 100.0f;  // 0.0 to 1.0
+        const float dryAmount = 1.0f - wetAmount;
+
+        for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+        {
+            auto* channelData = buffer.getWritePointer(channel);
+            for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+            {
+                const float dry = channelData[sample];
+                float wet = dry;
+
+                // Stage 1: Gentle pre-emphasis for detail (3x instead of 8x)
+                wet *= 3.0f;
+
+                // Stage 2: Smooth tube-like saturation with even harmonics
+                const float x2 = wet * wet;  // 2nd harmonic
+                wet = wet + (x2 * 0.15f * juce::dsp::FastMathApproximations::tanh(wet));
+
+                // Stage 3: Buttery soft-knee saturation
+                const float absWet = std::abs(wet);
+                if (absWet > 0.4f)
+                {
+                    const float excess = absWet - 0.4f;
+                    const float compressed = 0.4f + std::tanh(excess * 1.2f) * 0.4f;
+                    wet = (wet > 0.0f ? compressed : -compressed);
+                }
+
+                // Stage 4: Add smooth 3rd harmonic for richness
+                wet = wet + std::sin(wet * 3.0f) * 0.08f;
+
+                // Stage 5: Pleasant tape-like hiss (subtle high-frequency enhancement)
+                const float hiss = waveshaperRandom.nextFloat() * 0.003f - 0.0015f;
+                wet += hiss * absWet;
+
+                // Stage 6: Gentle wave folding for silky harmonics
+                wet = wet + std::sin(wet * 1.5f) * 0.12f;
+
+                // Stage 7: Final smooth saturation
+                wet = std::tanh(wet * 0.85f);
+
+                // Stage 8: Subtle asymmetry for analog character
+                if (wet > 0.0f)
+                    wet *= 0.98f;
+
+                // Blend dry and wet signals
+                channelData[sample] = dryAmount * dry + wetAmount * wet;
+            }
+        }
     }
 
     // Parallel compression (LA-2A style, normal sample rate)
@@ -1293,64 +1377,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         {
             auto* channelData = buffer.getWritePointer(channel);
             channelData[sample] *= currentOutputGain;
-        }
-    }
-
-    // MUSICAL WAVESHAPER - Smooth harmonics with buttery fuzz and pleasant hiss
-    const float waveshaperMix = *waveshaperMixParam;
-    if (waveshaperMix > 0.0f)
-    {
-        const float wetAmount = waveshaperMix / 100.0f;  // 0.0 to 1.0
-        const float dryAmount = 1.0f - wetAmount;
-
-        // Using instance member random generator for tape-like hiss (not static)
-
-        for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
-        {
-            auto* channelData = buffer.getWritePointer(channel);
-            for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
-            {
-                const float dry = channelData[sample];
-                float wet = dry;
-
-                // Stage 1: Gentle pre-emphasis for detail (3x instead of 8x)
-                wet *= 3.0f;
-
-                // Stage 2: Smooth tube-like saturation with even harmonics
-                // Generates 2nd harmonic (warm, musical)
-                const float x2 = wet * wet;  // 2nd harmonic
-                wet = wet + (x2 * 0.15f * juce::dsp::FastMathApproximations::tanh(wet));
-
-                // Stage 3: Buttery soft-knee saturation
-                const float absWet = std::abs(wet);
-                if (absWet > 0.4f)
-                {
-                    // Smooth compression above threshold
-                    const float excess = absWet - 0.4f;
-                    const float compressed = 0.4f + std::tanh(excess * 1.2f) * 0.4f;
-                    wet = (wet > 0.0f ? compressed : -compressed);
-                }
-
-                // Stage 4: Add smooth 3rd harmonic for richness
-                wet = wet + std::sin(wet * 3.0f) * 0.08f;
-
-                // Stage 5: Pleasant tape-like hiss (subtle high-frequency enhancement)
-                const float hiss = waveshaperRandom.nextFloat() * 0.003f - 0.0015f;  // Very subtle
-                wet += hiss * absWet;  // Program-dependent hiss
-
-                // Stage 6: Gentle wave folding for silky harmonics
-                wet = wet + std::sin(wet * 1.5f) * 0.12f;
-
-                // Stage 7: Final smooth saturation
-                wet = std::tanh(wet * 0.85f);
-
-                // Stage 8: Subtle asymmetry for analog character
-                if (wet > 0.0f)
-                    wet *= 0.98f;  // Slightly compress positive peaks
-
-                // Blend dry and wet signals
-                channelData[sample] = dryAmount * dry + wetAmount * wet;
-            }
         }
     }
 
@@ -1615,6 +1641,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         "Distortion Mix",
         juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f),
         100.0f));  // Default 100 = 100% wet
+
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "tone", 1 },
+        "Tone",
+        juce::NormalisableRange<float>(2000.0f, 20000.0f, 1.0f, 0.5f),  // Skew for better low-end control
+        20000.0f));  // Default 20kHz = bright/bypass
 
     return { params.begin(), params.end() };
 }

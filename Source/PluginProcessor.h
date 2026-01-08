@@ -173,6 +173,10 @@ private:
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> highPassFilter2;
 
+    // Post-distortion tone filter (oversampled rate)
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> toneFilter;
+
     // Compression band-split filters (normal sample rate)
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> compLowPassFilter1;
@@ -211,6 +215,7 @@ private:
     std::atomic<float>* compWetDryParam = nullptr;      // 0=100% dry, 100=100% wet
     std::atomic<float>* compCrossoverParam = nullptr;   // 150-350Hz adjustable split
     std::atomic<float>* distMixParam = nullptr;         // Distortion wet/dry mix (0-100)
+    std::atomic<float>* toneParam = nullptr;            // Post-distortion tone (2000-20000Hz)
 
     // Compressor state variables (LA-2A optical cell simulation)
     // Optical cell envelope follower (T4 cell)
@@ -249,6 +254,7 @@ private:
     // Cached filter parameters to avoid unnecessary coefficient updates
     float lastHighPassFreq = -1.0f;
     float lastCompCrossoverFreq = -1.0f;
+    float lastToneFreq = -1.0f;
     double lastSampleRate = 0.0;  // Track sample rate changes
     double lastOversampledSampleRate = 0.0;  // Track oversampled rate for distortion filters
 
