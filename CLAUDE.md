@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Distortion** is a professional JUCE audio plugin by Elar Music Audio featuring multi-stage distortion processing, LA2A-style optical compression, and advanced signal processing. The plugin supports VST3 and Standalone formats.
+**Distortion** is a professional JUCE audio plugin by Elar Music Audio featuring multi-stage distortion processing, LA2A-style optical compression, and advanced signal processing. The plugin supports VST3, VST2, and Standalone formats.
 
 ## Build System
 
@@ -147,12 +147,17 @@ The compressor simulates a Teletronix LA-2A optical cell (T4 cell) with:
 - **Tube harmonics**: 15% blend with 1.5x drive for analog warmth
 - **Parallel compression**: Wet/Dry mix control (0-100%)
 - **Band-split mode**: Independent crossover (150-350Hz) from distortion crossover
+- **Oversampled band-split**: Band-split filters operate in oversampled domain for improved anti-aliasing
 
 **State Variables** (`PluginProcessor` private):
 - `compEnvelopeState`: Optical cell charge/discharge state
 - `compRmsHistory`: Program-dependent RMS tracking
 - `smoothedGainReduction`: Visual smoothing for gain reduction meter (500ms)
 - `tubeWarmth`: Tube harmonic state accumulator
+
+**Filter Architecture**:
+- Normal rate filters (deprecated): `compLowPassFilter1/2`, `compHighPassFilter1/2`
+- Oversampled filters (active): `compLowPassFilter1/2Oversampled`, `compHighPassFilter1/2Oversampled` for band-split at 4x sample rate
 
 ### GUI Architecture
 
@@ -181,12 +186,14 @@ The compressor simulates a Teletronix LA-2A optical cell (T4 cell) with:
 
 ### DSP Constants
 
-All processing constants centralized in `DSPConstants` namespace (PluginProcessor.h:18-74):
+All processing constants centralized in `DSPConstants` namespace (PluginProcessor.h:18-79):
 - **Oversampling**: 4x factor, 2 polyphase IIR stages
 - **Pre-Distortion Compression**: Attack 1ms, Release 50ms, 2.5:1 ratio at -12dB, 6dB knee
 - **Distortion Crossover**: 150Hz (fixed Linkwitz-Riley 4th order for band-split)
 - **LA2A Compression**: Attack 10ms, Release 500ms, 3:1 or 12:1 ratio, 2dB knee
 - **LA2A Compression Crossover**: 150-350Hz adjustable (Linkwitz-Riley 4th order)
+- **ISP Protection**: Soft clipper at -0.3dBFS with 0.5dB knee (prevents inter-sample peaks during downsampling)
+- **DC Blocking**: 20Hz high-pass cutoff for stable, low-phase-shift DC removal
 - **Scope/Meter Configuration**: Buffer sizes, refresh rates, decimation factors
 - **Parameter Smoothing**: Gain (20ms), Distortion (150ms), Compression GR (500ms)
 
@@ -298,9 +305,17 @@ for (size_t channel = 0; channel < numChannels; ++channel)
 ## Plugin Formats
 
 - **VST3**: Primary plugin format (builds to `C:\Program Files\Common Files\VST3`)
+- **VST2**: Legacy plugin format for older DAW compatibility
 - **Standalone**: Standalone application for testing without a DAW
 
 ## Recent Architectural Changes
+
+**Current Session Changes (VST2 & LA2A Oversampling)**:
+- **VST2 Format Support**: Added VST2 to CMake build configuration alongside VST3 and Standalone for legacy DAW compatibility
+- **LA2A Oversampled Band-Split**: Implemented band-split filters in oversampled domain for improved anti-aliasing (prevents aliasing artifacts in compression processing)
+  - Added `compLowPassFilter1Oversampled`, `compLowPassFilter2Oversampled`, `compHighPassFilter1Oversampled`, `compHighPassFilter2Oversampled`
+  - Added `compLowBandBufferOversampled`, `compHighBandBufferOversampled`, `compDryBufferOversampled` for oversampled processing
+- **ISP Protection Constants**: Added soft clipper constants (-0.3dBFS threshold, 0.5dB knee) for pre-downsampling clipping to prevent inter-sample peaks
 
 **Latest Session Changes (Pre-Distortion Compression & CMake)**:
 - **Pre-Distortion Transient Tamer**: Added hardcoded compression before distortion (1ms attack, 50ms release, 2.5:1 ratio) to tame transients and make distortion sound richer
