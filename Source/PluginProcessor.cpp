@@ -9,7 +9,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include <memory>
-#include <iostream>
 
 // Include test header in debug builds (tests run from separate test runner)
 #if JUCE_DEBUG
@@ -487,12 +486,6 @@ if (!oversampling || currentNumChannels != numChannels) {
     // Force filter update on first processBlock (especially important for DAW state restoration)
     lastHighPassFreq = -1.0f;
 
-    // DC BLOCKING 1 (oversampled rate)
-    // CRITICAL: Use first-order filter for numerical stability at 5Hz with oversampled rate (~176kHz)
-    dcBlockingFilter.prepare(spec);
-    *dcBlockingFilter.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(spec.sampleRate, DSPConstants::DC_BLOCKING_FREQ);
-    dcBlockingFilter.reset();
-
     // Post-distortion tone filter (oversampled rate) - lowpass for darkness/brightness control
     toneFilter.prepare(spec);
     const float initialToneFreq = toneParam ? toneParam->load() : 20000.0f;
@@ -555,32 +548,6 @@ if (!oversampling || currentNumChannels != numChannels) {
 
     lastCompCrossoverFreqOversampled = compCrossoverFreqInit;
 
-    //  DC BLOCK #2 (Normal Rate - After Compression)
-    juce::dsp::ProcessSpec normalSpec;
-    normalSpec.sampleRate = sampleRate;  // Normal rate, not oversampled
-    normalSpec.maximumBlockSize = static_cast<juce::uint32>(samplesPerBlock);
-    normalSpec.numChannels = static_cast<juce::uint32>(numChannels);
-
-    // Compression crossover filters (normal sample rate)
-    const float compCrossoverFreq = compCrossoverParam ? compCrossoverParam->load() : DSPConstants::DEFAULT_COMP_CROSSOVER;
-
-    compLowPassFilter1.prepare(normalSpec);
-    *compLowPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(normalSpec.sampleRate, compCrossoverFreq);
-    compLowPassFilter1.reset();
-
-    compLowPassFilter2.prepare(normalSpec);
-    *compLowPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(normalSpec.sampleRate, compCrossoverFreq);
-    compLowPassFilter2.reset();
-
-    compHighPassFilter1.prepare(normalSpec);
-    *compHighPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(normalSpec.sampleRate, compCrossoverFreq);
-    compHighPassFilter1.reset();
-
-    compHighPassFilter2.prepare(normalSpec);
-    *compHighPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(normalSpec.sampleRate, compCrossoverFreq);
-    compHighPassFilter2.reset();
-
-
     // Prepare buffers for band-split processing (oversampled size)
     // CRITICAL: JUCE's oversampling can produce variable output sizes depending on:
     // 1. Internal filter latency compensation
@@ -601,11 +568,6 @@ if (!oversampling || currentNumChannels != numChannels) {
         + ", oversamplingLatency: " + juce::String((int)oversamplingLatencySamples)
         + ", allocatedBufferSize: " + juce::String(oversampledBlockSize));
 
-    // Compression buffers (normal sample rate) - kept for compatibility
-    compLowBandBuffer.setSize(numChannels, samplesPerBlock, false, false, true);
-    compHighBandBuffer.setSize(numChannels, samplesPerBlock, false, false, true);
-    compDryBuffer.setSize(numChannels, samplesPerBlock, false, false, true);
-
     // Compression buffers for OVERSAMPLED domain
     compLowBandBufferOversampled.setSize(numChannels, oversampledBlockSize, false, false, true);
     compHighBandBufferOversampled.setSize(numChannels, oversampledBlockSize, false, false, true);
@@ -618,7 +580,6 @@ void PluginProcessor::releaseResources()
 {
     oversampling.reset();
     preHighPassFilter.reset();
-    dcBlockingFilter.reset();
     toneFilter.reset();
 
     // Reset manual DC blocker state
@@ -817,7 +778,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         smoothedGainReduction.reset(currentSR, DSPConstants::COMP_GR_SMOOTH_TIME_S);
 
         // Force update of all dynamic filters on next use
-        lastCompCrossoverFreq = -1.0f;
         lastHighPassFreq = -1.0f;  // Force hi-pass filter update
         lastOversampledSampleRate = 0.0;  // Force distortion filter update
 
@@ -1044,7 +1004,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         *lowPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(oversampledSR, crossoverFreq);
         *highPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(oversampledSR, crossoverFreq);
         *highPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(oversampledSR, crossoverFreq);
-        *dcBlockingFilter.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(oversampledSR, DSPConstants::DC_BLOCKING_FREQ);
         lastOversampledSampleRate = oversampledSR;
 
         juce::Logger::writeToLog("Updated distortion filters for oversampled rate: " + juce::String(oversampledSR));
@@ -1163,7 +1122,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                     // Apply studio distortion
                     float distorted = applyStudioDistortion(inputSample, currentInputGain, currentDrive, clipType);
 
-                    // Wet/Dry mix (DC blocking handled by dcBlockingFilter after distortion)
+                    // Wet/Dry mix (DC blocking handled by manual DC blocker after downsampling)
                     highBandData[sample] = inputSample * (1.0f - mixAmount) + distorted * mixAmount;
                 }
             }
@@ -1208,7 +1167,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                     // Apply studio distortion
                     float distorted = applyStudioDistortion(inputSample, currentInputGain, currentDrive, clipType);
 
-                    // Wet/Dry mix (DC blocking handled by dcBlockingFilter after distortion)
+                    // Wet/Dry mix (DC blocking handled by manual DC blocker after downsampling)
                     channelData[sample] = inputSample * (1.0f - mixAmount) + distorted * mixAmount;
                 }
             }
@@ -1735,8 +1694,6 @@ void PluginProcessor::setStateInformation(const void* data, int sizeInBytes)
         // Reset all filters when loading state to prevent stale coefficients/state
         if (preHighPassFilter.state)
             preHighPassFilter.reset();
-        if (dcBlockingFilter.state)
-            dcBlockingFilter.reset();
         if (lowPassFilter1.state)
             lowPassFilter1.reset();
         if (lowPassFilter2.state)
@@ -1745,14 +1702,6 @@ void PluginProcessor::setStateInformation(const void* data, int sizeInBytes)
             highPassFilter1.reset();
         if (highPassFilter2.state)
             highPassFilter2.reset();
-        if (compLowPassFilter1.state)
-            compLowPassFilter1.reset();
-        if (compLowPassFilter2.state)
-            compLowPassFilter2.reset();
-        if (compHighPassFilter1.state)
-            compHighPassFilter1.reset();
-        if (compHighPassFilter2.state)
-            compHighPassFilter2.reset();
 
         // Reset oversampled compression filters
         if (compLowPassFilter1Oversampled.state)

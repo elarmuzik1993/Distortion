@@ -166,8 +166,6 @@ private:
 
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
     juce::dsp::IIR::Coefficients<float>> preHighPassFilter;
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-    juce::dsp::IIR::Coefficients<float>> dcBlockingFilter;
 
     // Manual DC blocker state (simple one-pole, extremely stable)
     // y[n] = x[n] - x[n-1] + R * y[n-1], where R ≈ 0.995 for ~35Hz cutoff at 44.1kHz
@@ -188,16 +186,6 @@ private:
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> toneFilter;
 
-    // Compression band-split filters (normal sample rate) - DEPRECATED, kept for compatibility
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> compLowPassFilter1;
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> compLowPassFilter2;
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> compHighPassFilter1;
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> compHighPassFilter2;
-
     // LA-2A band-split filters (OVERSAMPLED rate for anti-aliasing)
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> compLowPassFilter1Oversampled;
@@ -210,9 +198,6 @@ private:
 
     juce::AudioBuffer<float> lowBandBuffer;   // For clean low frequencies
     juce::AudioBuffer<float> highBandBuffer;  // For distorted high frequencies
-    juce::AudioBuffer<float> compLowBandBuffer;   // Low band for compression split
-    juce::AudioBuffer<float> compHighBandBuffer;  // High band for compression split
-    juce::AudioBuffer<float> compDryBuffer;       // Dry signal for parallel blend
 
     // Compression buffers for OVERSAMPLED domain
     juce::AudioBuffer<float> compLowBandBufferOversampled;
@@ -289,7 +274,6 @@ private:
 
     // Cached filter parameters to avoid unnecessary coefficient updates
     float lastHighPassFreq = -1.0f;
-    float lastCompCrossoverFreq = -1.0f;
     float lastCompCrossoverFreqOversampled = -1.0f;
     float lastToneFreq = -1.0f;
     double lastSampleRate = 0.0;  // Track sample rate changes
