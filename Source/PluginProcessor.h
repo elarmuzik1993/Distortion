@@ -72,6 +72,10 @@ namespace DSPConstants
     constexpr float PRE_COMP_THRESHOLD_DB = -12.0f;          // -12dB threshold
     constexpr float PRE_COMP_RATIO = 2.5f;                   // 2.5:1 ratio (light compression)
     constexpr float PRE_COMP_KNEE_DB = 6.0f;                 // 6dB soft knee
+
+    // Soft clipper for ISP protection (before downsampling)
+    constexpr float SOFT_CLIP_THRESHOLD_DB = -0.3f;          // -0.3 dBFS ceiling
+    constexpr float SOFT_CLIP_KNEE_DB = 0.5f;                // 0.5 dB soft knee
 }
 
 // Forward declarations for test classes
@@ -184,7 +188,7 @@ private:
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> toneFilter;
 
-    // Compression band-split filters (normal sample rate)
+    // Compression band-split filters (normal sample rate) - DEPRECATED, kept for compatibility
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> compLowPassFilter1;
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
@@ -194,11 +198,26 @@ private:
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> compHighPassFilter2;
 
+    // LA-2A band-split filters (OVERSAMPLED rate for anti-aliasing)
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> compLowPassFilter1Oversampled;
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> compLowPassFilter2Oversampled;
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> compHighPassFilter1Oversampled;
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> compHighPassFilter2Oversampled;
+
     juce::AudioBuffer<float> lowBandBuffer;   // For clean low frequencies
     juce::AudioBuffer<float> highBandBuffer;  // For distorted high frequencies
     juce::AudioBuffer<float> compLowBandBuffer;   // Low band for compression split
     juce::AudioBuffer<float> compHighBandBuffer;  // High band for compression split
     juce::AudioBuffer<float> compDryBuffer;       // Dry signal for parallel blend
+
+    // Compression buffers for OVERSAMPLED domain
+    juce::AudioBuffer<float> compLowBandBufferOversampled;
+    juce::AudioBuffer<float> compHighBandBufferOversampled;
+    juce::AudioBuffer<float> compDryBufferOversampled;
 
     juce::SmoothedValue<float> smoothedOutputGain;  // Only output gain uses SmoothedValue (normal rate)
 
@@ -258,6 +277,11 @@ private:
     float compReleaseCoeff = 0.99995f;
     float compRmsHistoryCoeff = 0.99f;
 
+    // LA-2A coefficients for OVERSAMPLED domain
+    float compAttackCoeffOversampled = 0.9995f;
+    float compReleaseCoeffOversampled = 0.99995f;
+    float compRmsHistoryCoeffOversampled = 0.99f;
+
     // Pre-distortion compression state (per-channel for stereo imaging)
     float preCompEnvelope[2] = { 1.0f, 1.0f };
     float preCompAttackCoeff = 0.0f;
@@ -266,6 +290,7 @@ private:
     // Cached filter parameters to avoid unnecessary coefficient updates
     float lastHighPassFreq = -1.0f;
     float lastCompCrossoverFreq = -1.0f;
+    float lastCompCrossoverFreqOversampled = -1.0f;
     float lastToneFreq = -1.0f;
     double lastSampleRate = 0.0;  // Track sample rate changes
     double lastOversampledSampleRate = 0.0;  // Track oversampled rate for distortion filters
