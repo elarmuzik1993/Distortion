@@ -310,7 +310,16 @@ for (size_t channel = 0; channel < numChannels; ++channel)
 
 ## Recent Architectural Changes
 
-**Current Session Changes (VST2 & LA2A Oversampling)**:
+**Current Session Changes (Code Cleanup & Refactoring)**:
+- **Removed Deprecated Code**: Cleaned up 69 lines of deprecated/unused code to reduce memory waste and improve maintainability
+  - Removed unused `dcBlockingFilter` member (replaced by manual DC blocker implementation)
+  - Removed 4 deprecated normal-rate compression filters (`compLowPassFilter1/2`, `compHighPassFilter1/2`) - oversampled versions are used exclusively
+  - Removed 3 deprecated normal-rate compression buffers (`compLowBandBuffer`, `compHighBandBuffer`, `compDryBuffer`) - oversampled versions exist
+  - Removed unused `lastCompCrossoverFreq` cache variable
+  - Removed unused `#include <iostream>`
+  - All 1562 tests pass, no functional changes to audio processing
+
+**Previous Session Changes (VST2 & LA2A Oversampling)**:
 - **VST2 Format Support**: Added VST2 to CMake build configuration alongside VST3 and Standalone for legacy DAW compatibility
 - **LA2A Oversampled Band-Split**: Implemented band-split filters in oversampled domain for improved anti-aliasing (prevents aliasing artifacts in compression processing)
   - Added `compLowPassFilter1Oversampled`, `compLowPassFilter2Oversampled`, `compHighPassFilter1Oversampled`, `compHighPassFilter2Oversampled`
