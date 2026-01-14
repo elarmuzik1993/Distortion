@@ -227,6 +227,7 @@ private:
     std::atomic<float>* compCrossoverParam = nullptr;   // 150-350Hz adjustable split
     std::atomic<float>* distMixParam = nullptr;         // Distortion wet/dry mix (0-100)
     std::atomic<float>* toneParam = nullptr;            // Post-distortion tone (2000-20000Hz)
+    std::atomic<float>* waveshaperCleanParam = nullptr; // 0=Gritty (tone→waveshaper), 1=Clean (waveshaper→tone)
 
     // Compressor state variables (LA-2A optical cell simulation)
     // Optical cell envelope follower (T4 cell)

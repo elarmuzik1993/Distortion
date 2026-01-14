@@ -47,12 +47,13 @@ PluginProcessor::PluginProcessor()
     compCrossoverParam = parameters.getRawParameterValue("compCrossover");
     distMixParam = parameters.getRawParameterValue("distMix");
     toneParam = parameters.getRawParameterValue("tone");
+    waveshaperCleanParam = parameters.getRawParameterValue("waveshaperClean");
     // Verify all parameters were found
     jassert(inputGainParam && outputGainParam && distortionAmountParam
         && highPassFreqParam && bandSplitEnabledParam && clipTypeParam
         && lfoRateParam && lfoDepthParam && lfoWaveformParam && waveshaperMixParam
         && compPeakReductionParam && compMakeupGainParam && compRatioParam && compEnabledParam && compWetDryParam && compCrossoverParam
-        && distMixParam && toneParam);
+        && distMixParam && toneParam && waveshaperCleanParam);
 
 }
 
@@ -1219,9 +1220,11 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // extremely resonant poles that interact badly with the downsampler
     // DC blocking is applied AFTER downsampling via manual one-pole DC blocker
 
-    // ========== POST-DISTORTION TONE FILTER (oversampled domain) ==========
-    // Apply lowpass filter for darkness/brightness control (2-20kHz)
+    // ========== TONE FILTER & WAVESHAPER (oversampled domain) ==========
+    // Order controlled by Clean Mode toggle to optimize aliasing vs character
+    const bool cleanMode = waveshaperCleanParam ? (waveshaperCleanParam->load() > 0.5f) : false;
     const float toneFreq = toneParam ? toneParam->load() : 20000.0f;
+    const float waveshaperMix = *waveshaperMixParam;
 
     // Update tone filter coefficients if frequency changed
     if (std::abs(toneFreq - lastToneFreq) > 1.0f && toneFilter.state != nullptr)
@@ -1233,17 +1236,17 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         lastToneFreq = toneFreq;
     }
 
-    // Apply tone filter (only if not at maximum/bypass)
-    if (toneFreq < 19500.0f && toneFilter.state != nullptr)
-    {
-        toneFilter.process(juce::dsp::ProcessContextReplacing<float>(oversampledBlock));
-    }
+    // Lambda for tone filter processing
+    auto applyToneFilter = [&]() {
+        if (toneFreq < 19500.0f && toneFilter.state != nullptr)
+        {
+            toneFilter.process(juce::dsp::ProcessContextReplacing<float>(oversampledBlock));
+        }
+    };
 
-    // ========== WAVESHAPER (oversampled domain - before downsampling) ==========
-    // Smooth harmonics with buttery fuzz and pleasant hiss
-    // Now in oversampled domain for proper anti-aliasing of generated harmonics
-    const float waveshaperMix = *waveshaperMixParam;
-    if (waveshaperMix > 0.0f)
+    // Lambda for waveshaper processing
+    auto applyWaveshaper = [&]() {
+        if (waveshaperMix > 0.0f)
     {
         const float wetAmountWS = waveshaperMix / 100.0f;  // 0.0 to 1.0
         const float dryAmountWS = 1.0f - wetAmountWS;
@@ -1296,6 +1299,23 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                 channelData[sample] = dryAmountWS * dry + wetAmountWS * wet;
             }
         }
+        }
+    };
+
+    // Apply processing in order based on Clean Mode toggle
+    if (cleanMode)
+    {
+        // CLEAN MODE: Waveshaper → Tone Filter
+        // Reduces aliasing by generating harmonics before filtering
+        applyWaveshaper();
+        applyToneFilter();
+    }
+    else
+    {
+        // GRITTY MODE: Tone Filter → Waveshaper (original order)
+        // Creates edgier character by adding harmonics after darkening
+        applyToneFilter();
+        applyWaveshaper();
     }
 
     // ========== LA-2A PARALLEL COMPRESSION (oversampled domain) ==========
@@ -1841,6 +1861,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         "Tone",
         juce::NormalisableRange<float>(2000.0f, 20000.0f, 1.0f, 0.5f),  // Skew for better low-end control
         20000.0f));  // Default 20kHz = bright/bypass
+
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{ "waveshaperClean", 1 },
+        "Clean Mode",
+        false));  // Default false = Gritty mode (tone→waveshaper, current behavior)
 
     return { params.begin(), params.end() };
 }

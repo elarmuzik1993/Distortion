@@ -32,6 +32,13 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     titleLabel.setColour(juce::Label::textColourId, juce::Colour(0xFF, 0x00, 0x44));
     titleLabel.setJustificationType(juce::Justification::centred);
 
+    // Setup version label (bottom left corner)
+    addAndMakeVisible(versionLabel);
+    versionLabel.setText("v1.0 Clean Mode", juce::dontSendNotification);
+    versionLabel.setFont(juce::Font(10.0f));
+    versionLabel.setColour(juce::Label::textColourId, juce::Colour(0x88, 0x88, 0x88));  // Gray text
+    versionLabel.setJustificationType(juce::Justification::left);
+
     // Set fixed window size - no resizing allowed (increased width to fit all controls)
     setSize(960, 564);
     setResizeLimits(960, 564, 960, 564);
@@ -132,6 +139,20 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     bandSplitLabel.setJustificationType(juce::Justification::centred);
     bandSplitLabel.setColour(juce::Label::textColourId, juce::Colours::white);
     bandSplitLabel.setFont(juce::Font(12.0f, juce::Font::bold));  // Bigger and bold
+
+    // Setup Clean Mode toggle
+    addAndMakeVisible(cleanModeToggle);
+    cleanModeToggle.setButtonText("Clean");
+    cleanModeToggle.setLookAndFeel(&checkboxLookAndFeel);  // Apply custom black box with green tick
+
+    cleanModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        audioProcessor.parameters, "waveshaperClean", cleanModeToggle);
+
+    addAndMakeVisible(cleanModeLabel);
+    cleanModeLabel.setText("Anti-Alias", juce::dontSendNotification);
+    cleanModeLabel.setJustificationType(juce::Justification::centred);
+    cleanModeLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+    cleanModeLabel.setFont(juce::Font(12.0f, juce::Font::bold));  // Bigger and bold
 
     addAndMakeVisible(clipTypeComboBox);
     clipTypeComboBox.setLookAndFeel(&comboBoxLookAndFeel);  // Apply neon red styling
@@ -351,6 +372,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addAndMakeVisible(compWetDryLock);
     addAndMakeVisible(compCrossoverLock);
     addAndMakeVisible(bandSplitLock);
+    addAndMakeVisible(cleanModeLock);
     addAndMakeVisible(clipTypeLock);
     addAndMakeVisible(compRatioLock);
     addAndMakeVisible(compEnableLock);
@@ -368,6 +390,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     setupKnobRightClick(compWetDrySlider, "compWetDry");
     setupKnobRightClick(compCrossoverSlider, "compCrossover");
     setupKnobRightClick(bandSplitToggle, "bandSplitEnabled");
+    setupKnobRightClick(cleanModeToggle, "waveshaperClean");
     setupKnobRightClick(clipTypeComboBox, "clipType");
     setupKnobRightClick(compRatioComboBox, "compRatio");
     setupKnobRightClick(compEnableToggle, "compEnabled");
@@ -381,6 +404,7 @@ PluginEditor::~PluginEditor()
     // Reset LookAndFeel to nullptr before destruction to prevent crash
     // Components must not reference a LookAndFeel that may be destroyed before them
     bandSplitToggle.setLookAndFeel(nullptr);
+    cleanModeToggle.setLookAndFeel(nullptr);
     compEnableToggle.setLookAndFeel(nullptr);
     clipTypeComboBox.setLookAndFeel(nullptr);
     compRatioComboBox.setLookAndFeel(nullptr);
@@ -449,6 +473,9 @@ void PluginEditor::resized()
 
     // ========== TITLE LABEL ==========
     titleLabel.setBounds(0, 0, getWidth(), titleHeight);
+
+    // ========== VERSION LABEL (bottom left corner) ==========
+    versionLabel.setBounds(margin, getHeight() - 20, 100, 16);
 
     // ========== OSCILLOSCOPE (below title, above controls) ==========
     oscilloscope.setBounds(0, titleHeight, getWidth(), getHeight() - titleHeight - bottomControlsHeight);
@@ -599,9 +626,18 @@ void PluginEditor::resized()
     const int toggleYOffset = (knobSize - cleanSubToggleSize) / 2;  // Center vertically with big knobs
     bandSplitToggle.setBounds(currentX, rowY + toggleYOffset, cleanSubToggleSize, cleanSubToggleSize);
     const int toggleLabelWidth = 60;  // Width for toggle area
+    const int toggleLabelHeight = 16;
     bandSplitLabel.setBounds(currentX - (toggleLabelWidth - cleanSubToggleSize) / 2,
-                            rowY + toggleYOffset + cleanSubToggleSize + 5, toggleLabelWidth, 16);
+                            rowY + toggleYOffset + cleanSubToggleSize + 5, toggleLabelWidth, toggleLabelHeight);
     bandSplitLock.setBounds(currentX + cleanSubToggleSize - 12, rowY + toggleYOffset, 12, 12);
+
+    // Anti-Alias Toggle (24x24) - Positioned directly below Clean Sub
+    const int verticalGap = 8;  // Gap between Clean Sub label and Anti-Alias toggle
+    const int antiAliasToggleY = rowY + toggleYOffset + cleanSubToggleSize + 5 + toggleLabelHeight + verticalGap;
+    cleanModeToggle.setBounds(currentX, antiAliasToggleY, cleanSubToggleSize, cleanSubToggleSize);
+    cleanModeLabel.setBounds(currentX - (toggleLabelWidth - cleanSubToggleSize) / 2,
+                            antiAliasToggleY + cleanSubToggleSize + 5, toggleLabelWidth, toggleLabelHeight);
+    cleanModeLock.setBounds(currentX + cleanSubToggleSize - 12, antiAliasToggleY, 12, 12);
     currentX += toggleLabelWidth + controlSpacing;
 
     // Input Gain (100x100)

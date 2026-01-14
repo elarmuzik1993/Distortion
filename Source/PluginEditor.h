@@ -617,6 +617,7 @@ private:
     CheckboxLookAndFeel checkboxLookAndFeel;
     ComboBoxLookAndFeel comboBoxLookAndFeel;  // Neon red styling for dropdowns
     juce::Label titleLabel;  // Title text "MONOLIT BEATZ"
+    juce::Label versionLabel;  // Build version display at bottom left
 
     // UI Components
     CustomKnob inputGainSlider, distortionAmountSlider, outputGainSlider, highPassFreqSlider, distMixSlider, toneSlider;
@@ -644,6 +645,8 @@ private:
     juce::Label compWetDryLabel, compCrossoverLabel;
     juce::ToggleButton bandSplitToggle;
     juce::Label bandSplitLabel;
+    juce::ToggleButton cleanModeToggle;
+    juce::Label cleanModeLabel;
 
     juce::ComboBox clipTypeComboBox;
     juce::Label clipTypeLabel;
@@ -675,7 +678,7 @@ private:
     LockIcon inputGainLock, outputGainLock, distortionAmountLock, highPassFreqLock;
     LockIcon distMixLock, lfoRateLock, lfoDepthLock;
     LockIcon compPeakReductionLock, compMakeupGainLock, compWetDryLock, compCrossoverLock;
-    LockIcon bandSplitLock, clipTypeLock, compRatioLock, compEnableLock;
+    LockIcon bandSplitLock, clipTypeLock, compRatioLock, compEnableLock, cleanModeLock;
 
     // Lock toggles for randomization
     std::map<juce::String, bool> parameterLocks;
@@ -688,6 +691,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> distMixAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> toneAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bandSplitAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> cleanModeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> clipTypeAttachment;
     juce::Image backgroundImage;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoRateAttachment;

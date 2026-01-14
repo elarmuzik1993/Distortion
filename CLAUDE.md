@@ -74,12 +74,13 @@ The plugin processes audio through a carefully ordered chain:
 3. **Pre-Distortion Compression** → Hardcoded transient tamer (1ms attack, 50ms release, 2.5:1 ratio at -12dB threshold)
 4. **Band Splitting (Optional)** → Splits signal into low (<150Hz) and high (>150Hz) bands for 808-safe processing
 5. **Distortion Stage** → Applied to high band only (if band-split enabled) or full signal
-6. **Tone Filter** → Post-distortion brightness control (2-20kHz adjustable lowpass)
+6. **Tone Filter & Waveshaper (Flexible Order)** → Order controlled by "Clean Mode" toggle:
+   - **Clean Mode (ON)**: Waveshaper → Tone Filter (reduces aliasing, smoother analog character)
+   - **Gritty Mode (OFF)**: Tone Filter → Waveshaper (original order, edgier digital character)
 7. **Downsampling** → Return to original sample rate
-8. **Waveshaper** → Optional harmonic enhancement via 8-stage waveshaping
-9. **LA2A Compression** → LA2A-style optical compressor with optional band-split (150-350Hz adjustable)
-10. **DC Blocking** → Manual one-pole DC blocker (~35Hz cutoff, R=0.995)
-11. **Output Stage** → Final gain staging (±12dB)
+8. **LA2A Compression** → LA2A-style optical compressor with optional band-split (150-350Hz adjustable)
+9. **DC Blocking** → Manual one-pole DC blocker (~35Hz cutoff, R=0.995)
+10. **Output Stage** → Final gain staging (±12dB)
 
 ### Core Processing Components
 
@@ -260,7 +261,7 @@ Decimation factor of 2 reduces CPU load. Update rate: 30Hz.
 
 When adding new parameters, use these existing patterns:
 - Gains: `"inputGain"`, `"outputGain"`
-- Distortion: `"distortionAmount"`, `"clipType"`, `"bandSplitEnabled"`, `"distMix"`
+- Distortion: `"distortionAmount"`, `"clipType"`, `"bandSplitEnabled"`, `"distMix"`, `"waveshaperClean"`
 - Filters: `"highPassFreq"`
 - LFO: `"lfoRate"`, `"lfoDepth"`
 - Compression: `"compPeakReduction"`, `"compMakeupGain"`, `"compRatio"`, `"compEnabled"`, `"compWetDry"`, `"compCrossover"`
@@ -310,7 +311,19 @@ for (size_t channel = 0; channel < numChannels; ++channel)
 
 ## Recent Architectural Changes
 
-**Current Session Changes (Code Cleanup & Refactoring)**:
+**Current Session Changes (Waveshaper Order Toggle & UI Layout)**:
+- **Waveshaper Order Toggle ("Clean Mode")**: Added parameter to control signal flow ordering for optimized aliasing vs character trade-off
+  - **Parameter**: `"waveshaperClean"` (AudioParameterBool, default false = Gritty mode)
+  - **Gritty Mode (OFF)**: Tone Filter → Waveshaper (original order, edgier character with potential aliasing)
+  - **Clean Mode (ON)**: Waveshaper → Tone Filter (reduced aliasing by filtering after harmonic generation)
+  - **Implementation**: Conditional lambda-based signal flow in processBlock() (~line 1305-1319) for flexible processing order
+  - **GUI**: "Anti-Alias" toggle with version label "v1.0 Clean Mode" at bottom-left
+- **UI Layout Optimization**: Repositioned Anti-Alias toggle below Clean Sub toggle for better space utilization
+  - Toggles now stack vertically in same 60px column instead of expanding horizontally
+  - Both labels positioned below their respective toggles for consistent visual hierarchy
+  - Saves horizontal space on bottom control row
+
+**Previous Session Changes (Code Cleanup & Refactoring)**:
 - **Removed Deprecated Code**: Cleaned up 69 lines of deprecated/unused code to reduce memory waste and improve maintainability
   - Removed unused `dcBlockingFilter` member (replaced by manual DC blocker implementation)
   - Removed 4 deprecated normal-rate compression filters (`compLowPassFilter1/2`, `compHighPassFilter1/2`) - oversampled versions are used exclusively
