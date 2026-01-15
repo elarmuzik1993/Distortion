@@ -68,6 +68,19 @@ private:
     void testGainReductionRange();
 };
 
+/** Tests for sub-linear harmonic density scaling */
+class HarmonicDensityTests : public juce::UnitTest
+{
+public:
+    HarmonicDensityTests() : UnitTest("Harmonic Density Scaling", TestCategories::DSP) {}
+    void runTest() override;
+
+private:
+    void testSubLinearScaling();
+    void testClipTypeSpecificity();
+    void testNoNaNOrInf();
+};
+
 /** Tests for generateLFOWaveform() - all 5 waveforms */
 class LFOTests : public juce::UnitTest
 {
@@ -261,6 +274,7 @@ inline void registerAllTests()
     static DistortionDSPTests distortionDSPTests;
     static CompressionDSPTests compressionDSPTests;
     static PreCompressionTests preCompressionTests;
+    static HarmonicDensityTests harmonicDensityTests;
     static LFOTests lfoTests;
     static ProcessBlockTests processBlockTests;
     static ParameterTests parameterTests;

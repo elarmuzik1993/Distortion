@@ -76,6 +76,13 @@ namespace DSPConstants
     // Soft clipper for ISP protection (before downsampling)
     constexpr float SOFT_CLIP_THRESHOLD_DB = -0.3f;          // -0.3 dBFS ceiling
     constexpr float SOFT_CLIP_KNEE_DB = 0.5f;                // 0.5 dB soft knee
+
+    // Sub-linear harmonic density control (always-on for clip types 1,3,4)
+    // Prevents 2-5 kHz harshness at high input levels
+    constexpr float HARMONIC_DENSITY_ATTACK_TIME_S = 0.002f;   // 2ms attack (fast response)
+    constexpr float HARMONIC_DENSITY_RELEASE_TIME_S = 0.030f;  // 30ms release (smooth decay)
+    constexpr float HARMONIC_DENSITY_EPSILON = 0.01f;          // Minimum threshold for sqrt
+    constexpr float HARMONIC_DENSITY_MIN_SCALE = 0.1f;         // 10% minimum harmonic strength
 }
 
 // Forward declarations for test classes
@@ -89,6 +96,7 @@ class SampleRateTests;
 class ThreadSafetyTests;
 class StateIOTests;
 class GoldenAudioTests;
+class HarmonicDensityTests;
 #endif
 
 class PluginProcessor : public juce::AudioProcessor
@@ -104,6 +112,7 @@ class PluginProcessor : public juce::AudioProcessor
     friend class ThreadSafetyTests;
     friend class StateIOTests;
     friend class GoldenAudioTests;
+    friend class HarmonicDensityTests;
 #endif
 
 public:
@@ -273,6 +282,11 @@ private:
     float preCompAttackCoeff = 0.0f;
     float preCompReleaseCoeff = 0.0f;
 
+    // Sub-linear harmonic density envelope (per-channel for stereo imaging)
+    float harmonicDensityEnvelope[2] = { 0.0f, 0.0f };
+    float harmonicDensityAttackCoeff = 0.0f;
+    float harmonicDensityReleaseCoeff = 0.0f;
+
     // Cached filter parameters to avoid unnecessary coefficient updates
     float lastHighPassFreq = -1.0f;
     float lastCompCrossoverFreqOversampled = -1.0f;
@@ -289,7 +303,7 @@ private:
     mutable juce::SpinLock scopeLock;
 
     // Helper methods for studio distortion DSP
-    float applyStudioDistortion(float x, float gain, float drive, int clipType);
+    float applyStudioDistortion(float x, float gain, float drive, int clipType, float harmonicScale);
     void updateSampleRateDependentCoefficients(double sampleRate);
     float generateLFOWaveform(float phase, int waveformType);  // Generate LFO waveforms
 

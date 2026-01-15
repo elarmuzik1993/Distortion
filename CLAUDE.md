@@ -187,9 +187,10 @@ The compressor simulates a Teletronix LA-2A optical cell (T4 cell) with:
 
 ### DSP Constants
 
-All processing constants centralized in `DSPConstants` namespace (PluginProcessor.h:18-79):
+All processing constants centralized in `DSPConstants` namespace (PluginProcessor.h:18-84):
 - **Oversampling**: 4x factor, 2 polyphase IIR stages
 - **Pre-Distortion Compression**: Attack 1ms, Release 50ms, 2.5:1 ratio at -12dB, 6dB knee
+- **Harmonic Density Scaling**: Attack 2ms, Release 30ms, 10% minimum scale (prevents 2-5kHz harshness)
 - **Distortion Crossover**: 150Hz (fixed Linkwitz-Riley 4th order for band-split)
 - **LA2A Compression**: Attack 10ms, Release 500ms, 3:1 or 12:1 ratio, 2dB knee
 - **LA2A Compression Crossover**: 150-350Hz adjustable (Linkwitz-Riley 4th order)
@@ -311,7 +312,21 @@ for (size_t channel = 0; channel < numChannels; ++channel)
 
 ## Recent Architectural Changes
 
-**Current Session Changes (Waveshaper Order Toggle & UI Layout)**:
+**Current Session Changes (Sub-Linear Harmonic Density Scaling)**:
+- **Harmonic Density Control**: Added input-level-dependent harmonic scaling to prevent 2-5 kHz harshness at high input levels
+  - **Behavior**: High input → fewer harmonics (prevents harshness); Low input → full harmonics (preserves richness)
+  - **Affected clip types**: Tube Overdrive (1), Tape Saturation (3), Transformer Saturation (4)
+  - **Algorithm**: Uses envelope follower (2ms attack, 30ms release) with inverse sqrt scaling: `harmonicScale = 1 / (1 + sqrt(envelope))`
+  - **DSP Constants** (PluginProcessor.h:80-84):
+    - `HARMONIC_DENSITY_ATTACK_TIME_S = 0.002f` (2ms fast attack)
+    - `HARMONIC_DENSITY_RELEASE_TIME_S = 0.030f` (30ms smooth decay)
+    - `HARMONIC_DENSITY_EPSILON = 0.01f` (numerical stability)
+    - `HARMONIC_DENSITY_MIN_SCALE = 0.1f` (10% minimum harmonics)
+  - **State Variables**: `harmonicDensityEnvelope[2]` (per-channel), `harmonicDensityAttackCoeff`, `harmonicDensityReleaseCoeff`
+  - **Always-on**: Automatically active when distortion is engaged (like transient tamer)
+  - **Tests**: Added `HarmonicDensityTests` class with 429 new assertions (total: 1991)
+
+**Previous Session Changes (Waveshaper Order Toggle & UI Layout)**:
 - **Waveshaper Order Toggle ("Clean Mode")**: Added parameter to control signal flow ordering for optimized aliasing vs character trade-off
   - **Parameter**: `"waveshaperClean"` (AudioParameterBool, default false = Gritty mode)
   - **Gritty Mode (OFF)**: Tone Filter → Waveshaper (original order, edgier character with potential aliasing)

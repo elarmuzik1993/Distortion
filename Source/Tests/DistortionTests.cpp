@@ -56,7 +56,7 @@ void DistortionDSPTests::testClipType(PluginProcessor& processor, int clipType, 
         {
             for (float input : testInputs)
             {
-                float output = processor.applyStudioDistortion(input, gain, drive, clipType);
+                float output = processor.applyStudioDistortion(input, gain, drive, clipType, 1.0f);
 
                 // Output should never be NaN or Inf
                 expect(!std::isnan(output), name + ": Output is NaN for input " + juce::String(input));
@@ -70,7 +70,7 @@ void DistortionDSPTests::testClipType(PluginProcessor& processor, int clipType, 
     }
 
     // Test zero input produces near-zero output (except for noise injection)
-    float zeroOutput = processor.applyStudioDistortion(0.0f, 1.0f, 1.0f, clipType);
+    float zeroOutput = processor.applyStudioDistortion(0.0f, 1.0f, 1.0f, clipType, 1.0f);
     expect(std::abs(zeroOutput) < 0.1f, name + ": Zero input should produce near-zero output");
 }
 
@@ -78,25 +78,25 @@ void DistortionDSPTests::testEdgeCases(PluginProcessor& processor)
 {
     // Test denormal values
     float denormal = 1e-40f;
-    float output = processor.applyStudioDistortion(denormal, 1.0f, 1.0f, 0);
+    float output = processor.applyStudioDistortion(denormal, 1.0f, 1.0f, 0, 1.0f);
     expect(!std::isnan(output), "Denormal input caused NaN");
     expect(!std::isinf(output), "Denormal input caused Inf");
 
     // Test very large values (should be clipped)
     float largeInput = 10.0f;
-    output = processor.applyStudioDistortion(largeInput, 1.0f, 1.0f, 0);
+    output = processor.applyStudioDistortion(largeInput, 1.0f, 1.0f, 0, 1.0f);
     expect(std::abs(output) <= 2.0f, "Large input not properly clipped");
 
     // Test negative large values
-    output = processor.applyStudioDistortion(-10.0f, 1.0f, 1.0f, 0);
+    output = processor.applyStudioDistortion(-10.0f, 1.0f, 1.0f, 0, 1.0f);
     expect(std::abs(output) <= 2.0f, "Large negative input not properly clipped");
 
     // Test minimum gain
-    output = processor.applyStudioDistortion(1.0f, 0.0f, 1.0f, 0);
+    output = processor.applyStudioDistortion(1.0f, 0.0f, 1.0f, 0, 1.0f);
     expect(!std::isnan(output), "Zero gain caused NaN");
 
     // Test minimum drive
-    output = processor.applyStudioDistortion(1.0f, 1.0f, 1.0f, 0);
+    output = processor.applyStudioDistortion(1.0f, 1.0f, 1.0f, 0, 1.0f);
     expect(!std::isnan(output), "Minimum drive caused NaN");
 }
 
@@ -115,7 +115,7 @@ void DistortionDSPTests::testOutputRange(PluginProcessor& processor)
             float phase = static_cast<float>(i) / static_cast<float>(numSamples);
             float input = std::sin(phase * juce::MathConstants<float>::twoPi);
 
-            float output = processor.applyStudioDistortion(input, 1.5f, 3.0f, clipType);
+            float output = processor.applyStudioDistortion(input, 1.5f, 3.0f, clipType, 1.0f);
 
             if (std::isnan(output)) hasNaN = true;
             if (std::isinf(output)) hasInf = true;
@@ -510,6 +510,121 @@ void PreCompressionTests::testGainReductionRange()
         {
             expect(outputPeak > 0.0f,
                 "Output was silenced at level " + juce::String(level));
+        }
+    }
+}
+
+//==============================================================================
+// HarmonicDensityTests Implementation (Sub-Linear Harmonic Scaling)
+//==============================================================================
+
+void HarmonicDensityTests::runTest()
+{
+    beginTest("Sub-Linear Scaling Verification");
+    testSubLinearScaling();
+
+    beginTest("Clip Type Specificity");
+    testClipTypeSpecificity();
+
+    beginTest("No NaN or Inf Output");
+    testNoNaNOrInf();
+}
+
+void HarmonicDensityTests::testSubLinearScaling()
+{
+    // Test that harmonic coefficients scale inversely with input level
+    // High input → low harmonicScale → fewer harmonics (prevents harshness)
+    PluginProcessor processor;
+    processor.prepareToPlay(44100.0, 512);
+
+    // Test Transformer Saturation (clip type 4) which has explicit harmonic control
+    const float testInput = 0.5f;
+    const float gain = 1.0f;
+    const float drive = 3.0f;
+
+    // harmonicScale = 1.0 represents LOW input (full harmonics)
+    float outputFullHarmonics = processor.applyStudioDistortion(testInput, gain, drive, 4, 1.0f);
+
+    // harmonicScale = 0.1 represents HIGH input (reduced harmonics to prevent harshness)
+    float outputReducedHarmonics = processor.applyStudioDistortion(testInput, gain, drive, 4, 0.1f);
+
+    // With same input but different harmonicScale, outputs should differ
+    expect(std::abs(outputFullHarmonics - outputReducedHarmonics) > 0.001f,
+        "Harmonic scaling should produce different outputs for different scale values");
+
+    // Verify no numerical issues
+    expect(!std::isnan(outputFullHarmonics) && !std::isnan(outputReducedHarmonics),
+        "Harmonic scaling should not produce NaN");
+    expect(!std::isinf(outputFullHarmonics) && !std::isinf(outputReducedHarmonics),
+        "Harmonic scaling should not produce Inf");
+}
+
+void HarmonicDensityTests::testClipTypeSpecificity()
+{
+    // Test that harmonic scaling affects clip types 1, 3, 4 but not others
+    PluginProcessor processor;
+    processor.prepareToPlay(44100.0, 512);
+
+    const float testInput = 0.5f;
+    const float gain = 1.0f;
+    const float drive = 3.0f;
+
+    // Clip types with harmonic scaling: 1 (Tube), 3 (Tape), 4 (Transformer)
+    int harmonicClipTypes[] = { 1, 3, 4 };
+
+    for (int clipType : harmonicClipTypes)
+    {
+        float outputHigh = processor.applyStudioDistortion(testInput, gain, drive, clipType, 1.0f);
+        float outputLow = processor.applyStudioDistortion(testInput, gain, drive, clipType, 0.1f);
+
+        // Should produce different outputs with different harmonic scales
+        expect(std::abs(outputHigh - outputLow) > 0.0001f,
+            "Clip type " + juce::String(clipType) + " should respond to harmonic scaling");
+    }
+
+    // Clip types without explicit harmonic control: 2, 5, 6
+    // These should produce same output regardless of harmonicScale
+    // Note: Clip type 0 (Brutal Fuzz) uses random noise, so it's excluded
+    int nonHarmonicClipTypes[] = { 2, 5, 6 };
+
+    for (int clipType : nonHarmonicClipTypes)
+    {
+        float outputHigh = processor.applyStudioDistortion(testInput, gain, drive, clipType, 1.0f);
+        float outputLow = processor.applyStudioDistortion(testInput, gain, drive, clipType, 0.1f);
+
+        // Should produce identical outputs (harmonicScale is unused)
+        expect(std::abs(outputHigh - outputLow) < 0.0001f,
+            "Clip type " + juce::String(clipType) + " should not be affected by harmonic scaling");
+    }
+}
+
+void HarmonicDensityTests::testNoNaNOrInf()
+{
+    // Test that harmonic density processing doesn't produce invalid samples
+    PluginProcessor processor;
+    processor.prepareToPlay(44100.0, 512);
+
+    // Test extreme harmonic scale values
+    float extremeScales[] = { 0.0f, 0.01f, 0.1f, 0.5f, 1.0f, 2.0f };
+    float testInputs[] = { 0.0f, 0.001f, 0.5f, 1.0f, 10.0f };
+
+    for (int clipType = 0; clipType < 7; ++clipType)
+    {
+        for (float scale : extremeScales)
+        {
+            for (float input : testInputs)
+            {
+                float output = processor.applyStudioDistortion(input, 1.0f, 3.0f, clipType, scale);
+
+                expect(!std::isnan(output),
+                    "Clip type " + juce::String(clipType) +
+                    " with scale " + juce::String(scale) +
+                    " and input " + juce::String(input) + " produced NaN");
+                expect(!std::isinf(output),
+                    "Clip type " + juce::String(clipType) +
+                    " with scale " + juce::String(scale) +
+                    " and input " + juce::String(input) + " produced Inf");
+            }
         }
     }
 }

@@ -65,7 +65,7 @@ PluginProcessor::~PluginProcessor()
 // Studio Distortion DSP Helper Methods
 //==============================================================================
 
-float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, int clipType)
+float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, int clipType, float harmonicScale)
 {
     x = x * gain;
     float y = 0.0f;
@@ -101,17 +101,17 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
         {
             // Positive: harder clipping with even harmonics
             y = std::tanh(y * 1.6f) * 0.85f;
-            y += 0.15f * y * y;  // 2nd harmonic
+            y += (0.15f * harmonicScale) * y * y;  // 2nd harmonic (sub-linear scaled)
         }
         else
         {
             // Negative: softer clipping with odd harmonics
             y = std::tanh(y * 1.2f) * 0.9f;
-            y += 0.08f * y * y * y;  // 3rd harmonic
+            y += (0.08f * harmonicScale) * y * y * y;  // 3rd harmonic (sub-linear scaled)
         }
 
-        // Add subtle warmth
-        y = y + 0.05f * std::sin(y * juce::MathConstants<float>::pi);
+        // Add subtle warmth (also scaled to prevent harshness at high levels)
+        y = y + (0.05f * harmonicScale) * std::sin(y * juce::MathConstants<float>::pi);
         break;
     }
     case 2:  // BIT CRUSHER - Digital destruction with sample rate reduction
@@ -148,8 +148,8 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
         else
             y = sign * (0.84f + std::tanh((abs_y - 1.0f) * 2.0f) * 0.15f);
 
-        // Add tape warmth (subtle even harmonics)
-        y += 0.12f * y * y * sign;
+        // Add tape warmth (subtle even harmonics, sub-linear scaled)
+        y += (0.12f * harmonicScale) * y * y * sign;
 
         // Final soft saturation
         y = std::tanh(y * 1.3f) * 0.92f;
@@ -163,11 +163,11 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
         // Multi-stage waveshaping for complex harmonics
         y = std::tanh(y * 1.5f);
 
-        // Add rich harmonic content
+        // Add rich harmonic content (all coefficients sub-linear scaled)
         const float fundamental = y;
-        const float harmonic2 = 0.25f * fundamental * fundamental * (fundamental > 0.0f ? 1.0f : -1.0f);
-        const float harmonic3 = 0.15f * fundamental * fundamental * fundamental;
-        const float harmonic5 = 0.08f * std::pow(std::abs(fundamental), 5.0f) * (fundamental > 0.0f ? 1.0f : -1.0f);
+        const float harmonic2 = (0.25f * harmonicScale) * fundamental * fundamental * (fundamental > 0.0f ? 1.0f : -1.0f);
+        const float harmonic3 = (0.15f * harmonicScale) * fundamental * fundamental * fundamental;
+        const float harmonic5 = (0.08f * harmonicScale) * std::pow(std::abs(fundamental), 5.0f) * (fundamental > 0.0f ? 1.0f : -1.0f);
 
         y = fundamental + harmonic2 + harmonic3 + harmonic5;
 
@@ -523,6 +523,19 @@ if (!oversampling || currentNumChannels != numChannels) {
     preCompEnvelope[0] = 1.0f;
     preCompEnvelope[1] = 1.0f;
 
+    // Sub-linear harmonic density coefficients (oversampled rate)
+    harmonicDensityAttackCoeff = std::exp(-1.0f / (DSPConstants::HARMONIC_DENSITY_ATTACK_TIME_S * oversampledRate));
+    harmonicDensityReleaseCoeff = std::exp(-1.0f / (DSPConstants::HARMONIC_DENSITY_RELEASE_TIME_S * oversampledRate));
+
+    // Validate harmonic density coefficients (matching pre-compression validation pattern)
+    if (!std::isfinite(harmonicDensityAttackCoeff) || harmonicDensityAttackCoeff < 0.0f || harmonicDensityAttackCoeff > 1.0f)
+        harmonicDensityAttackCoeff = 0.99f;  // Safe fallback (~2ms at 44.1kHz*4)
+    if (!std::isfinite(harmonicDensityReleaseCoeff) || harmonicDensityReleaseCoeff < 0.0f || harmonicDensityReleaseCoeff > 1.0f)
+        harmonicDensityReleaseCoeff = 0.999f;  // Safe fallback (~30ms at 44.1kHz*4)
+
+    harmonicDensityEnvelope[0] = 0.0f;
+    harmonicDensityEnvelope[1] = 0.0f;
+
     // LA-2A compression coefficients for OVERSAMPLED rate
     compAttackCoeffOversampled = std::exp(-1.0f / (DSPConstants::COMP_ATTACK_TIME_S * oversampledRate));
     compReleaseCoeffOversampled = std::exp(-1.0f / (DSPConstants::COMP_RELEASE_TIME_S * oversampledRate));
@@ -593,6 +606,10 @@ void PluginProcessor::releaseResources()
     // Reset pre-compression state
     preCompEnvelope[0] = 1.0f;
     preCompEnvelope[1] = 1.0f;
+
+    // Reset harmonic density envelope state
+    harmonicDensityEnvelope[0] = 0.0f;
+    harmonicDensityEnvelope[1] = 0.0f;
 
     // Reset oversampled compression filters
     compLowPassFilter1Oversampled.reset();
@@ -1109,6 +1126,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             for (size_t channel = 0; channel < numChannels; ++channel)
             {
                 auto* highBandData = highBandBuffer.getWritePointer(static_cast<int>(channel));
+                const int ch = static_cast<int>(channel);
 
                 // Read input (already band-split)
                 float inputSample = highBandData[sample];
@@ -1120,8 +1138,23 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                 }
                 else
                 {
-                    // Apply studio distortion
-                    float distorted = applyStudioDistortion(inputSample, currentInputGain, currentDrive, clipType);
+                    // Update harmonic density envelope for sub-linear scaling
+                    const float inputLevel = std::abs(inputSample);
+                    if (inputLevel > harmonicDensityEnvelope[ch])
+                        harmonicDensityEnvelope[ch] = harmonicDensityAttackCoeff * harmonicDensityEnvelope[ch]
+                                                    + (1.0f - harmonicDensityAttackCoeff) * inputLevel;
+                    else
+                        harmonicDensityEnvelope[ch] = harmonicDensityReleaseCoeff * harmonicDensityEnvelope[ch]
+                                                    + (1.0f - harmonicDensityReleaseCoeff) * inputLevel;
+
+                    // Calculate inverse harmonic scale: high input → fewer harmonics (prevents harshness)
+                    // Using 1/(1+sqrt(envelope)) gives smooth reduction at high levels
+                    const float clampedEnv = std::max(0.0f, harmonicDensityEnvelope[ch]);
+                    const float harmonicScale = juce::jlimit(DSPConstants::HARMONIC_DENSITY_MIN_SCALE, 1.0f,
+                                                            1.0f / (1.0f + std::sqrt(clampedEnv)));
+
+                    // Apply studio distortion with sub-linear harmonic scaling
+                    float distorted = applyStudioDistortion(inputSample, currentInputGain, currentDrive, clipType, harmonicScale);
 
                     // Wet/Dry mix (DC blocking handled by manual DC blocker after downsampling)
                     highBandData[sample] = inputSample * (1.0f - mixAmount) + distorted * mixAmount;
@@ -1154,6 +1187,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             for (size_t channel = 0; channel < numChannels; ++channel)
             {
                 auto* channelData = oversampledBlock.getChannelPointer(channel);
+                const int ch = static_cast<int>(channel);
 
                 // Read input
                 float inputSample = channelData[sample];
@@ -1165,8 +1199,23 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                 }
                 else
                 {
-                    // Apply studio distortion
-                    float distorted = applyStudioDistortion(inputSample, currentInputGain, currentDrive, clipType);
+                    // Update harmonic density envelope for sub-linear scaling
+                    const float inputLevel = std::abs(inputSample);
+                    if (inputLevel > harmonicDensityEnvelope[ch])
+                        harmonicDensityEnvelope[ch] = harmonicDensityAttackCoeff * harmonicDensityEnvelope[ch]
+                                                    + (1.0f - harmonicDensityAttackCoeff) * inputLevel;
+                    else
+                        harmonicDensityEnvelope[ch] = harmonicDensityReleaseCoeff * harmonicDensityEnvelope[ch]
+                                                    + (1.0f - harmonicDensityReleaseCoeff) * inputLevel;
+
+                    // Calculate inverse harmonic scale: high input → fewer harmonics (prevents harshness)
+                    // Using 1/(1+sqrt(envelope)) gives smooth reduction at high levels
+                    const float clampedEnv = std::max(0.0f, harmonicDensityEnvelope[ch]);
+                    const float harmonicScale = juce::jlimit(DSPConstants::HARMONIC_DENSITY_MIN_SCALE, 1.0f,
+                                                            1.0f / (1.0f + std::sqrt(clampedEnv)));
+
+                    // Apply studio distortion with sub-linear harmonic scaling
+                    float distorted = applyStudioDistortion(inputSample, currentInputGain, currentDrive, clipType, harmonicScale);
 
                     // Wet/Dry mix (DC blocking handled by manual DC blocker after downsampling)
                     channelData[sample] = inputSample * (1.0f - mixAmount) + distorted * mixAmount;
