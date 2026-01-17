@@ -312,7 +312,22 @@ for (size_t channel = 0; channel < numChannels; ++channel)
 
 ## Recent Architectural Changes
 
-**Current Session Changes (Sub-Linear Harmonic Density Scaling)**:
+**Current Session Changes (Real-Time Audio Safety Audit & Fixes)**:
+- **Critical RT-Safety Improvements**: Comprehensive audit against `realtime-audio-safety-checklist.md` with 7 fixes implemented
+  - **Removed all logging from processBlock()**: Eliminated 25+ blocking `juce::Logger::writeToLog()` calls that caused audio thread blocking
+    - Replaced with atomic debug flags: `debugHadNaN`, `debugHadBufferOverflow`, `debugHadDistortionCorruption`
+    - No heap allocations (juce::String) in audio thread
+  - **Latency reporting**: Added `setLatencySamples()` call in `prepareToPlay()` to report oversampling latency to host for proper delay compensation
+  - **Tail time reporting**: Fixed `getTailLengthSeconds()` to return 0.5s (compression release time) instead of 0.0
+  - **Bypass crossfade**: Added 10ms crossfade via `bypassRamp` to prevent clicks when toggling bypass on/off
+  - **DSP state reset**: Thread-safe state reset system with `stateNeedsReset` atomic flag and `resetDSPState()` helper
+    - Resets all envelopes, filters, DC blocker state on preset load to prevent artifacts
+  - **Parameter smoothing**: Added `SmoothedValue` for automation-sensitive parameters (`lfoDepth`, `compWetDry`, `distMix`) to prevent zipper noise
+  - **Thread safety**: `setStateInformation()` now uses atomic flag handoff instead of directly modifying DSP state from GUI thread
+  - **Version**: Updated to v1.2 RT-Safe
+  - **Tests**: All 1991 assertions pass (100% success rate)
+
+**Previous Session Changes (Sub-Linear Harmonic Density Scaling)**:
 - **Harmonic Density Control**: Added input-level-dependent harmonic scaling to prevent 2-5 kHz harshness at high input levels
   - **Behavior**: High input → fewer harmonics (prevents harshness); Low input → full harmonics (preserves richness)
   - **Affected clip types**: Tube Overdrive (1), Tape Saturation (3), Transformer Saturation (4)

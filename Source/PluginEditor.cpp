@@ -34,7 +34,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 
     // Setup version label (bottom left corner)
     addAndMakeVisible(versionLabel);
-    versionLabel.setText("v1.1 Harmonic Density", juce::dontSendNotification);
+    versionLabel.setText("v1.2 RT-Safe", juce::dontSendNotification);
     versionLabel.setFont(juce::Font(10.0f));
     versionLabel.setColour(juce::Label::textColourId, juce::Colour(0x88, 0x88, 0x88));  // Gray text
     versionLabel.setJustificationType(juce::Justification::left);

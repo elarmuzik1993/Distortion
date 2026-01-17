@@ -287,14 +287,10 @@ float PluginProcessor::generateLFOWaveform(float phase, int waveformType)
 //==============================================================================
 void PluginProcessor::updateSampleRateDependentCoefficients(double sampleRate)
 {
-    juce::Logger::writeToLog("--- Updating sample-rate-dependent coefficients ---");
-    juce::Logger::writeToLog("Base sample rate: " + juce::String(sampleRate, 1) + " Hz");
-
     // SAFETY: Validate sample rate to prevent NaN in coefficient calculation
     // Valid audio sample rates are typically 8kHz to 384kHz
     if (sampleRate < 1000.0 || sampleRate > 500000.0 || std::isnan(sampleRate) || std::isinf(sampleRate))
     {
-        juce::Logger::writeToLog("ERROR: Invalid sample rate " + juce::String(sampleRate) + " Hz! Using 44100 Hz fallback.");
         sampleRate = 44100.0;  // Safe fallback
     }
 
@@ -308,28 +304,19 @@ void PluginProcessor::updateSampleRateDependentCoefficients(double sampleRate)
     // SAFETY: Validate calculated coefficients (should always be between 0 and 1)
     if (std::isnan(compAttackCoeff) || compAttackCoeff < 0.0f || compAttackCoeff > 1.0f)
     {
-        juce::Logger::writeToLog("ERROR: Invalid compAttackCoeff! Using fallback 0.9995");
         compAttackCoeff = 0.9995f;
     }
     if (std::isnan(compReleaseCoeff) || compReleaseCoeff < 0.0f || compReleaseCoeff > 1.0f)
     {
-        juce::Logger::writeToLog("ERROR: Invalid compReleaseCoeff! Using fallback 0.99995");
         compReleaseCoeff = 0.99995f;
     }
     if (std::isnan(compRmsHistoryCoeff) || compRmsHistoryCoeff < 0.0f || compRmsHistoryCoeff > 1.0f)
     {
-        juce::Logger::writeToLog("ERROR: Invalid compRmsHistoryCoeff! Using fallback 0.99");
         compRmsHistoryCoeff = 0.99f;
     }
 
-    juce::Logger::writeToLog("Compression coefficients - Attack: " + juce::String(compAttackCoeff, 6)
-        + ", Release: " + juce::String(compReleaseCoeff, 6)
-        + ", RMS History: " + juce::String(compRmsHistoryCoeff, 6));
-
     // Store the sample rate to detect changes
     lastSampleRate = sampleRate;
-
-    juce::Logger::writeToLog("Coefficient update complete");
 }
 
 //==============================================================================
@@ -367,7 +354,8 @@ bool PluginProcessor::isMidiEffect() const
 
 double PluginProcessor::getTailLengthSeconds() const
 {
-    return 0.0;
+    // LA-2A compression has 500ms release time that produces tail
+    return DSPConstants::COMP_RELEASE_TIME_S;  // 0.5 seconds
 }
 
 int PluginProcessor::getNumPrograms()
@@ -413,6 +401,18 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // Output gain is applied AFTER downsampling at normal sample rate
     smoothedOutputGain.reset(sampleRate, DSPConstants::GAIN_SMOOTH_TIME_S);
     smoothedOutputGain.setCurrentAndTargetValue(1.0f);  // Initialize to unity gain
+
+    // Bypass crossfade (10ms to prevent clicks)
+    bypassRamp.reset(sampleRate, 0.01);
+    bypassRamp.setCurrentAndTargetValue(0.0f);  // Start in bypass
+    wasBypassed = true;
+
+    // Smoothed parameters for automation (20ms smoothing)
+    smoothedLfoDepth.reset(sampleRate, 0.02);
+    smoothedCompWetDry.reset(sampleRate, 0.02);
+    smoothedDistMix.reset(sampleRate, 0.02);
+    smoothedToneParam.reset(sampleRate, 0.02);
+
     compEnvelopeState = 0.0f;
     compRmsHistory = 0.0f;
     tubeWarmth = 0.0f;
@@ -570,17 +570,14 @@ if (!oversampling || currentNumChannels != numChannels) {
     // SOLUTION: Allocate 2x the expected size to handle all edge cases safely
     const size_t expectedOversampledSize = static_cast<size_t>(samplesPerBlock) * oversamplingFactor;
     const size_t oversamplingLatencySamples = static_cast<size_t>(oversampling->getLatencyInSamples());
+
+    // Report latency to host for proper delay compensation
+    setLatencySamples(static_cast<int>(oversamplingLatencySamples));
+
     // Use 2x multiplier + latency + 128 sample safety margin for absolute safety
     const int oversampledBlockSize = static_cast<int>((expectedOversampledSize + oversamplingLatencySamples) * 2 + 128);
     lowBandBuffer.setSize(numChannels, oversampledBlockSize, false, false, true);
     highBandBuffer.setSize(numChannels, oversampledBlockSize, false, false, true);
-
-    // Log critical values for debugging 44.1kHz issues (always enabled for diagnostics)
-    juce::Logger::writeToLog("Distortion prepareToPlay - sampleRate: " + juce::String(sampleRate)
-        + ", samplesPerBlock: " + juce::String(samplesPerBlock)
-        + ", oversamplingFactor: " + juce::String((int)oversamplingFactor)
-        + ", oversamplingLatency: " + juce::String((int)oversamplingLatencySamples)
-        + ", allocatedBufferSize: " + juce::String(oversampledBlockSize));
 
     // Compression buffers for OVERSAMPLED domain
     compLowBandBufferOversampled.setSize(numChannels, oversampledBlockSize, false, false, true);
@@ -774,8 +771,11 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     if (!oversampling)
         return;
 
-    // DEBUG: Log every 100th block with detailed diagnostics
-    const bool shouldLog = (++debugBlockCounter % 100 == 0);
+    // Thread-safe state reset (triggered by setStateInformation on GUI thread)
+    if (stateNeedsReset.exchange(false, std::memory_order_acquire))
+    {
+        resetDSPState();
+    }
 
     // CRITICAL: Detect sample rate changes and update coefficients
     // Some DAWs can change sample rate without calling prepareToPlay
@@ -783,9 +783,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const double currentSR = getSampleRate();
     if (std::abs(currentSR - lastSampleRate) > 0.1)
     {
-        juce::Logger::writeToLog("=== RUNTIME SAMPLE RATE CHANGE DETECTED ===");
-        juce::Logger::writeToLog("Changed from " + juce::String(lastSampleRate, 1)
-            + " Hz to " + juce::String(currentSR, 1) + " Hz");
         currentSampleRate = static_cast<float>(currentSR);
 
         // Update time-constant coefficients (DC blocking, compression envelope)
@@ -794,12 +791,15 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         // Update smoothed values for new sample rate
         smoothedOutputGain.reset(currentSR, DSPConstants::GAIN_SMOOTH_TIME_S);
         smoothedGainReduction.reset(currentSR, DSPConstants::COMP_GR_SMOOTH_TIME_S);
+        bypassRamp.reset(currentSR, 0.01);
+        smoothedLfoDepth.reset(currentSR, 0.02);
+        smoothedCompWetDry.reset(currentSR, 0.02);
+        smoothedDistMix.reset(currentSR, 0.02);
+        smoothedToneParam.reset(currentSR, 0.02);
 
         // Force update of all dynamic filters on next use
         lastHighPassFreq = -1.0f;  // Force hi-pass filter update
         lastOversampledSampleRate = 0.0;  // Force distortion filter update
-
-        juce::Logger::writeToLog("All coefficients updated successfully");
     }
 
     // Load parameters and scale them
@@ -811,10 +811,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Emergency NaN detection - if parameters are corrupted, use safe defaults
     if (std::isnan(inGainParam) || std::isnan(outGainParam) || std::isnan(distortionParam))
     {
-        juce::Logger::writeToLog("CRITICAL: NaN detected in core parameters!");
-        juce::Logger::writeToLog("inGainParam=" + juce::String(inGainParam)
-            + ", outGainParam=" + juce::String(outGainParam)
-            + ", distortionParam=" + juce::String(distortionParam));
+        debugHadNaN.store(true, std::memory_order_relaxed);
         return;  // Skip this block to prevent NaN propagation
     }
     auto highPassFreq = highPassFreqParam->load();
@@ -841,20 +838,15 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     if (std::isnan(compCrossover)) compCrossover = DSPConstants::DEFAULT_COMP_CROSSOVER;
     if (std::isnan(distMix)) distMix = 100.0f;
 
+    // Set targets for smoothed parameters (prevent zipper noise from automation)
+    smoothedLfoDepth.setTargetValue(lfoDepth);
+    smoothedCompWetDry.setTargetValue(compWetDry);
+    smoothedDistMix.setTargetValue(distMix);
+
     // Scale to actual ranges for processing (studio distortion style)
     const float inputGain = std::pow(inGainParam / 50.0f, 1.5f);  // Unity at 50, range 0-2.83
     const auto outGainDB = (outGainParam - 50.0f) * 0.24f;  // Maps 0->-12dB, 50->0dB, 100->+12dB
     const auto outGain = juce::Decibels::decibelsToGain(outGainDB);
-
-    if (shouldLog)
-    {
-        juce::Logger::writeToLog("=== BLOCK " + juce::String(debugBlockCounter) + " ===");
-        juce::Logger::writeToLog("SR: " + juce::String(getSampleRate(), 0)
-            + " | BlockSize: " + juce::String(buffer.getNumSamples())
-            + " | InputGain: " + juce::String(inputGain, 3)
-            + " | DistParam: " + juce::String(distortionParam, 1)
-            + " | CompEnabled: " + juce::String(compEnabled ? "YES" : "NO"));
-    }
 
     // LFO modulation for dynamic distortion effects
     // Calculate LFO value using selected waveform (output -1 to +1)
@@ -894,9 +886,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // SAFETY: Final validation of distortion drive (critical parameter)
     if (std::isnan(distortionDrive) || std::isinf(distortionDrive) || distortionDrive < 1.0f)
     {
-        juce::Logger::writeToLog("WARNING: Invalid distortionDrive=" + juce::String(distortionDrive) +
-                                 ", modulatedDistortionParam=" + juce::String(modulatedDistortionParam) +
-                                 ", using fallback 1.0");
         distortionDrive = 1.0f;  // Safe fallback
     }
 
@@ -906,17 +895,33 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Set target value for output gain (consumed at normal rate)
     smoothedOutputGain.setTargetValue(outGain);
 
-    // TRUE BYPASS MODE: Skip all processing when distortion is off
-    if (modulatedDistortionParam < 0.5f && !compEnabled)
+    // Bypass state detection with crossfade (prevent clicks)
+    const bool bypassed = (modulatedDistortionParam < 0.5f && !compEnabled);
+    if (bypassed && !wasBypassed)
     {
-        // Apply only output gain (for volume matching)
+        // Entering bypass - fade out wet signal
+        bypassRamp.setTargetValue(0.0f);
+    }
+    else if (!bypassed && wasBypassed)
+    {
+        // Exiting bypass - fade in wet signal
+        bypassRamp.setTargetValue(1.0f);
+    }
+    wasBypassed = bypassed;
+
+    // TRUE BYPASS MODE: Skip processing but consume ramp for state tracking
+    if (bypassed)
+    {
+        // Apply output gain and consume bypass ramp to keep in sync
         for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
         {
             const float currentOutputGain = smoothedOutputGain.getNextValue();
+            bypassRamp.getNextValue();  // Consume ramp to keep state in sync
             for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
             {
-                buffer.setSample(channel, sample,
-                    buffer.getSample(channel, sample) * currentOutputGain);
+                // Simple pass-through with output gain
+                float sample_value = buffer.getSample(channel, sample);
+                buffer.setSample(channel, sample, sample_value * currentOutputGain);
             }
         }
 
@@ -936,14 +941,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     }
 
     // Check input buffer for corruption BEFORE processing
-    float maxInputSample = 0.0f;
-    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-        for (int i = 0; i < buffer.getNumSamples(); ++i)
-            maxInputSample = juce::jmax(maxInputSample, std::abs(buffer.getSample(ch, i)));
-
-    if (shouldLog)
-        juce::Logger::writeToLog("Input peak: " + juce::String(maxInputSample, 4));
-
     // Wrap original buffer into an AudioBlock
     auto inputBlock = juce::dsp::AudioBlock<float>(buffer);
 
@@ -973,7 +970,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // CRITICAL: Check for zero samples (would cause division by zero)
     if (actualOversampledSamples == 0)
     {
-        juce::Logger::writeToLog("ERROR: Oversampling produced ZERO samples! Cannot process.");
         return;
     }
 
@@ -986,22 +982,9 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     float currentInputGain = lastInputGain;
     float currentDrive = lastDistortionDrive;
 
-    // DEBUG: Log the delta calculations
-    if (++deltaLogCounter % 100 == 0)
-    {
-        juce::Logger::writeToLog("Deltas - gainDelta: " + juce::String(gainDelta, 6)
-            + ", driveDelta: " + juce::String(driveDelta, 6)
-            + ", actualSamples: " + juce::String((int)actualOversampledSamples)
-            + ", inputGain: " + juce::String(inputGain, 3)
-            + ", lastInputGain: " + juce::String(lastInputGain, 3));
-    }
     if (actualOversampledSamples > static_cast<size_t>(lowBandBuffer.getNumSamples()))
     {
-        juce::Logger::writeToLog("CRITICAL BUFFER OVERFLOW! oversampledBlock: " + juce::String((int)actualOversampledSamples)
-            + ", lowBandBuffer size: " + juce::String(lowBandBuffer.getNumSamples())
-            + ", sampleRate: " + juce::String(getSampleRate())
-            + ", blockSize: " + juce::String(buffer.getNumSamples())
-            + ", oversamplingFactor: " + juce::String((int)oversamplingFactor));
+        debugHadBufferOverflow.store(true, std::memory_order_relaxed);
 
         // Emergency resize to prevent crash (this should never happen after fix)
         lowBandBuffer.setSize(buffer.getNumChannels(), static_cast<int>(actualOversampledSamples + 64),
@@ -1023,8 +1006,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         *highPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(oversampledSR, crossoverFreq);
         *highPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(oversampledSR, crossoverFreq);
         lastOversampledSampleRate = oversampledSR;
-
-        juce::Logger::writeToLog("Updated distortion filters for oversampled rate: " + juce::String(oversampledSR));
     }
 
     // NOTE: Pre-highpass filter is now applied BEFORE upsampling (see above)
@@ -1084,9 +1065,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         const int requiredBufferSize = static_cast<int>(numSamples);
         if (requiredBufferSize > lowBandBuffer.getNumSamples() || requiredBufferSize > highBandBuffer.getNumSamples())
         {
-            juce::Logger::writeToLog("CRITICAL: Band-split buffer too small! Required: " + juce::String(requiredBufferSize)
-                + ", lowBandBuffer: " + juce::String(lowBandBuffer.getNumSamples())
-                + ", highBandBuffer: " + juce::String(highBandBuffer.getNumSamples()));
+            debugHadBufferOverflow.store(true, std::memory_order_relaxed);
             // Skip band-split processing to prevent crash
             return;
         }
@@ -1250,18 +1229,9 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         }
     }
 
-    if (shouldLog)
-        juce::Logger::writeToLog("After distortion peak: " + juce::String(maxSample, 4));
-
     if (hasNaN || hasInf || maxSample > 10.0f)
     {
-        juce::Logger::writeToLog("!!! CORRUPTED AFTER DISTORTION! maxSample: " + juce::String(maxSample, 3)
-            + ", NaN: " + juce::String(hasNaN ? "true" : "false")
-            + ", Inf: " + juce::String(hasInf ? "true" : "false")
-            + ", inputGain: " + juce::String(inputGain, 3)
-            + ", finalInputGain: " + juce::String(currentInputGain, 3)
-            + ", finalDrive: " + juce::String(currentDrive, 3)
-            + ", gainDelta: " + juce::String(gainDelta, 6));
+        debugHadDistortionCorruption.store(true, std::memory_order_relaxed);
     }
 
     // REMOVED: DC blocking before downsampling causes instability at 44.1kHz
@@ -1378,7 +1348,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         // SAFETY CHECK: Ensure we have enough buffer space
         if (intOversampledNumSamples > compLowBandBufferOversampled.getNumSamples())
         {
-            juce::Logger::writeToLog("CRITICAL: Oversampled compression buffer too small!");
+            debugHadBufferOverflow.store(true, std::memory_order_relaxed);
         }
         else
         {
@@ -1589,16 +1559,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Downsample back into original buffer
     oversampling->processSamplesDown(inputBlock);
 
-    // Check buffer after downsampling
-    if (shouldLog)
-    {
-        float maxAfterDownsample = 0.0f;
-        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-            for (int i = 0; i < buffer.getNumSamples(); ++i)
-                maxAfterDownsample = juce::jmax(maxAfterDownsample, std::abs(buffer.getSample(ch, i)));
-        juce::Logger::writeToLog("After downsample peak: " + juce::String(maxAfterDownsample, 4));
-    }
-
     // NOTE: Waveshaper and LA-2A compression are now in the oversampled domain (before downsampling)
     // This eliminates aliasing from harmonic generation
 
@@ -1640,19 +1600,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             auto* channelData = buffer.getWritePointer(channel);
             channelData[sample] *= currentOutputGain;
         }
-    }
-
-    // Check final output
-    float maxFinalOutput = 0.0f;
-    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-        for (int i = 0; i < buffer.getNumSamples(); ++i)
-            maxFinalOutput = juce::jmax(maxFinalOutput, std::abs(buffer.getSample(ch, i)));
-
-    if (shouldLog)
-    {
-        juce::Logger::writeToLog("Final output peak: " + juce::String(maxFinalOutput, 4)
-            + " | OutputGain: " + juce::String(outGain, 3));
-        juce::Logger::writeToLog("=========================================\n");
     }
 
     // Push samples to oscilloscope (after all processing)
@@ -1760,32 +1707,58 @@ void PluginProcessor::setStateInformation(const void* data, int sizeInBytes)
     {
         parameters.replaceState(juce::ValueTree::fromXml(*xmlState));
 
-        // Reset all filters when loading state to prevent stale coefficients/state
-        if (preHighPassFilter.state)
-            preHighPassFilter.reset();
-        if (lowPassFilter1.state)
-            lowPassFilter1.reset();
-        if (lowPassFilter2.state)
-            lowPassFilter2.reset();
-        if (highPassFilter1.state)
-            highPassFilter1.reset();
-        if (highPassFilter2.state)
-            highPassFilter2.reset();
-
-        // Reset oversampled compression filters
-        if (compLowPassFilter1Oversampled.state)
-            compLowPassFilter1Oversampled.reset();
-        if (compLowPassFilter2Oversampled.state)
-            compLowPassFilter2Oversampled.reset();
-        if (compHighPassFilter1Oversampled.state)
-            compHighPassFilter1Oversampled.reset();
-        if (compHighPassFilter2Oversampled.state)
-            compHighPassFilter2Oversampled.reset();
-
-        // Force filter coefficient update on next processBlock by invalidating cache
-        lastHighPassFreq = -1.0f;
-        lastCompCrossoverFreqOversampled = -1.0f;
+        // Signal audio thread to reset state (thread-safe handoff)
+        stateNeedsReset.store(true, std::memory_order_release);
     }
+}
+
+// Helper method called from audio thread to safely reset DSP state
+void PluginProcessor::resetDSPState()
+{
+    // Reset all filters when loading state to prevent stale coefficients/state
+    if (preHighPassFilter.state)
+        preHighPassFilter.reset();
+    if (lowPassFilter1.state)
+        lowPassFilter1.reset();
+    if (lowPassFilter2.state)
+        lowPassFilter2.reset();
+    if (highPassFilter1.state)
+        highPassFilter1.reset();
+    if (highPassFilter2.state)
+        highPassFilter2.reset();
+    if (toneFilter.state)
+        toneFilter.reset();
+
+    // Reset oversampled compression filters
+    if (compLowPassFilter1Oversampled.state)
+        compLowPassFilter1Oversampled.reset();
+    if (compLowPassFilter2Oversampled.state)
+        compLowPassFilter2Oversampled.reset();
+    if (compHighPassFilter1Oversampled.state)
+        compHighPassFilter1Oversampled.reset();
+    if (compHighPassFilter2Oversampled.state)
+        compHighPassFilter2Oversampled.reset();
+
+    // Reset envelope states
+    preCompEnvelope[0] = 1.0f;
+    preCompEnvelope[1] = 1.0f;
+    harmonicDensityEnvelope[0] = 0.0f;
+    harmonicDensityEnvelope[1] = 0.0f;
+    compEnvelopeState = 0.0f;
+    compRmsHistory = 0.0f;
+    tubeWarmth = 0.0f;
+
+    // Reset manual DC blocker
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        manualDCBlockerPrevInput[ch] = 0.0f;
+        manualDCBlockerPrevOutput[ch] = 0.0f;
+    }
+
+    // Force filter coefficient update on next processBlock by invalidating cache
+    lastHighPassFreq = -1.0f;
+    lastCompCrossoverFreqOversampled = -1.0f;
+    lastToneFreq = -1.0f;
 }
 
 //Add Parameter Definition Here

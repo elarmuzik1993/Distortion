@@ -214,6 +214,17 @@ private:
     juce::AudioBuffer<float> compDryBufferOversampled;
 
     juce::SmoothedValue<float> smoothedOutputGain;  // Only output gain uses SmoothedValue (normal rate)
+    juce::SmoothedValue<float> bypassRamp;  // Bypass crossfade to prevent clicks (10ms)
+    bool wasBypassed = true;  // Track bypass state for crossfade detection
+
+    // Smoothed parameters for automation (prevent zipper noise)
+    juce::SmoothedValue<float> smoothedLfoDepth;
+    juce::SmoothedValue<float> smoothedCompWetDry;
+    juce::SmoothedValue<float> smoothedDistMix;
+    juce::SmoothedValue<float> smoothedToneParam;
+
+    // Thread safety for state persistence
+    std::atomic<bool> stateNeedsReset{false};
 
     std::atomic<float>* inputGainParam = nullptr;
     std::atomic<float>* outputGainParam = nullptr;
@@ -267,6 +278,11 @@ private:
     int debugBlockCounter = 0;
     int deltaLogCounter = 0;
 
+    // Real-time safe debug flags (atomic, no logging in audio thread)
+    std::atomic<bool> debugHadNaN{false};
+    std::atomic<bool> debugHadBufferOverflow{false};
+    std::atomic<bool> debugHadDistortionCorruption{false};
+
     // Compression optical cell coefficients (sample-rate-dependent)
     float compAttackCoeff = 0.9995f;
     float compReleaseCoeff = 0.99995f;
@@ -306,6 +322,7 @@ private:
     float applyStudioDistortion(float x, float gain, float drive, int clipType, float harmonicScale);
     void updateSampleRateDependentCoefficients(double sampleRate);
     float generateLFOWaveform(float phase, int waveformType);  // Generate LFO waveforms
+    void resetDSPState();  // Thread-safe DSP state reset (called from audio thread)
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginProcessor)
 };
