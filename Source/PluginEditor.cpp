@@ -34,7 +34,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 
     // Setup version label (bottom left corner)
     addAndMakeVisible(versionLabel);
-    versionLabel.setText("v1.3 Sub Guard", juce::dontSendNotification);
+    versionLabel.setText("v1.4 Clean Comp", juce::dontSendNotification);
     versionLabel.setFont(juce::Font(10.0f));
     versionLabel.setColour(juce::Label::textColourId, juce::Colour(0x88, 0x88, 0x88));  // Gray text
     versionLabel.setJustificationType(juce::Justification::left);
@@ -89,10 +89,6 @@ PluginEditor::PluginEditor(PluginProcessor& p)
         compPeakReductionAttachment, "compPeakReduction");
     setupSlider(compMakeupGainSlider, compMakeupGainLabel, "Makeup Gain",
         compMakeupGainAttachment, "compMakeupGain");
-    setupSlider(compWetDrySlider, compWetDryLabel, "Wet/Dry",
-        compWetDryAttachment, "compWetDry");
-    setupSlider(compCrossoverSlider, compCrossoverLabel, "Crossover",
-        compCrossoverAttachment, "compCrossover");
 
     // Setup Compress/Limit dropdown
     addAndMakeVisible(compRatioComboBox);
@@ -340,10 +336,6 @@ PluginEditor::PluginEditor(PluginProcessor& p)
                      [this]() { toggleParameterLock("compRatio"); });
         menu.addItem("Comp Enable", true, isParameterLocked("compEnabled"),
                      [this]() { toggleParameterLock("compEnabled"); });
-        menu.addItem("Comp Wet/Dry", true, isParameterLocked("compWetDry"),
-                     [this]() { toggleParameterLock("compWetDry"); });
-        menu.addItem("Comp Crossover", true, isParameterLocked("compCrossover"),
-                     [this]() { toggleParameterLock("compCrossover"); });
 
         menu.addSeparator();
         menu.addItem("Lock All", [this]()
@@ -374,8 +366,6 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     parameterLocks["compMakeupGain"] = false;
     parameterLocks["compRatio"] = false;
     parameterLocks["compEnabled"] = false;
-    parameterLocks["compWetDry"] = false;
-    parameterLocks["compCrossover"] = false;
 
     // Add lock icons
     addAndMakeVisible(inputGainLock);
@@ -387,8 +377,6 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addAndMakeVisible(lfoDepthLock);
     addAndMakeVisible(compPeakReductionLock);
     addAndMakeVisible(compMakeupGainLock);
-    addAndMakeVisible(compWetDryLock);
-    addAndMakeVisible(compCrossoverLock);
     addAndMakeVisible(subGuardLock);
     addAndMakeVisible(cleanModeLock);
     addAndMakeVisible(clipTypeLock);
@@ -405,8 +393,6 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     setupKnobRightClick(lfoDepthSlider, "lfoDepth");
     setupKnobRightClick(compPeakReductionSlider, "compPeakReduction");
     setupKnobRightClick(compMakeupGainSlider, "compMakeupGain");
-    setupKnobRightClick(compWetDrySlider, "compWetDry");
-    setupKnobRightClick(compCrossoverSlider, "compCrossover");
     setupKnobRightClick(subGuardSlider, "subGuardFreq");
     setupKnobRightClick(cleanModeToggle, "waveshaperClean");
     setupKnobRightClick(clipTypeComboBox, "clipType");
@@ -581,18 +567,8 @@ void PluginEditor::resized()
         compMakeupGainSlider.setBounds(makeupX, compKnobY, compKnobSize, compKnobSize);
         compMakeupGainLabel.setBounds(makeupX, compKnobY + compKnobSize, compKnobSize, 15);
 
-        // Wet/Dry knob (Compression)
-        const int wetDryX = makeupX + compKnobSize + compSpacing;
-        compWetDrySlider.setBounds(wetDryX, compKnobY, compKnobSize, compKnobSize);
-        compWetDryLabel.setBounds(wetDryX, compKnobY + compKnobSize, compKnobSize, 15);
-
-        // Crossover knob
-        const int crossoverX = wetDryX + compKnobSize + compSpacing;
-        compCrossoverSlider.setBounds(crossoverX, compKnobY, compKnobSize, compKnobSize);
-        compCrossoverLabel.setBounds(crossoverX, compKnobY + compKnobSize, compKnobSize, 15);
-
-        // Compress/Limit dropdown
-        const int dropdownX = crossoverX + compKnobSize + compSpacing;
+        // Compress/Limit dropdown (now directly after Makeup Gain)
+        const int dropdownX = makeupX + compKnobSize + compSpacing;
         const int dropdownWidth = 60;
         compRatioComboBox.setBounds(dropdownX, compKnobY + 15, dropdownWidth, 20);
         compRatioLabel.setBounds(dropdownX, compKnobY + 37, dropdownWidth, 12);
@@ -616,10 +592,6 @@ void PluginEditor::resized()
                                        compKnobY + compLockOffset, compLockSize, compLockSize);
         compMakeupGainLock.setBounds(makeupX + compKnobSize - compLockSize - compLockOffset,
                                     compKnobY + compLockOffset, compLockSize, compLockSize);
-        compWetDryLock.setBounds(wetDryX + compKnobSize - compLockSize - compLockOffset,
-                                compKnobY + compLockOffset, compLockSize, compLockSize);
-        compCrossoverLock.setBounds(crossoverX + compKnobSize - compLockSize - compLockOffset,
-                                   compKnobY + compLockOffset, compLockSize, compLockSize);
         compRatioLock.setBounds(dropdownX + dropdownWidth - compLockSize - 2,
                                compKnobY + 15, compLockSize, compLockSize);
         compEnableLock.setBounds(toggleX + toggleSize - compLockSize,
@@ -749,8 +721,6 @@ void PluginEditor::updateLockIcons()
     lfoDepthLock.setLocked(isParameterLocked("lfoDepth"));
     compPeakReductionLock.setLocked(isParameterLocked("compPeakReduction"));
     compMakeupGainLock.setLocked(isParameterLocked("compMakeupGain"));
-    compWetDryLock.setLocked(isParameterLocked("compWetDry"));
-    compCrossoverLock.setLocked(isParameterLocked("compCrossover"));
     subGuardLock.setLocked(isParameterLocked("subGuardFreq"));
     clipTypeLock.setLocked(isParameterLocked("clipType"));
     compRatioLock.setLocked(isParameterLocked("compRatio"));
@@ -787,15 +757,11 @@ void PluginEditor::updateCompressionVisibility()
 {
     const bool visible = isCompressionExpanded;
 
-    // 4 knobs + labels
+    // 2 knobs + labels
     compPeakReductionSlider.setVisible(visible);
     compPeakReductionLabel.setVisible(visible);
     compMakeupGainSlider.setVisible(visible);
     compMakeupGainLabel.setVisible(visible);
-    compWetDrySlider.setVisible(visible);
-    compWetDryLabel.setVisible(visible);
-    compCrossoverSlider.setVisible(visible);
-    compCrossoverLabel.setVisible(visible);
 
     // Dropdown, toggle, meter
     compRatioComboBox.setVisible(visible);
@@ -803,11 +769,9 @@ void PluginEditor::updateCompressionVisibility()
     compEnableToggle.setVisible(visible);
     gainReductionMeter.setVisible(visible);
 
-    // 6 lock icons
+    // 4 lock icons
     compPeakReductionLock.setVisible(visible);
     compMakeupGainLock.setVisible(visible);
-    compWetDryLock.setVisible(visible);
-    compCrossoverLock.setVisible(visible);
     compRatioLock.setVisible(visible);
     compEnableLock.setVisible(visible);
 }
@@ -908,8 +872,6 @@ void PluginEditor::randomizeAllParameters()
     randomizeFloatParam("compMakeupGain", 0.0f, 100.0f);
     randomizeChoiceParam("compRatio", 2);
     randomizeBoolParam("compEnabled");
-    randomizeFloatParam("compWetDry", 0.0f, 100.0f);
-    randomizeFloatParam("compCrossover", 150.0f, 350.0f);
 }
 
 juce::File PluginEditor::getPresetDirectory()
@@ -1066,8 +1028,6 @@ void PluginEditor::loadFactoryPreset(const juce::String& presetName)
         setParam("compMakeupGain", 50.0f);
         setParam("compRatio", 0.0f);
         setParam("compEnabled", 0.0f);
-        setParam("compWetDry", 50.0f);
-        setParam("compCrossover", 250.0f);
     }
     else if (presetName == "Warm Tube")
     {
@@ -1085,8 +1045,6 @@ void PluginEditor::loadFactoryPreset(const juce::String& presetName)
         setParam("compMakeupGain", 50.0f);
         setParam("compRatio", 0.0f);
         setParam("compEnabled", 0.0f);
-        setParam("compWetDry", 50.0f);
-        setParam("compCrossover", 250.0f);
     }
     else if (presetName == "Hard Clip")
     {
@@ -1104,8 +1062,6 @@ void PluginEditor::loadFactoryPreset(const juce::String& presetName)
         setParam("compMakeupGain", 60.0f);
         setParam("compRatio", 0.0f);
         setParam("compEnabled", 1.0f);
-        setParam("compWetDry", 70.0f);
-        setParam("compCrossover", 250.0f);
     }
     else if (presetName == "Soft Saturation")
     {
@@ -1123,8 +1079,6 @@ void PluginEditor::loadFactoryPreset(const juce::String& presetName)
         setParam("compMakeupGain", 50.0f);
         setParam("compRatio", 0.0f);
         setParam("compEnabled", 0.0f);
-        setParam("compWetDry", 50.0f);
-        setParam("compCrossover", 250.0f);
     }
     else if (presetName == "808 Safe")
     {
@@ -1142,7 +1096,5 @@ void PluginEditor::loadFactoryPreset(const juce::String& presetName)
         setParam("compMakeupGain", 50.0f);
         setParam("compRatio", 0.0f);
         setParam("compEnabled", 0.0f);
-        setParam("compWetDry", 50.0f);
-        setParam("compCrossover", 250.0f);
     }
 }

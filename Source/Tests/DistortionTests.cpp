@@ -1020,7 +1020,7 @@ void ParameterTests::testParameterRanges(PluginProcessor& processor)
         "subGuardFreq", "clipType", "distMix",
         "lfoRate", "lfoDepth", "lfoWaveform",
         "compEnabled", "compPeakReduction", "compMakeupGain",
-        "compRatio", "compWetDry", "compCrossover"
+        "compRatio"
     };
 
     for (const char* paramId : expectedParams)

@@ -57,7 +57,6 @@ namespace DSPConstants
 
     // Default parameter values
     constexpr float DEFAULT_HIPASS_FREQ = 20.0f;              // Default hi-pass filter frequency (subsonic only)
-    constexpr float DEFAULT_COMP_CROSSOVER = 250.0f;          // Default compression crossover
 
     // Oscilloscope configuration
     constexpr int SCOPE_BUFFER_SIZE = 2048;                   // Circular buffer size for waveform display
@@ -231,23 +230,8 @@ private:
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> toneFilter;
 
-    // LA-2A band-split filters (OVERSAMPLED rate for anti-aliasing)
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> compLowPassFilter1Oversampled;
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> compLowPassFilter2Oversampled;
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> compHighPassFilter1Oversampled;
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> compHighPassFilter2Oversampled;
-
     juce::AudioBuffer<float> lowBandBuffer;   // For clean low frequencies
     juce::AudioBuffer<float> highBandBuffer;  // For distorted high frequencies
-
-    // Compression buffers for OVERSAMPLED domain
-    juce::AudioBuffer<float> compLowBandBufferOversampled;
-    juce::AudioBuffer<float> compHighBandBufferOversampled;
-    juce::AudioBuffer<float> compDryBufferOversampled;
 
     juce::SmoothedValue<float> smoothedOutputGain;  // Only output gain uses SmoothedValue (normal rate)
     juce::SmoothedValue<float> bypassRamp;  // Bypass crossfade to prevent clicks (10ms)
@@ -255,7 +239,6 @@ private:
 
     // Smoothed parameters for automation (prevent zipper noise)
     juce::SmoothedValue<float> smoothedLfoDepth;
-    juce::SmoothedValue<float> smoothedCompWetDry;
     juce::SmoothedValue<float> smoothedDistMix;
     juce::SmoothedValue<float> smoothedToneParam;
 
@@ -279,8 +262,6 @@ private:
     std::atomic<float>* compRatioParam = nullptr;  
     std::atomic<float>* compEnabledParam = nullptr;
 
-    std::atomic<float>* compWetDryParam = nullptr;      // 0=100% dry, 100=100% wet
-    std::atomic<float>* compCrossoverParam = nullptr;   // 150-350Hz adjustable split
     std::atomic<float>* distMixParam = nullptr;         // Distortion wet/dry mix (0-100)
     std::atomic<float>* toneParam = nullptr;            // Post-distortion tone (2000-20000Hz)
     std::atomic<float>* waveshaperCleanParam = nullptr; // 0=Gritty (tone→waveshaper), 1=Clean (waveshaper→tone)
@@ -341,7 +322,6 @@ private:
 
     // Cached filter parameters to avoid unnecessary coefficient updates
     float lastHighPassFreq = -1.0f;
-    float lastCompCrossoverFreqOversampled = -1.0f;
     float lastToneFreq = -1.0f;
     double lastSampleRate = 0.0;  // Track sample rate changes
     double lastOversampledSampleRate = 0.0;  // Track oversampled rate for distortion filters

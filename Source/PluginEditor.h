@@ -641,8 +641,6 @@ private:
     bool isCompressionExpanded = true;  // Default: expanded
     CollapsibleTabHeader compressionTabHeader{"COMPRESSION"};
 
-    CustomKnob compWetDrySlider, compCrossoverSlider;
-    juce::Label compWetDryLabel, compCrossoverLabel;
     CustomKnob subGuardSlider;
     juce::Label subGuardLabel;
     juce::ToggleButton cleanModeToggle;
@@ -677,7 +675,7 @@ private:
     // Lock icons for each parameter
     LockIcon inputGainLock, outputGainLock, distortionAmountLock, highPassFreqLock;
     LockIcon distMixLock, lfoRateLock, lfoDepthLock;
-    LockIcon compPeakReductionLock, compMakeupGainLock, compWetDryLock, compCrossoverLock;
+    LockIcon compPeakReductionLock, compMakeupGainLock;
     LockIcon subGuardLock, clipTypeLock, compRatioLock, compEnableLock, cleanModeLock;
 
     // Lock toggles for randomization
@@ -702,8 +700,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> compMakeupGainAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> compRatioAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> compEnableAttachment;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> compWetDryAttachment;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> compCrossoverAttachment;
+
     // Helper methods
     void setupSlider(CustomKnob& slider,
         juce::Label& label,

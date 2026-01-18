@@ -43,8 +43,6 @@ PluginProcessor::PluginProcessor()
     compMakeupGainParam = parameters.getRawParameterValue("compMakeupGain");
     compRatioParam = parameters.getRawParameterValue("compRatio");
     compEnabledParam = parameters.getRawParameterValue("compEnabled");
-    compWetDryParam = parameters.getRawParameterValue("compWetDry");
-    compCrossoverParam = parameters.getRawParameterValue("compCrossover");
     distMixParam = parameters.getRawParameterValue("distMix");
     toneParam = parameters.getRawParameterValue("tone");
     waveshaperCleanParam = parameters.getRawParameterValue("waveshaperClean");
@@ -52,7 +50,7 @@ PluginProcessor::PluginProcessor()
     jassert(inputGainParam && outputGainParam && distortionAmountParam
         && highPassFreqParam && subGuardFreqParam && clipTypeParam
         && lfoRateParam && lfoDepthParam && lfoWaveformParam && waveshaperMixParam
-        && compPeakReductionParam && compMakeupGainParam && compRatioParam && compEnabledParam && compWetDryParam && compCrossoverParam
+        && compPeakReductionParam && compMakeupGainParam && compRatioParam && compEnabledParam
         && distMixParam && toneParam && waveshaperCleanParam);
 
 }
@@ -409,7 +407,6 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 
     // Smoothed parameters for automation (20ms smoothing)
     smoothedLfoDepth.reset(sampleRate, 0.02);
-    smoothedCompWetDry.reset(sampleRate, 0.02);
     smoothedDistMix.reset(sampleRate, 0.02);
     smoothedToneParam.reset(sampleRate, 0.02);
 
@@ -575,27 +572,6 @@ if (!oversampling || currentNumChannels != numChannels) {
     compReleaseCoeffOversampled = std::exp(-1.0f / (DSPConstants::COMP_RELEASE_TIME_S * oversampledRate));
     compRmsHistoryCoeffOversampled = std::exp(-1.0f / (DSPConstants::COMP_RMS_HISTORY_TIME_S * oversampledRate));
 
-    // LA-2A crossover filters for OVERSAMPLED domain (Linkwitz-Riley 4th order)
-    const float compCrossoverFreqInit = compCrossoverParam ? compCrossoverParam->load() : DSPConstants::DEFAULT_COMP_CROSSOVER;
-
-    compLowPassFilter1Oversampled.prepare(spec);
-    *compLowPassFilter1Oversampled.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, compCrossoverFreqInit);
-    compLowPassFilter1Oversampled.reset();
-
-    compLowPassFilter2Oversampled.prepare(spec);
-    *compLowPassFilter2Oversampled.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, compCrossoverFreqInit);
-    compLowPassFilter2Oversampled.reset();
-
-    compHighPassFilter1Oversampled.prepare(spec);
-    *compHighPassFilter1Oversampled.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, compCrossoverFreqInit);
-    compHighPassFilter1Oversampled.reset();
-
-    compHighPassFilter2Oversampled.prepare(spec);
-    *compHighPassFilter2Oversampled.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, compCrossoverFreqInit);
-    compHighPassFilter2Oversampled.reset();
-
-    lastCompCrossoverFreqOversampled = compCrossoverFreqInit;
-
     // Prepare buffers for band-split processing (oversampled size)
     // CRITICAL: JUCE's oversampling can produce variable output sizes depending on:
     // 1. Internal filter latency compensation
@@ -612,11 +588,6 @@ if (!oversampling || currentNumChannels != numChannels) {
     const int oversampledBlockSize = static_cast<int>((expectedOversampledSize + oversamplingLatencySamples) * 2 + 128);
     lowBandBuffer.setSize(numChannels, oversampledBlockSize, false, false, true);
     highBandBuffer.setSize(numChannels, oversampledBlockSize, false, false, true);
-
-    // Compression buffers for OVERSAMPLED domain
-    compLowBandBufferOversampled.setSize(numChannels, oversampledBlockSize, false, false, true);
-    compHighBandBufferOversampled.setSize(numChannels, oversampledBlockSize, false, false, true);
-    compDryBufferOversampled.setSize(numChannels, oversampledBlockSize, false, false, true);
 }
 
 
@@ -641,12 +612,6 @@ void PluginProcessor::releaseResources()
     // Reset harmonic density envelope state
     harmonicDensityEnvelope[0] = 0.0f;
     harmonicDensityEnvelope[1] = 0.0f;
-
-    // Reset oversampled compression filters
-    compLowPassFilter1Oversampled.reset();
-    compLowPassFilter2Oversampled.reset();
-    compHighPassFilter1Oversampled.reset();
-    compHighPassFilter2Oversampled.reset();
 }
 
 #ifndef JucePlugin_PreferredChannelConfigurations
@@ -827,7 +792,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         smoothedGainReduction.reset(currentSR, DSPConstants::COMP_GR_SMOOTH_TIME_S);
         bypassRamp.reset(currentSR, 0.01);
         smoothedLfoDepth.reset(currentSR, 0.02);
-        smoothedCompWetDry.reset(currentSR, 0.02);
         smoothedDistMix.reset(currentSR, 0.02);
         smoothedToneParam.reset(currentSR, 0.02);
 
@@ -858,8 +822,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     auto compMakeupGain = compMakeupGainParam->load();
     const int compRatioMode = static_cast<int>(compRatioParam->load());
     const bool compEnabled = compEnabledParam->load() > 0.5f;
-    auto compWetDry = compWetDryParam->load();
-    auto compCrossover = compCrossoverParam->load();
     auto distMix = distMixParam->load();
 
     // SAFETY: Validate all parameter values to prevent NaN propagation
@@ -868,13 +830,10 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     if (std::isnan(lfoDepth)) lfoDepth = 0.0f;
     if (std::isnan(compPeakReduction)) compPeakReduction = 0.0f;
     if (std::isnan(compMakeupGain)) compMakeupGain = 50.0f;
-    if (std::isnan(compWetDry)) compWetDry = 100.0f;
-    if (std::isnan(compCrossover)) compCrossover = DSPConstants::DEFAULT_COMP_CROSSOVER;
     if (std::isnan(distMix)) distMix = 100.0f;
 
     // Set targets for smoothed parameters (prevent zipper noise from automation)
     smoothedLfoDepth.setTargetValue(lfoDepth);
-    smoothedCompWetDry.setTargetValue(compWetDry);
     smoothedDistMix.setTargetValue(distMix);
 
     // Scale to actual ranges for processing (studio distortion style)
@@ -1394,196 +1353,108 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         applyWaveshaper();
     }
 
-    // ========== LA-2A PARALLEL COMPRESSION (oversampled domain) ==========
-    // Now in oversampled domain for proper anti-aliasing of tube harmonics
+    // ========== LA-2A FULL-BAND COMPRESSION (oversampled domain) ==========
+    // Simple full-band compression without crossover or wet/dry blend
     if (compEnabled && compPeakReduction > 0.0f)
     {
         const size_t oversampledNumSamples = oversampledBlock.getNumSamples();
-        const size_t oversampledNumChannels = oversampledBlock.getNumChannels();
-        const int intOversampledNumSamples = static_cast<int>(oversampledNumSamples);
+        const int compNumChannels = static_cast<int>(oversampledBlock.getNumChannels());
+        const int compNumSamples = static_cast<int>(oversampledNumSamples);
 
-        // SAFETY CHECK: Ensure we have enough buffer space
-        if (intOversampledNumSamples > compLowBandBufferOversampled.getNumSamples())
+        // Map peak reduction (0-100) to threshold in dB
+        const float threshold = DSPConstants::COMP_THRESHOLD_MIN_DB +
+                              (compPeakReduction * DSPConstants::COMP_THRESHOLD_RANGE_DB / 100.0f);
+
+        // Ratio: Compress mode = 3:1, Limit mode = 12:1
+        const float ratio = (compRatioMode == 0) ? DSPConstants::COMP_RATIO_COMPRESS : DSPConstants::COMP_RATIO_LIMIT;
+
+        // Map makeup gain
+        const float makeupGainDB = (compMakeupGain - 50.0f) * (DSPConstants::COMP_MAKEUP_RANGE_DB / 50.0f);
+        const float makeupGainLinear = juce::Decibels::decibelsToGain(makeupGainDB);
+
+        // Use OVERSAMPLED coefficients
+        const float attackCoeff = compAttackCoeffOversampled;
+        const float releaseCoeff = compReleaseCoeffOversampled;
+
+        float maxGainReductionDB = 0.0f;
+
+        for (int sampleIdx = 0; sampleIdx < compNumSamples; ++sampleIdx)
         {
-            debugHadBufferOverflow.store(true, std::memory_order_relaxed);
-        }
-        else
-        {
-            // Store DRY signal for parallel blending
-            for (size_t channel = 0; channel < oversampledNumChannels; ++channel)
+            // Calculate RMS across channels for detection
+            float sumSquares = 0.0f;
+            for (int ch = 0; ch < compNumChannels; ++ch)
             {
-                compDryBufferOversampled.copyFrom(static_cast<int>(channel), 0,
-                    oversampledBlock.getChannelPointer(channel),
-                    intOversampledNumSamples);
+                const float sampleValue = oversampledBlock.getChannelPointer(static_cast<size_t>(ch))[sampleIdx];
+                sumSquares += sampleValue * sampleValue;
             }
 
-            // Create WET signal: Split -> Compress low only -> Recombine
-            compLowBandBufferOversampled.clear();
-            compHighBandBufferOversampled.clear();
+            const float rms = std::sqrt(sumSquares / compNumChannels);
 
-            // Copy oversampled block to both bands
-            for (size_t channel = 0; channel < oversampledNumChannels; ++channel)
+            // Update RMS history with OVERSAMPLED coefficient
+            compRmsHistory = compRmsHistoryCoeffOversampled * compRmsHistory +
+                            (1.0f - compRmsHistoryCoeffOversampled) * rms;
+
+            // Convert to dB
+            const float inputLevelDB = juce::Decibels::gainToDecibels(rms + 0.00001f);
+
+            // Calculate gain reduction needed
+            float gainReductionDB = 0.0f;
+            if (inputLevelDB > threshold)
             {
-                compLowBandBufferOversampled.copyFrom(static_cast<int>(channel), 0,
-                    oversampledBlock.getChannelPointer(channel),
-                    intOversampledNumSamples);
-                compHighBandBufferOversampled.copyFrom(static_cast<int>(channel), 0,
-                    oversampledBlock.getChannelPointer(channel),
-                    intOversampledNumSamples);
-            }
+                const float overThresholdDB = inputLevelDB - threshold;
 
-            // Update oversampled crossover filters if frequency changed
-            const double oversampledSampleRateComp = getSampleRate() * oversamplingFactor;
-            if (std::abs(compCrossover - lastCompCrossoverFreqOversampled) > 0.01f)
-            {
-                *compLowPassFilter1Oversampled.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(oversampledSampleRateComp, compCrossover);
-                *compLowPassFilter2Oversampled.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(oversampledSampleRateComp, compCrossover);
-                *compHighPassFilter1Oversampled.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(oversampledSampleRateComp, compCrossover);
-                *compHighPassFilter2Oversampled.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(oversampledSampleRateComp, compCrossover);
-                lastCompCrossoverFreqOversampled = compCrossover;
-            }
-
-            // Create blocks for filtering
-            auto lowBlockComp = juce::dsp::AudioBlock<float>(compLowBandBufferOversampled)
-                                .getSubBlock(0, oversampledNumSamples);
-            auto highBlockComp = juce::dsp::AudioBlock<float>(compHighBandBufferOversampled)
-                                .getSubBlock(0, oversampledNumSamples);
-
-            // Apply Linkwitz-Riley crossover (4th order) using OVERSAMPLED filters
-            compLowPassFilter1Oversampled.process(juce::dsp::ProcessContextReplacing<float>(lowBlockComp));
-            compLowPassFilter2Oversampled.process(juce::dsp::ProcessContextReplacing<float>(lowBlockComp));
-
-            compHighPassFilter1Oversampled.process(juce::dsp::ProcessContextReplacing<float>(highBlockComp));
-            compHighPassFilter2Oversampled.process(juce::dsp::ProcessContextReplacing<float>(highBlockComp));
-
-            // Compress LOW BAND ONLY - inline compression with oversampled coefficients
-            {
-                const int compNumSamples = intOversampledNumSamples;
-                const int compNumChannels = compLowBandBufferOversampled.getNumChannels();
-
-                // Map peak reduction (0-100) to threshold in dB
-                const float threshold = DSPConstants::COMP_THRESHOLD_MIN_DB +
-                                      (compPeakReduction * DSPConstants::COMP_THRESHOLD_RANGE_DB / 100.0f);
-
-                // Ratio: Compress mode = 3:1, Limit mode = 12:1
-                const float ratio = (compRatioMode == 0) ? DSPConstants::COMP_RATIO_COMPRESS : DSPConstants::COMP_RATIO_LIMIT;
-
-                // Map makeup gain
-                const float makeupGainDB = (compMakeupGain - 50.0f) * (DSPConstants::COMP_MAKEUP_RANGE_DB / 50.0f);
-                const float makeupGainLinear = juce::Decibels::decibelsToGain(makeupGainDB);
-
-                // Use OVERSAMPLED coefficients
-                const float attackCoeff = compAttackCoeffOversampled;
-                const float releaseCoeff = compReleaseCoeffOversampled;
-
-                float maxGainReductionDB = 0.0f;
-
-                for (int sampleIdx = 0; sampleIdx < compNumSamples; ++sampleIdx)
+                // Soft knee for smooth LA-2A character
+                const float kneeWidth = DSPConstants::COMP_KNEE_WIDTH_DB;
+                if (overThresholdDB < kneeWidth)
                 {
-                    // Calculate RMS across channels for detection
-                    float sumSquares = 0.0f;
-                    for (int ch = 0; ch < compNumChannels; ++ch)
-                    {
-                        const float sampleValue = compLowBandBufferOversampled.getSample(ch, sampleIdx);
-                        sumSquares += sampleValue * sampleValue;
-                    }
-
-                    const float rms = std::sqrt(sumSquares / compNumChannels);
-
-                    // Update RMS history with OVERSAMPLED coefficient
-                    compRmsHistory = compRmsHistoryCoeffOversampled * compRmsHistory +
-                                    (1.0f - compRmsHistoryCoeffOversampled) * rms;
-
-                    // Convert to dB
-                    const float inputLevelDB = juce::Decibels::gainToDecibels(rms + 0.00001f);
-
-                    // Calculate gain reduction needed
-                    float gainReductionDB = 0.0f;
-                    if (inputLevelDB > threshold)
-                    {
-                        const float overThresholdDB = inputLevelDB - threshold;
-
-                        // Soft knee for smooth LA-2A character
-                        const float kneeWidth = DSPConstants::COMP_KNEE_WIDTH_DB;
-                        if (overThresholdDB < kneeWidth)
-                        {
-                            const float kneeRatio = overThresholdDB / kneeWidth;
-                            gainReductionDB = overThresholdDB * kneeRatio * (1.0f - 1.0f / ratio);
-                        }
-                        else
-                        {
-                            gainReductionDB = kneeWidth * (1.0f - 1.0f / ratio) +
-                                (overThresholdDB - kneeWidth) * (1.0f - 1.0f / ratio);
-                        }
-                    }
-
-                    // Optical cell envelope follower
-                    const float targetGainReduction = juce::Decibels::decibelsToGain(-gainReductionDB);
-
-                    if (targetGainReduction < compEnvelopeState)
-                    {
-                        compEnvelopeState = attackCoeff * compEnvelopeState + (1.0f - attackCoeff) * targetGainReduction;
-                    }
-                    else
-                    {
-                        compEnvelopeState = releaseCoeff * compEnvelopeState + (1.0f - releaseCoeff) * targetGainReduction;
-                    }
-
-                    maxGainReductionDB = juce::jmax(maxGainReductionDB, gainReductionDB);
-
-                    // Apply compression and makeup gain to all channels
-                    for (int ch = 0; ch < compNumChannels; ++ch)
-                    {
-                        float sampleValue = compLowBandBufferOversampled.getSample(ch, sampleIdx);
-
-                        // Apply compression
-                        sampleValue *= compEnvelopeState;
-
-                        // Tube harmonic generation
-                        const float tubeInput = sampleValue * DSPConstants::COMP_TUBE_DRIVE;
-                        const float tubeSaturation = std::tanh(tubeInput);
-
-                        sampleValue = sampleValue * (1.0f - DSPConstants::COMP_TUBE_BLEND) +
-                                     tubeSaturation * DSPConstants::COMP_TUBE_BLEND;
-
-                        sampleValue *= makeupGainLinear;
-                        sampleValue = std::tanh(sampleValue * 0.9f) * 1.1f;
-
-                        compLowBandBufferOversampled.setSample(ch, sampleIdx, sampleValue);
-                    }
+                    const float kneeRatio = overThresholdDB / kneeWidth;
+                    gainReductionDB = overThresholdDB * kneeRatio * (1.0f - 1.0f / ratio);
                 }
-
-                currentGainReductionDB.store(maxGainReductionDB, std::memory_order_relaxed);
-            }
-
-            // Recombine: Compressed low + Clean high = WET signal
-            for (size_t channel = 0; channel < oversampledNumChannels; ++channel)
-            {
-                auto* outputData = oversampledBlock.getChannelPointer(channel);
-                const auto* lowData = compLowBandBufferOversampled.getReadPointer(static_cast<int>(channel));
-                const auto* highData = compHighBandBufferOversampled.getReadPointer(static_cast<int>(channel));
-
-                for (size_t sampleIdx = 0; sampleIdx < oversampledNumSamples; ++sampleIdx)
+                else
                 {
-                    outputData[sampleIdx] = lowData[sampleIdx] + highData[sampleIdx];
+                    gainReductionDB = kneeWidth * (1.0f - 1.0f / ratio) +
+                        (overThresholdDB - kneeWidth) * (1.0f - 1.0f / ratio);
                 }
             }
 
-            // Parallel blend: Mix dry and wet signals
-            const float wetAmountComp = compWetDry / 100.0f;
-            const float dryAmountComp = 1.0f - wetAmountComp;
+            // Optical cell envelope follower
+            const float targetGainReduction = juce::Decibels::decibelsToGain(-gainReductionDB);
 
-            for (size_t channel = 0; channel < oversampledNumChannels; ++channel)
+            if (targetGainReduction < compEnvelopeState)
             {
-                auto* outputData = oversampledBlock.getChannelPointer(channel);
-                const auto* dryData = compDryBufferOversampled.getReadPointer(static_cast<int>(channel));
+                compEnvelopeState = attackCoeff * compEnvelopeState + (1.0f - attackCoeff) * targetGainReduction;
+            }
+            else
+            {
+                compEnvelopeState = releaseCoeff * compEnvelopeState + (1.0f - releaseCoeff) * targetGainReduction;
+            }
 
-                for (size_t sampleIdx = 0; sampleIdx < oversampledNumSamples; ++sampleIdx)
-                {
-                    outputData[sampleIdx] = dryAmountComp * dryData[sampleIdx] + wetAmountComp * outputData[sampleIdx];
-                }
+            maxGainReductionDB = juce::jmax(maxGainReductionDB, gainReductionDB);
+
+            // Apply compression and makeup gain to all channels
+            for (int ch = 0; ch < compNumChannels; ++ch)
+            {
+                auto* channelData = oversampledBlock.getChannelPointer(static_cast<size_t>(ch));
+                float sampleValue = channelData[sampleIdx];
+
+                // Apply compression
+                sampleValue *= compEnvelopeState;
+
+                // Tube harmonic generation
+                const float tubeInput = sampleValue * DSPConstants::COMP_TUBE_DRIVE;
+                const float tubeSaturation = std::tanh(tubeInput);
+
+                sampleValue = sampleValue * (1.0f - DSPConstants::COMP_TUBE_BLEND) +
+                             tubeSaturation * DSPConstants::COMP_TUBE_BLEND;
+
+                sampleValue *= makeupGainLinear;
+                sampleValue = std::tanh(sampleValue * 0.9f) * 1.1f;
+
+                channelData[sampleIdx] = sampleValue;
             }
         }
+
+        currentGainReductionDB.store(maxGainReductionDB, std::memory_order_relaxed);
     }
 
     // ========== SOFT CLIPPER (ISP Protection) ==========
@@ -1802,16 +1673,6 @@ void PluginProcessor::resetDSPState()
     if (toneFilter.state)
         toneFilter.reset();
 
-    // Reset oversampled compression filters
-    if (compLowPassFilter1Oversampled.state)
-        compLowPassFilter1Oversampled.reset();
-    if (compLowPassFilter2Oversampled.state)
-        compLowPassFilter2Oversampled.reset();
-    if (compHighPassFilter1Oversampled.state)
-        compHighPassFilter1Oversampled.reset();
-    if (compHighPassFilter2Oversampled.state)
-        compHighPassFilter2Oversampled.reset();
-
     // Reset envelope states
     preCompEnvelope[0] = 1.0f;
     preCompEnvelope[1] = 1.0f;
@@ -1830,7 +1691,6 @@ void PluginProcessor::resetDSPState()
 
     // Force filter coefficient update on next processBlock by invalidating cache
     lastHighPassFreq = -1.0f;
-    lastCompCrossoverFreqOversampled = -1.0f;
     lastToneFreq = -1.0f;
     lastSubGuardFreq = -1.0f;
 }
@@ -1997,19 +1857,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         juce::ParameterID{ "compEnabled", 1 },
         "Compressor Enable",
         false));  // Default OFF
-
-  
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID{ "compWetDry", 1 },
-        "Comp Wet/Dry",
-        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f),
-        50.0f));  // Default 50 = 50% dry, 50% wet (parallel blend)
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID{ "compCrossover", 1 },
-        "Comp Crossover",
-        juce::NormalisableRange<float>(150.0f, 350.0f, 1.0f),
-        DSPConstants::DEFAULT_COMP_CROSSOVER));
 
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "distMix", 1 },
