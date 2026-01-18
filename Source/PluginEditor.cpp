@@ -34,7 +34,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 
     // Setup version label (bottom left corner)
     addAndMakeVisible(versionLabel);
-    versionLabel.setText("v1.2 RT-Safe", juce::dontSendNotification);
+    versionLabel.setText("v1.4 Clean Comp", juce::dontSendNotification);
     versionLabel.setFont(juce::Font(10.0f));
     versionLabel.setColour(juce::Label::textColourId, juce::Colour(0x88, 0x88, 0x88));  // Gray text
     versionLabel.setJustificationType(juce::Justification::left);
@@ -89,10 +89,6 @@ PluginEditor::PluginEditor(PluginProcessor& p)
         compPeakReductionAttachment, "compPeakReduction");
     setupSlider(compMakeupGainSlider, compMakeupGainLabel, "Makeup Gain",
         compMakeupGainAttachment, "compMakeupGain");
-    setupSlider(compWetDrySlider, compWetDryLabel, "Wet/Dry",
-        compWetDryAttachment, "compWetDry");
-    setupSlider(compCrossoverSlider, compCrossoverLabel, "Crossover",
-        compCrossoverAttachment, "compCrossover");
 
     // Setup Compress/Limit dropdown
     addAndMakeVisible(compRatioComboBox);
@@ -126,19 +122,37 @@ PluginEditor::PluginEditor(PluginProcessor& p)
         resized(); // Recalculate layout with new height
     };
     
-    // Setup 808-Safe Mode toggle
-    addAndMakeVisible(bandSplitToggle);
-    bandSplitToggle.setButtonText("808-Safe");
-    bandSplitToggle.setLookAndFeel(&checkboxLookAndFeel);  // Apply custom black box with green tick
+    // Setup Sub Guard knob with snap behavior
+    setupSlider(subGuardSlider, subGuardLabel, "SUB GUARD", subGuardAttachment, "subGuardFreq");
 
-    bandSplitAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
-        audioProcessor.parameters, "bandSplitEnabled", bandSplitToggle);
+    // Custom text display with mode indicators
+    subGuardSlider.textFromValueFunction = [](double v) {
+        // Check for OFF position first
+        if (v <= 1.0) return juce::String("OFF");
 
-    addAndMakeVisible(bandSplitLabel);
-    bandSplitLabel.setText("Clean Sub", juce::dontSendNotification);
-    bandSplitLabel.setJustificationType(juce::Justification::centred);
-    bandSplitLabel.setColour(juce::Label::textColourId, juce::Colours::white);
-    bandSplitLabel.setFont(juce::Font(12.0f, juce::Font::bold));  // Bigger and bold
+        // Normal frequency display with snap points
+        juce::String text = juce::String(static_cast<int>(v)) + " Hz";
+        if (std::abs(v - 60.0) <= 8.0) text = "60Hz PRESERVE";
+        else if (std::abs(v - 100.0) <= 8.0) text = "100Hz CONTROL";
+        else if (std::abs(v - 150.0) <= 8.0) text = "150Hz AGGRO";
+        return text;
+    };
+
+    // Snap to nearest point when value changes
+    subGuardSlider.onValueChange = [this]() {
+        double v = subGuardSlider.getValue();
+
+        // Snap to OFF if very low (creates discrete OFF position)
+        if (v <= 25.0) {
+            subGuardSlider.setValue(0.0);
+            return;
+        }
+
+        // Snap to preset frequencies
+        if (std::abs(v - 60.0) <= 8.0) subGuardSlider.setValue(60.0);
+        else if (std::abs(v - 100.0) <= 8.0) subGuardSlider.setValue(100.0);
+        else if (std::abs(v - 150.0) <= 8.0) subGuardSlider.setValue(150.0);
+    };
 
     // Setup Clean Mode toggle
     addAndMakeVisible(cleanModeToggle);
@@ -298,8 +312,8 @@ PluginEditor::PluginEditor(PluginProcessor& p)
                      [this]() { toggleParameterLock("distortionAmount"); });
         menu.addItem("Hi-Pass Filter", true, isParameterLocked("highPassFreq"),
                      [this]() { toggleParameterLock("highPassFreq"); });
-        menu.addItem("808-Safe", true, isParameterLocked("bandSplitEnabled"),
-                     [this]() { toggleParameterLock("bandSplitEnabled"); });
+        menu.addItem("Sub Guard", true, isParameterLocked("subGuardFreq"),
+                     [this]() { toggleParameterLock("subGuardFreq"); });
         menu.addItem("Clip Type", true, isParameterLocked("clipType"),
                      [this]() { toggleParameterLock("clipType"); });
         menu.addItem("Dist Mix", true, isParameterLocked("distMix"),
@@ -322,10 +336,6 @@ PluginEditor::PluginEditor(PluginProcessor& p)
                      [this]() { toggleParameterLock("compRatio"); });
         menu.addItem("Comp Enable", true, isParameterLocked("compEnabled"),
                      [this]() { toggleParameterLock("compEnabled"); });
-        menu.addItem("Comp Wet/Dry", true, isParameterLocked("compWetDry"),
-                     [this]() { toggleParameterLock("compWetDry"); });
-        menu.addItem("Comp Crossover", true, isParameterLocked("compCrossover"),
-                     [this]() { toggleParameterLock("compCrossover"); });
 
         menu.addSeparator();
         menu.addItem("Lock All", [this]()
@@ -347,7 +357,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     parameterLocks["outputGain"] = false;
     parameterLocks["distortionAmount"] = false;
     parameterLocks["highPassFreq"] = false;
-    parameterLocks["bandSplitEnabled"] = false;
+    parameterLocks["subGuardFreq"] = false;
     parameterLocks["clipType"] = false;
     parameterLocks["distMix"] = false;
     parameterLocks["lfoRate"] = false;
@@ -356,8 +366,6 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     parameterLocks["compMakeupGain"] = false;
     parameterLocks["compRatio"] = false;
     parameterLocks["compEnabled"] = false;
-    parameterLocks["compWetDry"] = false;
-    parameterLocks["compCrossover"] = false;
 
     // Add lock icons
     addAndMakeVisible(inputGainLock);
@@ -369,9 +377,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addAndMakeVisible(lfoDepthLock);
     addAndMakeVisible(compPeakReductionLock);
     addAndMakeVisible(compMakeupGainLock);
-    addAndMakeVisible(compWetDryLock);
-    addAndMakeVisible(compCrossoverLock);
-    addAndMakeVisible(bandSplitLock);
+    addAndMakeVisible(subGuardLock);
     addAndMakeVisible(cleanModeLock);
     addAndMakeVisible(clipTypeLock);
     addAndMakeVisible(compRatioLock);
@@ -387,9 +393,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     setupKnobRightClick(lfoDepthSlider, "lfoDepth");
     setupKnobRightClick(compPeakReductionSlider, "compPeakReduction");
     setupKnobRightClick(compMakeupGainSlider, "compMakeupGain");
-    setupKnobRightClick(compWetDrySlider, "compWetDry");
-    setupKnobRightClick(compCrossoverSlider, "compCrossover");
-    setupKnobRightClick(bandSplitToggle, "bandSplitEnabled");
+    setupKnobRightClick(subGuardSlider, "subGuardFreq");
     setupKnobRightClick(cleanModeToggle, "waveshaperClean");
     setupKnobRightClick(clipTypeComboBox, "clipType");
     setupKnobRightClick(compRatioComboBox, "compRatio");
@@ -403,7 +407,6 @@ PluginEditor::~PluginEditor()
 {
     // Reset LookAndFeel to nullptr before destruction to prevent crash
     // Components must not reference a LookAndFeel that may be destroyed before them
-    bandSplitToggle.setLookAndFeel(nullptr);
     cleanModeToggle.setLookAndFeel(nullptr);
     compEnableToggle.setLookAndFeel(nullptr);
     clipTypeComboBox.setLookAndFeel(nullptr);
@@ -564,18 +567,8 @@ void PluginEditor::resized()
         compMakeupGainSlider.setBounds(makeupX, compKnobY, compKnobSize, compKnobSize);
         compMakeupGainLabel.setBounds(makeupX, compKnobY + compKnobSize, compKnobSize, 15);
 
-        // Wet/Dry knob (Compression)
-        const int wetDryX = makeupX + compKnobSize + compSpacing;
-        compWetDrySlider.setBounds(wetDryX, compKnobY, compKnobSize, compKnobSize);
-        compWetDryLabel.setBounds(wetDryX, compKnobY + compKnobSize, compKnobSize, 15);
-
-        // Crossover knob
-        const int crossoverX = wetDryX + compKnobSize + compSpacing;
-        compCrossoverSlider.setBounds(crossoverX, compKnobY, compKnobSize, compKnobSize);
-        compCrossoverLabel.setBounds(crossoverX, compKnobY + compKnobSize, compKnobSize, 15);
-
-        // Compress/Limit dropdown
-        const int dropdownX = crossoverX + compKnobSize + compSpacing;
+        // Compress/Limit dropdown (now directly after Makeup Gain)
+        const int dropdownX = makeupX + compKnobSize + compSpacing;
         const int dropdownWidth = 60;
         compRatioComboBox.setBounds(dropdownX, compKnobY + 15, dropdownWidth, 20);
         compRatioLabel.setBounds(dropdownX, compKnobY + 37, dropdownWidth, 12);
@@ -599,10 +592,6 @@ void PluginEditor::resized()
                                        compKnobY + compLockOffset, compLockSize, compLockSize);
         compMakeupGainLock.setBounds(makeupX + compKnobSize - compLockSize - compLockOffset,
                                     compKnobY + compLockOffset, compLockSize, compLockSize);
-        compWetDryLock.setBounds(wetDryX + compKnobSize - compLockSize - compLockOffset,
-                                compKnobY + compLockOffset, compLockSize, compLockSize);
-        compCrossoverLock.setBounds(crossoverX + compKnobSize - compLockSize - compLockOffset,
-                                   compKnobY + compLockOffset, compLockSize, compLockSize);
         compRatioLock.setBounds(dropdownX + dropdownWidth - compLockSize - 2,
                                compKnobY + 15, compLockSize, compLockSize);
         compEnableLock.setBounds(toggleX + toggleSize - compLockSize,
@@ -621,24 +610,24 @@ void PluginEditor::resized()
     const int totalControlsWidth = 60 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 75;  // All controls + spacing
     int currentX = (getWidth() - totalControlsWidth) / 2;  // Center horizontally
 
-    // Clean Sub Toggle (24x24)
+    // Sub Guard Knob (60x60) - replaces old Clean Sub toggle
+    const int subGuardSize = 60;
+    const int subGuardYOffset = (knobSize - subGuardSize) / 2;  // Center vertically with big knobs
+    subGuardSlider.setBounds(currentX, rowY + subGuardYOffset, subGuardSize, subGuardSize);
+    subGuardLabel.setBounds(currentX, rowY + subGuardYOffset + subGuardSize + 2, subGuardSize + 20, 14);
+    subGuardLock.setBounds(currentX + subGuardSize - 16 - 3, rowY + subGuardYOffset + 3, 16, 16);
+    currentX += subGuardSize + controlSpacing;
+
+    // Anti-Alias Toggle (24x24) - Positioned to the right of Sub Guard
     const int cleanSubToggleSize = 24;
     const int toggleYOffset = (knobSize - cleanSubToggleSize) / 2;  // Center vertically with big knobs
-    bandSplitToggle.setBounds(currentX, rowY + toggleYOffset, cleanSubToggleSize, cleanSubToggleSize);
-    const int toggleLabelWidth = 60;  // Width for toggle area
     const int toggleLabelHeight = 16;
-    bandSplitLabel.setBounds(currentX - (toggleLabelWidth - cleanSubToggleSize) / 2,
-                            rowY + toggleYOffset + cleanSubToggleSize + 5, toggleLabelWidth, toggleLabelHeight);
-    bandSplitLock.setBounds(currentX + cleanSubToggleSize - 12, rowY + toggleYOffset, 12, 12);
-
-    // Anti-Alias Toggle (24x24) - Positioned directly below Clean Sub
-    const int verticalGap = 8;  // Gap between Clean Sub label and Anti-Alias toggle
-    const int antiAliasToggleY = rowY + toggleYOffset + cleanSubToggleSize + 5 + toggleLabelHeight + verticalGap;
-    cleanModeToggle.setBounds(currentX, antiAliasToggleY, cleanSubToggleSize, cleanSubToggleSize);
-    cleanModeLabel.setBounds(currentX - (toggleLabelWidth - cleanSubToggleSize) / 2,
-                            antiAliasToggleY + cleanSubToggleSize + 5, toggleLabelWidth, toggleLabelHeight);
-    cleanModeLock.setBounds(currentX + cleanSubToggleSize - 12, antiAliasToggleY, 12, 12);
-    currentX += toggleLabelWidth + controlSpacing;
+    cleanModeToggle.setBounds(currentX, rowY + toggleYOffset, cleanSubToggleSize, cleanSubToggleSize);
+    cleanModeLabel.setBounds(currentX + cleanSubToggleSize + 4,
+                            rowY + toggleYOffset + (cleanSubToggleSize - toggleLabelHeight) / 2,
+                            60, toggleLabelHeight);
+    cleanModeLock.setBounds(currentX + cleanSubToggleSize - 12, rowY + toggleYOffset, 12, 12);
+    currentX += cleanSubToggleSize + 4 + 60 + controlSpacing;
 
     // Input Gain (100x100)
     inputGainSlider.setBounds(currentX, rowY, knobSize, knobSize);
@@ -732,9 +721,7 @@ void PluginEditor::updateLockIcons()
     lfoDepthLock.setLocked(isParameterLocked("lfoDepth"));
     compPeakReductionLock.setLocked(isParameterLocked("compPeakReduction"));
     compMakeupGainLock.setLocked(isParameterLocked("compMakeupGain"));
-    compWetDryLock.setLocked(isParameterLocked("compWetDry"));
-    compCrossoverLock.setLocked(isParameterLocked("compCrossover"));
-    bandSplitLock.setLocked(isParameterLocked("bandSplitEnabled"));
+    subGuardLock.setLocked(isParameterLocked("subGuardFreq"));
     clipTypeLock.setLocked(isParameterLocked("clipType"));
     compRatioLock.setLocked(isParameterLocked("compRatio"));
     compEnableLock.setLocked(isParameterLocked("compEnabled"));
@@ -770,15 +757,11 @@ void PluginEditor::updateCompressionVisibility()
 {
     const bool visible = isCompressionExpanded;
 
-    // 4 knobs + labels
+    // 2 knobs + labels
     compPeakReductionSlider.setVisible(visible);
     compPeakReductionLabel.setVisible(visible);
     compMakeupGainSlider.setVisible(visible);
     compMakeupGainLabel.setVisible(visible);
-    compWetDrySlider.setVisible(visible);
-    compWetDryLabel.setVisible(visible);
-    compCrossoverSlider.setVisible(visible);
-    compCrossoverLabel.setVisible(visible);
 
     // Dropdown, toggle, meter
     compRatioComboBox.setVisible(visible);
@@ -786,11 +769,9 @@ void PluginEditor::updateCompressionVisibility()
     compEnableToggle.setVisible(visible);
     gainReductionMeter.setVisible(visible);
 
-    // 6 lock icons
+    // 4 lock icons
     compPeakReductionLock.setVisible(visible);
     compMakeupGainLock.setVisible(visible);
-    compWetDryLock.setVisible(visible);
-    compCrossoverLock.setVisible(visible);
     compRatioLock.setVisible(visible);
     compEnableLock.setVisible(visible);
 }
@@ -878,7 +859,7 @@ void PluginEditor::randomizeAllParameters()
     randomizeFloatParam("outputGain", 0.0f, 100.0f);
     randomizeFloatParam("distortionAmount", 0.0f, 100.0f);
     randomizeFloatParam("highPassFreq", 20.0f, 500.0f);
-    randomizeBoolParam("bandSplitEnabled");
+    randomizeFloatParam("subGuardFreq", 50.0f, 200.0f);  // Sub Guard frequency range
     randomizeChoiceParam("clipType", 7);
     randomizeFloatParam("distMix", 0.0f, 100.0f);
 
@@ -891,8 +872,6 @@ void PluginEditor::randomizeAllParameters()
     randomizeFloatParam("compMakeupGain", 0.0f, 100.0f);
     randomizeChoiceParam("compRatio", 2);
     randomizeBoolParam("compEnabled");
-    randomizeFloatParam("compWetDry", 0.0f, 100.0f);
-    randomizeFloatParam("compCrossover", 150.0f, 350.0f);
 }
 
 juce::File PluginEditor::getPresetDirectory()
@@ -1040,7 +1019,7 @@ void PluginEditor::loadFactoryPreset(const juce::String& presetName)
         setParam("outputGain", 50.0f);
         setParam("distortionAmount", 0.0f);
         setParam("highPassFreq", 20.0f);
-        setParam("bandSplitEnabled", 0.0f);
+        setParam("subGuardFreq", 60.0f);  // PRESERVE mode (default)
         setParam("clipType", 0.0f);
         setParam("distMix", 100.0f);
         setParam("lfoRate", 0.0f);
@@ -1049,8 +1028,6 @@ void PluginEditor::loadFactoryPreset(const juce::String& presetName)
         setParam("compMakeupGain", 50.0f);
         setParam("compRatio", 0.0f);
         setParam("compEnabled", 0.0f);
-        setParam("compWetDry", 50.0f);
-        setParam("compCrossover", 250.0f);
     }
     else if (presetName == "Warm Tube")
     {
@@ -1059,7 +1036,7 @@ void PluginEditor::loadFactoryPreset(const juce::String& presetName)
         setParam("outputGain", 45.0f);
         setParam("distortionAmount", 30.0f);
         setParam("highPassFreq", 80.0f);
-        setParam("bandSplitEnabled", 0.0f);
+        setParam("subGuardFreq", 60.0f);  // PRESERVE mode
         setParam("clipType", 4.0f);  // Harmonic
         setParam("distMix", 70.0f);
         setParam("lfoRate", 0.0f);
@@ -1068,8 +1045,6 @@ void PluginEditor::loadFactoryPreset(const juce::String& presetName)
         setParam("compMakeupGain", 50.0f);
         setParam("compRatio", 0.0f);
         setParam("compEnabled", 0.0f);
-        setParam("compWetDry", 50.0f);
-        setParam("compCrossover", 250.0f);
     }
     else if (presetName == "Hard Clip")
     {
@@ -1078,7 +1053,7 @@ void PluginEditor::loadFactoryPreset(const juce::String& presetName)
         setParam("outputGain", 40.0f);
         setParam("distortionAmount", 70.0f);
         setParam("highPassFreq", 100.0f);
-        setParam("bandSplitEnabled", 1.0f);  // 808-safe enabled
+        setParam("subGuardFreq", 150.0f);  // AGGRESSIVE mode (808-safe)
         setParam("clipType", 6.0f);  // Hard Limit
         setParam("distMix", 100.0f);
         setParam("lfoRate", 0.0f);
@@ -1087,8 +1062,6 @@ void PluginEditor::loadFactoryPreset(const juce::String& presetName)
         setParam("compMakeupGain", 60.0f);
         setParam("compRatio", 0.0f);
         setParam("compEnabled", 1.0f);
-        setParam("compWetDry", 70.0f);
-        setParam("compCrossover", 250.0f);
     }
     else if (presetName == "Soft Saturation")
     {
@@ -1097,7 +1070,7 @@ void PluginEditor::loadFactoryPreset(const juce::String& presetName)
         setParam("outputGain", 48.0f);
         setParam("distortionAmount", 20.0f);
         setParam("highPassFreq", 40.0f);
-        setParam("bandSplitEnabled", 0.0f);
+        setParam("subGuardFreq", 60.0f);  // PRESERVE mode
         setParam("clipType", 1.0f);  // Soft Knee
         setParam("distMix", 50.0f);  // Parallel blend
         setParam("lfoRate", 0.0f);
@@ -1106,8 +1079,6 @@ void PluginEditor::loadFactoryPreset(const juce::String& presetName)
         setParam("compMakeupGain", 50.0f);
         setParam("compRatio", 0.0f);
         setParam("compEnabled", 0.0f);
-        setParam("compWetDry", 50.0f);
-        setParam("compCrossover", 250.0f);
     }
     else if (presetName == "808 Safe")
     {
@@ -1116,7 +1087,7 @@ void PluginEditor::loadFactoryPreset(const juce::String& presetName)
         setParam("outputGain", 45.0f);
         setParam("distortionAmount", 60.0f);
         setParam("highPassFreq", 150.0f);
-        setParam("bandSplitEnabled", 1.0f);  // 808-safe enabled
+        setParam("subGuardFreq", 150.0f);  // AGGRESSIVE mode (808-safe)
         setParam("clipType", 3.0f);  // Multi-Stage
         setParam("distMix", 100.0f);
         setParam("lfoRate", 0.0f);
@@ -1125,7 +1096,5 @@ void PluginEditor::loadFactoryPreset(const juce::String& presetName)
         setParam("compMakeupGain", 50.0f);
         setParam("compRatio", 0.0f);
         setParam("compEnabled", 0.0f);
-        setParam("compWetDry", 50.0f);
-        setParam("compCrossover", 250.0f);
     }
 }

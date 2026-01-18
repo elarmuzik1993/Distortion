@@ -21,8 +21,17 @@ namespace DSPConstants
     constexpr int OVERSAMPLING_FACTOR = 4;                    // 4x oversampling to prevent aliasing
     constexpr int OVERSAMPLING_STAGES = 2;                    // 2 stages for polyphase IIR
 
-    // Distortion band-split crossover (808-Safe mode)
-    constexpr float DISTORTION_CROSSOVER_FREQ = 150.0f;       // Preserve sub-bass below 150Hz
+    // Sub Guard crossover configuration (replaces 808-Safe mode)
+    constexpr float SUBGUARD_FREQ_OFF = 0.0f;                 // OFF sentinel value (no band-split)
+    constexpr float SUBGUARD_FREQ_MIN = 50.0f;                // Minimum crossover frequency
+    constexpr float SUBGUARD_FREQ_MAX = 200.0f;               // Maximum crossover frequency
+    constexpr float SUBGUARD_FREQ_DEFAULT = 0.0f;             // Default to OFF (full-range distortion)
+    constexpr float SUBGUARD_SNAP_TOLERANCE = 8.0f;           // ±8 Hz snap zone
+    constexpr float SUBGUARD_SNAP_PRESERVE = 60.0f;           // LR24 - steepest slope
+    constexpr float SUBGUARD_SNAP_CONTROL = 100.0f;           // LR18 - balanced
+    constexpr float SUBGUARD_SNAP_AGGRESSIVE = 150.0f;        // LR12 - gentle slope
+    constexpr float SUBGUARD_CROSSFADE_TIME_S = 0.010f;       // 10ms order transition crossfade
+    constexpr float SUBGUARD_FREQ_SMOOTH_TIME_S = 0.050f;     // 50ms frequency smoothing
 
     // Distortion gain scaling
     constexpr float DISTORTION_INPUT_SCALE = 0.6f;            // Pre-distortion gain attenuation
@@ -48,7 +57,6 @@ namespace DSPConstants
 
     // Default parameter values
     constexpr float DEFAULT_HIPASS_FREQ = 20.0f;              // Default hi-pass filter frequency (subsonic only)
-    constexpr float DEFAULT_COMP_CROSSOVER = 250.0f;          // Default compression crossover
 
     // Oscilloscope configuration
     constexpr int SCOPE_BUFFER_SIZE = 2048;                   // Circular buffer size for waveform display
@@ -167,8 +175,14 @@ public:
     // Atomic gain reduction for UI meter (in dB) - public for UI access
     std::atomic<float> currentGainReductionDB{ 0.0f };
 
+    // Sub Guard filter order enum (public for method signatures)
+    enum class SubGuardFilterOrder { LR12, LR18, LR24 };
+
 private:
-    
+    // Sub Guard helper methods
+    SubGuardFilterOrder determineSubGuardFilterOrder(float freq) const;
+    void updateSubGuardCoefficients(float freq, double sampleRate);
+
     std::unique_ptr<juce::dsp::Oversampling<float>> oversampling;
     size_t oversamplingFactor = 4;
     int currentNumChannels = 0;
@@ -181,7 +195,7 @@ private:
     float manualDCBlockerPrevInput[2] = { 0.0f, 0.0f };
     float manualDCBlockerPrevOutput[2] = { 0.0f, 0.0f };
 
-    // Distortion band-split filters (808-Safe mode)
+    // Sub Guard LR24 filters (4th order = 2 cascaded 2nd-order stages)
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> lowPassFilter1;
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
@@ -191,27 +205,33 @@ private:
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> highPassFilter2;
 
+    // Sub Guard LR12 filters (2nd order = single stage)
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> subGuardLP12;
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> subGuardHP12;
+
+    // Sub Guard LR18 filters (1st + 2nd order cascaded = 3rd order approximation)
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> subGuardLP18_1;  // First order
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> subGuardLP18_2;  // Second order
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> subGuardHP18_1;  // First order
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> subGuardHP18_2;  // Second order
+
+    // Sub Guard state tracking
+    SubGuardFilterOrder currentSubGuardOrder = SubGuardFilterOrder::LR24;
+    juce::SmoothedValue<float> smoothedSubGuardFreq;
+    float lastSubGuardFreq = -1.0f;
+
     // Post-distortion tone filter (oversampled rate)
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> toneFilter;
 
-    // LA-2A band-split filters (OVERSAMPLED rate for anti-aliasing)
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> compLowPassFilter1Oversampled;
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> compLowPassFilter2Oversampled;
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> compHighPassFilter1Oversampled;
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> compHighPassFilter2Oversampled;
-
     juce::AudioBuffer<float> lowBandBuffer;   // For clean low frequencies
     juce::AudioBuffer<float> highBandBuffer;  // For distorted high frequencies
-
-    // Compression buffers for OVERSAMPLED domain
-    juce::AudioBuffer<float> compLowBandBufferOversampled;
-    juce::AudioBuffer<float> compHighBandBufferOversampled;
-    juce::AudioBuffer<float> compDryBufferOversampled;
 
     juce::SmoothedValue<float> smoothedOutputGain;  // Only output gain uses SmoothedValue (normal rate)
     juce::SmoothedValue<float> bypassRamp;  // Bypass crossfade to prevent clicks (10ms)
@@ -219,7 +239,6 @@ private:
 
     // Smoothed parameters for automation (prevent zipper noise)
     juce::SmoothedValue<float> smoothedLfoDepth;
-    juce::SmoothedValue<float> smoothedCompWetDry;
     juce::SmoothedValue<float> smoothedDistMix;
     juce::SmoothedValue<float> smoothedToneParam;
 
@@ -231,7 +250,7 @@ private:
     std::atomic<float>* distortionAmountParam = nullptr;
     std::atomic<float>* highPassFreqParam = nullptr;
     std::atomic<float>* clipTypeParam = nullptr;
-    std::atomic<float>* bandSplitEnabledParam = nullptr;
+    std::atomic<float>* subGuardFreqParam = nullptr;  // Sub Guard crossover frequency (50-200Hz)
     std::atomic<float>* lfoRateParam = nullptr;
     std::atomic<float>* lfoDepthParam = nullptr;
     std::atomic<float>* lfoWaveformParam = nullptr;  // LFO waveform type
@@ -243,8 +262,6 @@ private:
     std::atomic<float>* compRatioParam = nullptr;  
     std::atomic<float>* compEnabledParam = nullptr;
 
-    std::atomic<float>* compWetDryParam = nullptr;      // 0=100% dry, 100=100% wet
-    std::atomic<float>* compCrossoverParam = nullptr;   // 150-350Hz adjustable split
     std::atomic<float>* distMixParam = nullptr;         // Distortion wet/dry mix (0-100)
     std::atomic<float>* toneParam = nullptr;            // Post-distortion tone (2000-20000Hz)
     std::atomic<float>* waveshaperCleanParam = nullptr; // 0=Gritty (tone→waveshaper), 1=Clean (waveshaper→tone)
@@ -305,7 +322,6 @@ private:
 
     // Cached filter parameters to avoid unnecessary coefficient updates
     float lastHighPassFreq = -1.0f;
-    float lastCompCrossoverFreqOversampled = -1.0f;
     float lastToneFreq = -1.0f;
     double lastSampleRate = 0.0;  // Track sample rate changes
     double lastOversampledSampleRate = 0.0;  // Track oversampled rate for distortion filters

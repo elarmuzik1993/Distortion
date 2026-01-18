@@ -785,8 +785,8 @@ void ProcessBlockTests::test808SafeMode()
     PluginProcessor processor;
     processor.prepareToPlay(44100.0, 2048);  // Match buffer size
 
-    // Enable 808-safe mode and distortion
-    setParameter(processor.parameters, "bandSplitEnabled", 1.0f);
+    // Enable Sub Guard mode (60 Hz crossover = PRESERVE mode)
+    setParameter(processor.parameters, "subGuardFreq", 60.0f);
     setParameter(processor.parameters, "distortionAmount", 70.0f);
 
     // Create low frequency input (should bypass distortion)
@@ -1017,10 +1017,10 @@ void ParameterTests::testParameterRanges(PluginProcessor& processor)
     // Test that all expected parameters exist
     const char* expectedParams[] = {
         "inputGain", "outputGain", "distortionAmount", "highPassFreq",
-        "bandSplitEnabled", "clipType", "distMix",
+        "subGuardFreq", "clipType", "distMix",
         "lfoRate", "lfoDepth", "lfoWaveform",
         "compEnabled", "compPeakReduction", "compMakeupGain",
-        "compRatio", "compWetDry", "compCrossover"
+        "compRatio"
     };
 
     for (const char* paramId : expectedParams)
@@ -1461,8 +1461,8 @@ void GoldenAudioTests::test808BandSplit()
     PluginProcessor processor;
     processor.prepareToPlay(44100.0, 2048);
 
-    // Enable 808-safe mode
-    setParameter(processor.parameters, "bandSplitEnabled", 1.0f);
+    // Enable Sub Guard mode (60 Hz crossover = PRESERVE mode)
+    setParameter(processor.parameters, "subGuardFreq", 60.0f);
     setParameter(processor.parameters, "distortionAmount", 70.0f);
 
     // Low frequency test (should pass through clean)
