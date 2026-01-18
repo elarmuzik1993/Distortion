@@ -21,8 +21,17 @@ namespace DSPConstants
     constexpr int OVERSAMPLING_FACTOR = 4;                    // 4x oversampling to prevent aliasing
     constexpr int OVERSAMPLING_STAGES = 2;                    // 2 stages for polyphase IIR
 
-    // Distortion band-split crossover (808-Safe mode)
-    constexpr float DISTORTION_CROSSOVER_FREQ = 150.0f;       // Preserve sub-bass below 150Hz
+    // Sub Guard crossover configuration (replaces 808-Safe mode)
+    constexpr float SUBGUARD_FREQ_OFF = 0.0f;                 // OFF sentinel value (no band-split)
+    constexpr float SUBGUARD_FREQ_MIN = 50.0f;                // Minimum crossover frequency
+    constexpr float SUBGUARD_FREQ_MAX = 200.0f;               // Maximum crossover frequency
+    constexpr float SUBGUARD_FREQ_DEFAULT = 0.0f;             // Default to OFF (full-range distortion)
+    constexpr float SUBGUARD_SNAP_TOLERANCE = 8.0f;           // ±8 Hz snap zone
+    constexpr float SUBGUARD_SNAP_PRESERVE = 60.0f;           // LR24 - steepest slope
+    constexpr float SUBGUARD_SNAP_CONTROL = 100.0f;           // LR18 - balanced
+    constexpr float SUBGUARD_SNAP_AGGRESSIVE = 150.0f;        // LR12 - gentle slope
+    constexpr float SUBGUARD_CROSSFADE_TIME_S = 0.010f;       // 10ms order transition crossfade
+    constexpr float SUBGUARD_FREQ_SMOOTH_TIME_S = 0.050f;     // 50ms frequency smoothing
 
     // Distortion gain scaling
     constexpr float DISTORTION_INPUT_SCALE = 0.6f;            // Pre-distortion gain attenuation
@@ -167,8 +176,14 @@ public:
     // Atomic gain reduction for UI meter (in dB) - public for UI access
     std::atomic<float> currentGainReductionDB{ 0.0f };
 
+    // Sub Guard filter order enum (public for method signatures)
+    enum class SubGuardFilterOrder { LR12, LR18, LR24 };
+
 private:
-    
+    // Sub Guard helper methods
+    SubGuardFilterOrder determineSubGuardFilterOrder(float freq) const;
+    void updateSubGuardCoefficients(float freq, double sampleRate);
+
     std::unique_ptr<juce::dsp::Oversampling<float>> oversampling;
     size_t oversamplingFactor = 4;
     int currentNumChannels = 0;
@@ -181,7 +196,7 @@ private:
     float manualDCBlockerPrevInput[2] = { 0.0f, 0.0f };
     float manualDCBlockerPrevOutput[2] = { 0.0f, 0.0f };
 
-    // Distortion band-split filters (808-Safe mode)
+    // Sub Guard LR24 filters (4th order = 2 cascaded 2nd-order stages)
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> lowPassFilter1;
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
@@ -190,6 +205,27 @@ private:
         juce::dsp::IIR::Coefficients<float>> highPassFilter1;
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> highPassFilter2;
+
+    // Sub Guard LR12 filters (2nd order = single stage)
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> subGuardLP12;
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> subGuardHP12;
+
+    // Sub Guard LR18 filters (1st + 2nd order cascaded = 3rd order approximation)
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> subGuardLP18_1;  // First order
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> subGuardLP18_2;  // Second order
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> subGuardHP18_1;  // First order
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> subGuardHP18_2;  // Second order
+
+    // Sub Guard state tracking
+    SubGuardFilterOrder currentSubGuardOrder = SubGuardFilterOrder::LR24;
+    juce::SmoothedValue<float> smoothedSubGuardFreq;
+    float lastSubGuardFreq = -1.0f;
 
     // Post-distortion tone filter (oversampled rate)
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
@@ -231,7 +267,7 @@ private:
     std::atomic<float>* distortionAmountParam = nullptr;
     std::atomic<float>* highPassFreqParam = nullptr;
     std::atomic<float>* clipTypeParam = nullptr;
-    std::atomic<float>* bandSplitEnabledParam = nullptr;
+    std::atomic<float>* subGuardFreqParam = nullptr;  // Sub Guard crossover frequency (50-200Hz)
     std::atomic<float>* lfoRateParam = nullptr;
     std::atomic<float>* lfoDepthParam = nullptr;
     std::atomic<float>* lfoWaveformParam = nullptr;  // LFO waveform type

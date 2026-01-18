@@ -643,8 +643,8 @@ private:
 
     CustomKnob compWetDrySlider, compCrossoverSlider;
     juce::Label compWetDryLabel, compCrossoverLabel;
-    juce::ToggleButton bandSplitToggle;
-    juce::Label bandSplitLabel;
+    CustomKnob subGuardSlider;
+    juce::Label subGuardLabel;
     juce::ToggleButton cleanModeToggle;
     juce::Label cleanModeLabel;
 
@@ -678,7 +678,7 @@ private:
     LockIcon inputGainLock, outputGainLock, distortionAmountLock, highPassFreqLock;
     LockIcon distMixLock, lfoRateLock, lfoDepthLock;
     LockIcon compPeakReductionLock, compMakeupGainLock, compWetDryLock, compCrossoverLock;
-    LockIcon bandSplitLock, clipTypeLock, compRatioLock, compEnableLock, cleanModeLock;
+    LockIcon subGuardLock, clipTypeLock, compRatioLock, compEnableLock, cleanModeLock;
 
     // Lock toggles for randomization
     std::map<juce::String, bool> parameterLocks;
@@ -690,7 +690,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> highPassFreqAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> distMixAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> toneAttachment;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bandSplitAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> subGuardAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> cleanModeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> clipTypeAttachment;
     juce::Image backgroundImage;
