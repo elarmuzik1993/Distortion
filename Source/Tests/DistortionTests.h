@@ -195,6 +195,26 @@ private:
 };
 
 //==============================================================================
+// Output Limiter Tests
+//==============================================================================
+
+/** Tests for final output soft limiter */
+class OutputLimiterTests : public juce::UnitTest
+{
+public:
+    OutputLimiterTests() : UnitTest("Output Limiter", TestCategories::DSP) {}
+    void runTest() override;
+
+private:
+    void testThresholdEnforcement();
+    void testTransparencyBelowThreshold();
+    void testStereoLinking();
+    void testSoftKnee();
+    void testEnvelopeAttackRelease();
+    void testStateReset();
+};
+
+//==============================================================================
 // Test Runner Function
 //==============================================================================
 
@@ -275,6 +295,7 @@ inline void registerAllTests()
     static CompressionDSPTests compressionDSPTests;
     static PreCompressionTests preCompressionTests;
     static HarmonicDensityTests harmonicDensityTests;
+    static OutputLimiterTests outputLimiterTests;
     static LFOTests lfoTests;
     static ProcessBlockTests processBlockTests;
     static ParameterTests parameterTests;

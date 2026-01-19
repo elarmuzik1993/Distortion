@@ -82,8 +82,9 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
         else if (y < -threshold)
             y = -threshold + std::atan((y + threshold) * 2.0f) * 0.2f;
 
-        // Add subtle analog noise for warmth (using instance member, not static)
-        y += distortionRandom.nextFloat() * 0.005f - 0.0025f;
+        // Add input-dependent analog noise (silent on silence, warm with signal)
+        float noiseAmount = std::min(std::abs(x) * 0.01f, 0.002f);
+        y += distortionRandom.nextFloat() * noiseAmount - (noiseAmount * 0.5f);
 
         // Final saturation
         y = std::tanh(y * 1.8f);
@@ -311,6 +312,20 @@ void PluginProcessor::updateSampleRateDependentCoefficients(double sampleRate)
     if (std::isnan(compRmsHistoryCoeff) || compRmsHistoryCoeff < 0.0f || compRmsHistoryCoeff > 1.0f)
     {
         compRmsHistoryCoeff = 0.99f;
+    }
+
+    // Output limiter coefficients (normal sample rate, not oversampled)
+    outputLimiterAttackCoeff = std::exp(-1.0f / (DSPConstants::OUTPUT_LIMITER_ATTACK_TIME_S * static_cast<float>(sampleRate)));
+    outputLimiterReleaseCoeff = std::exp(-1.0f / (DSPConstants::OUTPUT_LIMITER_RELEASE_TIME_S * static_cast<float>(sampleRate)));
+
+    // SAFETY: Validate output limiter coefficients
+    if (std::isnan(outputLimiterAttackCoeff) || outputLimiterAttackCoeff < 0.0f || outputLimiterAttackCoeff > 1.0f)
+    {
+        outputLimiterAttackCoeff = 0.99f;  // Safe fallback (~0.23ms at 44.1kHz)
+    }
+    if (std::isnan(outputLimiterReleaseCoeff) || outputLimiterReleaseCoeff < 0.0f || outputLimiterReleaseCoeff > 1.0f)
+    {
+        outputLimiterReleaseCoeff = 0.9995f;  // Safe fallback (~45ms at 44.1kHz)
     }
 
     // Store the sample rate to detect changes
@@ -566,6 +581,13 @@ if (!oversampling || currentNumChannels != numChannels) {
 
     harmonicDensityEnvelope[0] = 0.0f;
     harmonicDensityEnvelope[1] = 0.0f;
+
+    // Auto-gain compensation coefficients (calculated at oversampled rate)
+    autoGainAttackCoeff = std::exp(-1.0f / (DSPConstants::AUTO_GAIN_ATTACK_TIME_S * oversampledRate));
+    autoGainReleaseCoeff = std::exp(-1.0f / (DSPConstants::AUTO_GAIN_RELEASE_TIME_S * oversampledRate));
+    autoGainInputEnvelope = 0.0f;
+    autoGainOutputEnvelope = 0.0f;
+    autoGainCompensation = 1.0f;
 
     // LA-2A compression coefficients for OVERSAMPLED rate
     compAttackCoeffOversampled = std::exp(-1.0f / (DSPConstants::COMP_ATTACK_TIME_S * oversampledRate));
@@ -838,7 +860,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
     // Scale to actual ranges for processing (studio distortion style)
     const float inputGain = std::pow(inGainParam / 50.0f, 1.5f);  // Unity at 50, range 0-2.83
-    const auto outGainDB = (outGainParam - 50.0f) * 0.24f;  // Maps 0->-12dB, 50->0dB, 100->+12dB
+    const auto outGainDB = (outGainParam - 50.0f) * 0.18f;  // Maps 0->-9dB, 50->0dB, 100->+9dB
     const auto outGain = juce::Decibels::decibelsToGain(outGainDB);
 
     // LFO modulation for dynamic distortion effects
@@ -915,6 +937,62 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                 // Simple pass-through with output gain
                 float sample_value = buffer.getSample(channel, sample);
                 buffer.setSample(channel, sample, sample_value * currentOutputGain);
+            }
+        }
+
+        // ========== OUTPUT LIMITER (applies even in bypass mode) ==========
+        // Safety limiter at -0.5dBFS to prevent clipping even when bypassed
+        {
+            const float thresholdLinear = juce::Decibels::decibelsToGain(DSPConstants::OUTPUT_LIMITER_THRESHOLD_DB);
+            const float threshDB = DSPConstants::OUTPUT_LIMITER_THRESHOLD_DB;
+            const float kneeDB = DSPConstants::OUTPUT_LIMITER_KNEE_DB;
+
+            for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+            {
+                float peakLevel = 0.0f;
+                for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+                {
+                    const float absValue = std::abs(buffer.getSample(channel, sample));
+                    if (absValue > peakLevel)
+                        peakLevel = absValue;
+                }
+
+                float targetGain = 1.0f;
+                if (peakLevel > thresholdLinear)
+                {
+                    const float peakDB = juce::Decibels::gainToDecibels(peakLevel + 1e-6f);
+                    const float overDB = peakDB - threshDB;
+
+                    float grDB = 0.0f;
+                    if (overDB < kneeDB)
+                    {
+                        const float t = overDB / kneeDB;
+                        grDB = overDB * t;
+                    }
+                    else
+                    {
+                        grDB = kneeDB + (overDB - kneeDB);
+                    }
+
+                    targetGain = juce::Decibels::decibelsToGain(-grDB);
+                }
+
+                if (targetGain < outputLimiterEnvelope)
+                {
+                    outputLimiterEnvelope = outputLimiterAttackCoeff * outputLimiterEnvelope
+                                          + (1.0f - outputLimiterAttackCoeff) * targetGain;
+                }
+                else
+                {
+                    outputLimiterEnvelope = outputLimiterReleaseCoeff * outputLimiterEnvelope
+                                          + (1.0f - outputLimiterReleaseCoeff) * targetGain;
+                }
+
+                for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+                {
+                    auto* channelData = buffer.getWritePointer(channel);
+                    channelData[sample] *= outputLimiterEnvelope;
+                }
             }
         }
 
@@ -1039,6 +1117,23 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             }
         }
     }
+
+    // ========== AUTO-GAIN COMPENSATION: Measure input RMS ==========
+    // Calculate input RMS for auto-gain compensation (before distortion)
+    float inputSumSquares = 0.0f;
+    for (size_t ch = 0; ch < numChannels; ++ch)
+    {
+        const float* data = oversampledBlock.getChannelPointer(ch);
+        for (size_t i = 0; i < numSamples; ++i)
+            inputSumSquares += data[i] * data[i];
+    }
+    const float inputRms = std::sqrt(inputSumSquares / (numSamples * numChannels));
+
+    // Update input envelope (one-pole filter with asymmetric attack/release)
+    if (inputRms > autoGainInputEnvelope)
+        autoGainInputEnvelope = autoGainAttackCoeff * autoGainInputEnvelope + (1.0f - autoGainAttackCoeff) * inputRms;
+    else
+        autoGainInputEnvelope = autoGainReleaseCoeff * autoGainInputEnvelope + (1.0f - autoGainReleaseCoeff) * inputRms;
 
     // Sub Guard variable-slope crossover processing
     // Check if Sub Guard is OFF (value <= 1.0 Hz to account for smoothing)
@@ -1222,6 +1317,42 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             }
         }
     }  // end else (Sub Guard active)
+
+    // ========== AUTO-GAIN COMPENSATION: Measure output RMS and apply compensation ==========
+    // Calculate output RMS for auto-gain compensation (after distortion)
+    float outputSumSquares = 0.0f;
+    for (size_t ch = 0; ch < numChannels; ++ch)
+    {
+        const float* data = oversampledBlock.getChannelPointer(ch);
+        for (size_t i = 0; i < numSamples; ++i)
+            outputSumSquares += data[i] * data[i];
+    }
+    const float outputRms = std::sqrt(outputSumSquares / (numSamples * numChannels));
+
+    // Update output envelope (one-pole filter with asymmetric attack/release)
+    if (outputRms > autoGainOutputEnvelope)
+        autoGainOutputEnvelope = autoGainAttackCoeff * autoGainOutputEnvelope + (1.0f - autoGainAttackCoeff) * outputRms;
+    else
+        autoGainOutputEnvelope = autoGainReleaseCoeff * autoGainOutputEnvelope + (1.0f - autoGainReleaseCoeff) * outputRms;
+
+    // Calculate compensation gain (input/output ratio with safety limits)
+    if (autoGainOutputEnvelope > 0.0001f)  // Avoid division by near-zero
+    {
+        const float rawCompensation = autoGainInputEnvelope / autoGainOutputEnvelope;
+        autoGainCompensation = juce::jlimit(DSPConstants::AUTO_GAIN_MIN, DSPConstants::AUTO_GAIN_MAX, rawCompensation);
+    }
+    else
+    {
+        autoGainCompensation = 1.0f;  // No signal = no compensation
+    }
+
+    // Apply auto-gain compensation to oversampled block
+    for (size_t ch = 0; ch < numChannels; ++ch)
+    {
+        float* data = oversampledBlock.getChannelPointer(ch);
+        for (size_t i = 0; i < numSamples; ++i)
+            data[i] *= autoGainCompensation;
+    }
 
     // Store final parameter values for next block's interpolation
     lastInputGain = currentInputGain;
@@ -1530,6 +1661,72 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         }
     }
 
+    // ========== OUTPUT LIMITER (Final Safety) ==========
+    // Stereo-linked soft limiter at -0.5dBFS to prevent clipping
+    // Always-on safety net for DAC protection
+    {
+        const float thresholdLinear = juce::Decibels::decibelsToGain(DSPConstants::OUTPUT_LIMITER_THRESHOLD_DB);
+        const float threshDB = DSPConstants::OUTPUT_LIMITER_THRESHOLD_DB;
+        const float kneeDB = DSPConstants::OUTPUT_LIMITER_KNEE_DB;
+
+        for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+        {
+            // Stereo-linked peak detection (max of both channels)
+            float peakLevel = 0.0f;
+            for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+            {
+                const float absValue = std::abs(buffer.getSample(channel, sample));
+                if (absValue > peakLevel)
+                    peakLevel = absValue;
+            }
+
+            // Calculate target gain reduction with soft knee
+            float targetGain = 1.0f;
+            if (peakLevel > thresholdLinear)
+            {
+                const float peakDB = juce::Decibels::gainToDecibels(peakLevel + 1e-6f);
+                const float overDB = peakDB - threshDB;
+
+                // Soft knee limiting (1dB transition zone)
+                float grDB = 0.0f;
+                if (overDB < kneeDB)
+                {
+                    // Inside knee: quadratic curve for smooth onset
+                    const float t = overDB / kneeDB;
+                    grDB = overDB * t;
+                }
+                else
+                {
+                    // Above knee: brick-wall limiting
+                    grDB = kneeDB + (overDB - kneeDB);
+                }
+
+                targetGain = juce::Decibels::decibelsToGain(-grDB);
+            }
+
+            // Envelope follower with asymmetric attack/release
+            if (targetGain < outputLimiterEnvelope)
+            {
+                // Attack phase (reducing gain to catch transients)
+                outputLimiterEnvelope = outputLimiterAttackCoeff * outputLimiterEnvelope
+                                      + (1.0f - outputLimiterAttackCoeff) * targetGain;
+            }
+            else
+            {
+                // Release phase (returning to unity gain)
+                outputLimiterEnvelope = outputLimiterReleaseCoeff * outputLimiterEnvelope
+                                      + (1.0f - outputLimiterReleaseCoeff) * targetGain;
+            }
+
+            // Apply gain reduction to all channels (stereo-linked)
+            for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+            {
+                auto* channelData = buffer.getWritePointer(channel);
+                channelData[sample] *= outputLimiterEnvelope;
+            }
+        }
+    }
+
     // Push samples to oscilloscope (after all processing)
     for (int sample = 0; sample < buffer.getNumSamples(); sample += DSPConstants::SCOPE_UPDATE_DECIMATION)
     {
@@ -1681,6 +1878,14 @@ void PluginProcessor::resetDSPState()
     compEnvelopeState = 0.0f;
     compRmsHistory = 0.0f;
     tubeWarmth = 0.0f;
+
+    // Reset auto-gain compensation state
+    autoGainInputEnvelope = 0.0f;
+    autoGainOutputEnvelope = 0.0f;
+    autoGainCompensation = 1.0f;
+
+    // Reset output limiter state
+    outputLimiterEnvelope = 1.0f;  // 1.0 = no gain reduction
 
     // Reset manual DC blocker
     for (int ch = 0; ch < 2; ++ch)

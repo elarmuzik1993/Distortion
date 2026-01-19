@@ -630,6 +630,263 @@ void HarmonicDensityTests::testNoNaNOrInf()
 }
 
 //==============================================================================
+// OutputLimiterTests Implementation
+//==============================================================================
+
+void OutputLimiterTests::runTest()
+{
+    beginTest("Threshold Enforcement");
+    testThresholdEnforcement();
+
+    beginTest("Transparency Below Threshold");
+    testTransparencyBelowThreshold();
+
+    beginTest("Stereo Linking");
+    testStereoLinking();
+
+    beginTest("Soft Knee Behavior");
+    testSoftKnee();
+
+    beginTest("Envelope Attack/Release");
+    testEnvelopeAttackRelease();
+
+    beginTest("State Reset");
+    testStateReset();
+}
+
+void OutputLimiterTests::testThresholdEnforcement()
+{
+    using namespace TestUtilities;
+
+    PluginProcessor processor;
+    processor.prepareToPlay(44100.0, 512);
+
+    // Set output gain to maximum to push signal above threshold
+    setParameter(processor.parameters, "outputGain", 100.0f);  // +9dB
+    setParameter(processor.parameters, "distortionAmount", 0.0f);  // No distortion
+    setParameter(processor.parameters, "compEnabled", false);
+
+    juce::MidiBuffer midi;
+
+    // Process multiple blocks to let the envelope settle
+    // The limiter has 0.5ms attack, so at 44.1kHz we need ~22 samples to attack
+    // Process several blocks to ensure envelope has settled
+    for (int i = 0; i < 5; ++i)
+    {
+        auto buffer = generateSineWave(1000.0, 44100.0, 512,
+                                        juce::Decibels::decibelsToGain(-3.0f), 2);
+        processor.processBlock(buffer, midi);
+    }
+
+    // Now test with a fresh buffer after envelope has settled
+    auto buffer = generateSineWave(1000.0, 44100.0, 512,
+                                    juce::Decibels::decibelsToGain(-3.0f), 2);
+    processor.processBlock(buffer, midi);
+
+    // Check that peak doesn't significantly exceed threshold
+    // After settling, limiter should keep output near threshold
+    const float peakOutput = calculatePeak(buffer);
+
+    // With soft knee and envelope settled, allow up to 1dB overshoot
+    // (the soft knee allows some overshoot by design)
+    const float maxAllowed = juce::Decibels::decibelsToGain(0.5f);
+
+    expect(peakOutput <= maxAllowed,
+        "Peak " + juce::String(juce::Decibels::gainToDecibels(peakOutput), 2) +
+        " dB exceeded threshold + tolerance (" +
+        juce::String(juce::Decibels::gainToDecibels(maxAllowed), 2) + " dB)");
+
+    expect(!containsInvalidSamples(buffer), "Output contains NaN or Inf");
+}
+
+void OutputLimiterTests::testTransparencyBelowThreshold()
+{
+    using namespace TestUtilities;
+
+    PluginProcessor processor;
+    processor.prepareToPlay(44100.0, 512);
+
+    // Set everything to bypass/minimum except output gain at unity
+    setParameter(processor.parameters, "outputGain", 50.0f);  // 0dB (unity)
+    setParameter(processor.parameters, "distortionAmount", 0.0f);
+    setParameter(processor.parameters, "compEnabled", false);
+
+    // Create a quiet signal well below threshold (-12dB, way below -0.5dB)
+    const float level = juce::Decibels::decibelsToGain(-12.0f);
+    auto inputBuffer = generateSineWave(1000.0, 44100.0, 512, level, 2);
+    auto outputBuffer = inputBuffer;  // Copy for comparison
+
+    juce::MidiBuffer midi;
+    processor.processBlock(outputBuffer, midi);
+
+    // Signal below threshold should pass through with minimal change
+    // Allow for DC blocking and other processing, but limiter shouldn't affect it
+    const float inputRms = calculateRMS(inputBuffer);
+    const float outputRms = calculateRMS(outputBuffer);
+
+    // RMS should be within 0.5dB (accounting for other processing)
+    const float ratioDB = juce::Decibels::gainToDecibels(outputRms / inputRms);
+    expect(std::abs(ratioDB) < 0.5f,
+        "Signal below threshold changed by " + juce::String(ratioDB, 2) + " dB");
+
+    expect(!containsInvalidSamples(outputBuffer), "Output contains NaN or Inf");
+}
+
+void OutputLimiterTests::testStereoLinking()
+{
+    using namespace TestUtilities;
+
+    PluginProcessor processor;
+    processor.prepareToPlay(44100.0, 512);
+
+    // Set output gain high to ensure limiting
+    setParameter(processor.parameters, "outputGain", 100.0f);  // +9dB
+    setParameter(processor.parameters, "distortionAmount", 0.0f);
+    setParameter(processor.parameters, "compEnabled", false);
+
+    // Create asymmetric stereo buffer: left channel hot, right channel quiet
+    juce::AudioBuffer<float> buffer(2, 512);
+    const float hotLevel = juce::Decibels::decibelsToGain(-6.0f);  // Will exceed threshold after gain
+    const float quietLevel = juce::Decibels::decibelsToGain(-24.0f);  // Well below threshold
+
+    for (int i = 0; i < 512; ++i)
+    {
+        const float phase = static_cast<float>(i) * 0.1f;
+        buffer.setSample(0, i, hotLevel * std::sin(phase));   // Hot left
+        buffer.setSample(1, i, quietLevel * std::sin(phase)); // Quiet right
+    }
+
+    // Store original ratio
+    const float originalRatio = hotLevel / quietLevel;
+
+    juce::MidiBuffer midi;
+    processor.processBlock(buffer, midi);
+
+    // Calculate post-processing peaks
+    float leftPeak = 0.0f, rightPeak = 0.0f;
+    for (int i = 0; i < 512; ++i)
+    {
+        leftPeak = std::max(leftPeak, std::abs(buffer.getSample(0, i)));
+        rightPeak = std::max(rightPeak, std::abs(buffer.getSample(1, i)));
+    }
+
+    // Stereo linking: both channels should be reduced by same amount
+    // So ratio should be preserved (within tolerance for envelope dynamics)
+    const float outputRatio = leftPeak / (rightPeak + 1e-10f);
+    const float ratioChange = std::abs(outputRatio / originalRatio - 1.0f);
+
+    expect(ratioChange < 0.3f,  // Allow 30% variation due to envelope dynamics
+        "Stereo linking not preserved: ratio changed by " +
+        juce::String(ratioChange * 100.0f, 1) + "%");
+
+    expect(!containsInvalidSamples(buffer), "Output contains NaN or Inf");
+}
+
+void OutputLimiterTests::testSoftKnee()
+{
+    using namespace TestUtilities;
+
+    PluginProcessor processor;
+    processor.prepareToPlay(44100.0, 512);
+
+    // Test signals at different levels to verify soft knee behavior
+    // Reset limiter state between tests
+    processor.outputLimiterEnvelope = 1.0f;
+
+    // Process signals at increasing levels and measure gain reduction
+    float levels[] = { -6.0f, -3.0f, -1.0f, 0.0f, 3.0f };  // dB relative to 0dBFS
+    float previousGR = 0.0f;
+
+    for (float levelDB : levels)
+    {
+        processor.outputLimiterEnvelope = 1.0f;  // Reset envelope
+
+        const float level = juce::Decibels::decibelsToGain(levelDB);
+        auto buffer = generateSineWave(1000.0, 44100.0, 512, level, 2);
+        const float inputPeak = calculatePeak(buffer);
+
+        juce::MidiBuffer midi;
+        processor.processBlock(buffer, midi);
+
+        const float outputPeak = calculatePeak(buffer);
+        const float gainReduction = juce::Decibels::gainToDecibels(outputPeak / inputPeak);
+
+        // Gain reduction should increase monotonically with level above threshold
+        if (levelDB > -0.5f)  // Above threshold
+        {
+            expect(gainReduction <= previousGR + 0.5f,
+                "Soft knee not smooth at " + juce::String(levelDB) + " dB");
+        }
+
+        previousGR = gainReduction;
+    }
+}
+
+void OutputLimiterTests::testEnvelopeAttackRelease()
+{
+    using namespace TestUtilities;
+
+    PluginProcessor processor;
+    processor.prepareToPlay(44100.0, 512);
+
+    setParameter(processor.parameters, "outputGain", 50.0f);  // Unity gain
+    setParameter(processor.parameters, "distortionAmount", 0.0f);
+    setParameter(processor.parameters, "compEnabled", false);
+
+    // Reset limiter
+    processor.outputLimiterEnvelope = 1.0f;
+
+    // Create impulse to test attack
+    juce::AudioBuffer<float> impulseBuffer(2, 1024);
+    impulseBuffer.clear();
+
+    // Hot impulse at sample 100
+    const float impulseLevel = juce::Decibels::decibelsToGain(6.0f);  // +6dBFS (way above threshold)
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        for (int i = 100; i < 150; ++i)
+        {
+            impulseBuffer.setSample(ch, i, impulseLevel);
+        }
+    }
+
+    juce::MidiBuffer midi;
+    processor.processBlock(impulseBuffer, midi);
+
+    // After processing, envelope should have attacked (< 1.0)
+    expect(processor.outputLimiterEnvelope < 1.0f,
+        "Envelope didn't attack on impulse");
+
+    // Now process silence for release
+    processor.outputLimiterEnvelope = 0.5f;  // Set to reduced state
+
+    auto silenceBuffer = generateSilence(4096, 2);  // ~93ms at 44.1kHz
+    processor.processBlock(silenceBuffer, midi);
+
+    // Envelope should have released toward 1.0
+    expect(processor.outputLimiterEnvelope > 0.5f,
+        "Envelope didn't release during silence");
+}
+
+void OutputLimiterTests::testStateReset()
+{
+    using namespace TestUtilities;
+
+    PluginProcessor processor;
+    processor.prepareToPlay(44100.0, 512);
+
+    // Set envelope to non-unity value
+    processor.outputLimiterEnvelope = 0.3f;
+
+    // Reset DSP state
+    processor.resetDSPState();
+
+    // Envelope should be back to unity
+    expectEquals(processor.outputLimiterEnvelope, 1.0f,
+        "State reset didn't restore envelope to unity");
+}
+
+//==============================================================================
 // LFOTests Implementation
 //==============================================================================
 

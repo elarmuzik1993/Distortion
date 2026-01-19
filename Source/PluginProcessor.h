@@ -91,6 +91,18 @@ namespace DSPConstants
     constexpr float HARMONIC_DENSITY_RELEASE_TIME_S = 0.030f;  // 30ms release (smooth decay)
     constexpr float HARMONIC_DENSITY_EPSILON = 0.01f;          // Minimum threshold for sqrt
     constexpr float HARMONIC_DENSITY_MIN_SCALE = 0.1f;         // 10% minimum harmonic strength
+
+    // Auto-gain compensation (maintains consistent perceived loudness)
+    constexpr float AUTO_GAIN_ATTACK_TIME_S = 0.005f;          // 5ms attack (track transients)
+    constexpr float AUTO_GAIN_RELEASE_TIME_S = 0.100f;         // 100ms release (prevent pumping)
+    constexpr float AUTO_GAIN_MIN = 0.1f;                      // -20dB minimum compensation
+    constexpr float AUTO_GAIN_MAX = 4.0f;                      // +12dB maximum compensation
+
+    // Output limiter (final safety, always-on, stereo-linked)
+    constexpr float OUTPUT_LIMITER_THRESHOLD_DB = -0.5f;       // -0.5 dBFS ceiling (safe headroom)
+    constexpr float OUTPUT_LIMITER_ATTACK_TIME_S = 0.0005f;    // 0.5ms attack (catch transients)
+    constexpr float OUTPUT_LIMITER_RELEASE_TIME_S = 0.050f;    // 50ms release (preserve punch)
+    constexpr float OUTPUT_LIMITER_KNEE_DB = 1.0f;             // 1dB soft knee (transparent onset)
 }
 
 // Forward declarations for test classes
@@ -105,6 +117,7 @@ class ThreadSafetyTests;
 class StateIOTests;
 class GoldenAudioTests;
 class HarmonicDensityTests;
+class OutputLimiterTests;
 #endif
 
 class PluginProcessor : public juce::AudioProcessor
@@ -121,6 +134,7 @@ class PluginProcessor : public juce::AudioProcessor
     friend class StateIOTests;
     friend class GoldenAudioTests;
     friend class HarmonicDensityTests;
+    friend class OutputLimiterTests;
 #endif
 
 public:
@@ -319,6 +333,18 @@ private:
     float harmonicDensityEnvelope[2] = { 0.0f, 0.0f };
     float harmonicDensityAttackCoeff = 0.0f;
     float harmonicDensityReleaseCoeff = 0.0f;
+
+    // Auto-gain compensation envelopes (RMS tracking)
+    float autoGainInputEnvelope = 0.0f;    // Smoothed input RMS
+    float autoGainOutputEnvelope = 0.0f;   // Smoothed output RMS
+    float autoGainCompensation = 1.0f;     // Current compensation gain
+    float autoGainAttackCoeff = 0.0f;      // Attack coefficient
+    float autoGainReleaseCoeff = 0.0f;     // Release coefficient
+
+    // Output limiter state (stereo-linked for image preservation)
+    float outputLimiterEnvelope = 1.0f;    // Gain reduction envelope (1.0 = no limiting)
+    float outputLimiterAttackCoeff = 0.0f; // Attack coefficient
+    float outputLimiterReleaseCoeff = 0.0f; // Release coefficient
 
     // Cached filter parameters to avoid unnecessary coefficient updates
     float lastHighPassFreq = -1.0f;
