@@ -97,6 +97,12 @@ namespace DSPConstants
     constexpr float AUTO_GAIN_RELEASE_TIME_S = 0.100f;         // 100ms release (prevent pumping)
     constexpr float AUTO_GAIN_MIN = 0.1f;                      // -20dB minimum compensation
     constexpr float AUTO_GAIN_MAX = 4.0f;                      // +12dB maximum compensation
+
+    // Output limiter (final safety, always-on, stereo-linked)
+    constexpr float OUTPUT_LIMITER_THRESHOLD_DB = -0.5f;       // -0.5 dBFS ceiling (safe headroom)
+    constexpr float OUTPUT_LIMITER_ATTACK_TIME_S = 0.0005f;    // 0.5ms attack (catch transients)
+    constexpr float OUTPUT_LIMITER_RELEASE_TIME_S = 0.050f;    // 50ms release (preserve punch)
+    constexpr float OUTPUT_LIMITER_KNEE_DB = 1.0f;             // 1dB soft knee (transparent onset)
 }
 
 // Forward declarations for test classes
@@ -111,6 +117,7 @@ class ThreadSafetyTests;
 class StateIOTests;
 class GoldenAudioTests;
 class HarmonicDensityTests;
+class OutputLimiterTests;
 #endif
 
 class PluginProcessor : public juce::AudioProcessor
@@ -127,6 +134,7 @@ class PluginProcessor : public juce::AudioProcessor
     friend class StateIOTests;
     friend class GoldenAudioTests;
     friend class HarmonicDensityTests;
+    friend class OutputLimiterTests;
 #endif
 
 public:
@@ -332,6 +340,11 @@ private:
     float autoGainCompensation = 1.0f;     // Current compensation gain
     float autoGainAttackCoeff = 0.0f;      // Attack coefficient
     float autoGainReleaseCoeff = 0.0f;     // Release coefficient
+
+    // Output limiter state (stereo-linked for image preservation)
+    float outputLimiterEnvelope = 1.0f;    // Gain reduction envelope (1.0 = no limiting)
+    float outputLimiterAttackCoeff = 0.0f; // Attack coefficient
+    float outputLimiterReleaseCoeff = 0.0f; // Release coefficient
 
     // Cached filter parameters to avoid unnecessary coefficient updates
     float lastHighPassFreq = -1.0f;

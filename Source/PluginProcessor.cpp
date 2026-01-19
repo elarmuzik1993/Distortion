@@ -314,6 +314,20 @@ void PluginProcessor::updateSampleRateDependentCoefficients(double sampleRate)
         compRmsHistoryCoeff = 0.99f;
     }
 
+    // Output limiter coefficients (normal sample rate, not oversampled)
+    outputLimiterAttackCoeff = std::exp(-1.0f / (DSPConstants::OUTPUT_LIMITER_ATTACK_TIME_S * static_cast<float>(sampleRate)));
+    outputLimiterReleaseCoeff = std::exp(-1.0f / (DSPConstants::OUTPUT_LIMITER_RELEASE_TIME_S * static_cast<float>(sampleRate)));
+
+    // SAFETY: Validate output limiter coefficients
+    if (std::isnan(outputLimiterAttackCoeff) || outputLimiterAttackCoeff < 0.0f || outputLimiterAttackCoeff > 1.0f)
+    {
+        outputLimiterAttackCoeff = 0.99f;  // Safe fallback (~0.23ms at 44.1kHz)
+    }
+    if (std::isnan(outputLimiterReleaseCoeff) || outputLimiterReleaseCoeff < 0.0f || outputLimiterReleaseCoeff > 1.0f)
+    {
+        outputLimiterReleaseCoeff = 0.9995f;  // Safe fallback (~45ms at 44.1kHz)
+    }
+
     // Store the sample rate to detect changes
     lastSampleRate = sampleRate;
 }
@@ -923,6 +937,62 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                 // Simple pass-through with output gain
                 float sample_value = buffer.getSample(channel, sample);
                 buffer.setSample(channel, sample, sample_value * currentOutputGain);
+            }
+        }
+
+        // ========== OUTPUT LIMITER (applies even in bypass mode) ==========
+        // Safety limiter at -0.5dBFS to prevent clipping even when bypassed
+        {
+            const float thresholdLinear = juce::Decibels::decibelsToGain(DSPConstants::OUTPUT_LIMITER_THRESHOLD_DB);
+            const float threshDB = DSPConstants::OUTPUT_LIMITER_THRESHOLD_DB;
+            const float kneeDB = DSPConstants::OUTPUT_LIMITER_KNEE_DB;
+
+            for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+            {
+                float peakLevel = 0.0f;
+                for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+                {
+                    const float absValue = std::abs(buffer.getSample(channel, sample));
+                    if (absValue > peakLevel)
+                        peakLevel = absValue;
+                }
+
+                float targetGain = 1.0f;
+                if (peakLevel > thresholdLinear)
+                {
+                    const float peakDB = juce::Decibels::gainToDecibels(peakLevel + 1e-6f);
+                    const float overDB = peakDB - threshDB;
+
+                    float grDB = 0.0f;
+                    if (overDB < kneeDB)
+                    {
+                        const float t = overDB / kneeDB;
+                        grDB = overDB * t;
+                    }
+                    else
+                    {
+                        grDB = kneeDB + (overDB - kneeDB);
+                    }
+
+                    targetGain = juce::Decibels::decibelsToGain(-grDB);
+                }
+
+                if (targetGain < outputLimiterEnvelope)
+                {
+                    outputLimiterEnvelope = outputLimiterAttackCoeff * outputLimiterEnvelope
+                                          + (1.0f - outputLimiterAttackCoeff) * targetGain;
+                }
+                else
+                {
+                    outputLimiterEnvelope = outputLimiterReleaseCoeff * outputLimiterEnvelope
+                                          + (1.0f - outputLimiterReleaseCoeff) * targetGain;
+                }
+
+                for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+                {
+                    auto* channelData = buffer.getWritePointer(channel);
+                    channelData[sample] *= outputLimiterEnvelope;
+                }
             }
         }
 
@@ -1591,6 +1661,72 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         }
     }
 
+    // ========== OUTPUT LIMITER (Final Safety) ==========
+    // Stereo-linked soft limiter at -0.5dBFS to prevent clipping
+    // Always-on safety net for DAC protection
+    {
+        const float thresholdLinear = juce::Decibels::decibelsToGain(DSPConstants::OUTPUT_LIMITER_THRESHOLD_DB);
+        const float threshDB = DSPConstants::OUTPUT_LIMITER_THRESHOLD_DB;
+        const float kneeDB = DSPConstants::OUTPUT_LIMITER_KNEE_DB;
+
+        for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+        {
+            // Stereo-linked peak detection (max of both channels)
+            float peakLevel = 0.0f;
+            for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+            {
+                const float absValue = std::abs(buffer.getSample(channel, sample));
+                if (absValue > peakLevel)
+                    peakLevel = absValue;
+            }
+
+            // Calculate target gain reduction with soft knee
+            float targetGain = 1.0f;
+            if (peakLevel > thresholdLinear)
+            {
+                const float peakDB = juce::Decibels::gainToDecibels(peakLevel + 1e-6f);
+                const float overDB = peakDB - threshDB;
+
+                // Soft knee limiting (1dB transition zone)
+                float grDB = 0.0f;
+                if (overDB < kneeDB)
+                {
+                    // Inside knee: quadratic curve for smooth onset
+                    const float t = overDB / kneeDB;
+                    grDB = overDB * t;
+                }
+                else
+                {
+                    // Above knee: brick-wall limiting
+                    grDB = kneeDB + (overDB - kneeDB);
+                }
+
+                targetGain = juce::Decibels::decibelsToGain(-grDB);
+            }
+
+            // Envelope follower with asymmetric attack/release
+            if (targetGain < outputLimiterEnvelope)
+            {
+                // Attack phase (reducing gain to catch transients)
+                outputLimiterEnvelope = outputLimiterAttackCoeff * outputLimiterEnvelope
+                                      + (1.0f - outputLimiterAttackCoeff) * targetGain;
+            }
+            else
+            {
+                // Release phase (returning to unity gain)
+                outputLimiterEnvelope = outputLimiterReleaseCoeff * outputLimiterEnvelope
+                                      + (1.0f - outputLimiterReleaseCoeff) * targetGain;
+            }
+
+            // Apply gain reduction to all channels (stereo-linked)
+            for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+            {
+                auto* channelData = buffer.getWritePointer(channel);
+                channelData[sample] *= outputLimiterEnvelope;
+            }
+        }
+    }
+
     // Push samples to oscilloscope (after all processing)
     for (int sample = 0; sample < buffer.getNumSamples(); sample += DSPConstants::SCOPE_UPDATE_DECIMATION)
     {
@@ -1747,6 +1883,9 @@ void PluginProcessor::resetDSPState()
     autoGainInputEnvelope = 0.0f;
     autoGainOutputEnvelope = 0.0f;
     autoGainCompensation = 1.0f;
+
+    // Reset output limiter state
+    outputLimiterEnvelope = 1.0f;  // 1.0 = no gain reduction
 
     // Reset manual DC blocker
     for (int ch = 0; ch < 2; ++ch)
