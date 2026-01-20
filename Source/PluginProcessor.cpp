@@ -73,7 +73,7 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
     case 0:  // BRUTAL FUZZ - Aggressive hard clipping with analog noise
     {
         // Heavy drive for maximum grit
-        y = x * drive * 4.5f;
+        y = x * drive * 2.25f;
 
         // Hard clip with brutal threshold
         const float threshold = 0.3f;  // Very low threshold for aggressive clipping
@@ -93,7 +93,7 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
     case 1:  // TUBE OVERDRIVE - Asymmetric tube saturation with harmonics
     {
         // Tube-style asymmetric clipping (positive clips harder)
-        y = x * drive * 2.8f;
+        y = x * drive * 1.4f;
 
         // Asymmetric waveshaping (vintage tube behavior)
         if (y > 0.0f)
@@ -119,7 +119,7 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
         const float bits = 6.0f;  // Brutal bit depth
         const float maxValue = std::pow(2.0f, bits - 1.0f);
 
-        y = x * drive * 3.2f;
+        y = x * drive * 1.6f;
 
         // Bit crushing
         y = std::floor(y * maxValue) / maxValue;
@@ -134,7 +134,7 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
     case 3:  // TAPE SATURATION - Analog tape with hysteresis
     {
         // Tape-style soft saturation with magnetic hysteresis simulation
-        y = x * drive * 2.5f;
+        y = x * drive * 1.25f;
 
         // Tape compression curve (progressive)
         const float abs_y = std::abs(y);
@@ -157,7 +157,7 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
     case 4:  // TRANSFORMER SATURATION - Heavy harmonic distortion
     {
         // Transformer-style saturation with rich harmonics
-        y = x * drive * 3.0f;
+        y = x * drive * 1.5f;
 
         // Multi-stage waveshaping for complex harmonics
         y = std::tanh(y * 1.5f);
@@ -177,7 +177,7 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
     case 5:  // DIODE CLIPPER - Asymmetric diode clipping with grit
     {
         // Asymmetric diode-style clipping (forward/reverse bias difference)
-        y = x * drive * 3.8f;
+        y = x * drive * 1.9f;
 
         // Asymmetric clipping (simulating diode forward voltage)
         if (y > 0.5f)
@@ -202,7 +202,7 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
     case 6:  // DECIMATOR - Extreme digital destruction
     {
         // Brutal digital destruction with severe aliasing
-        y = x * drive * 5.0f;
+        y = x * drive * 2.5f;
 
         // Sample & hold for brutal aliasing
         const float foldback = 4.0f;
@@ -440,7 +440,7 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     const auto inGainParam = inputGainParam ? inputGainParam->load() : 50.0f;
     const auto distParam = distortionAmountParam ? distortionAmountParam->load() : 0.0f;
     lastInputGain = std::pow(inGainParam / 50.0f, 1.5f);  // Match processBlock calculation
-    lastDistortionDrive = 1.0f + (distParam / 100.0f) * 7.0f;  // Match processBlock calculation (brutal range)
+    lastDistortionDrive = 1.0f + (distParam / 100.0f) * 3.0f;  // Match processBlock calculation (reduced range)
 
     // Update all sample-rate-dependent coefficients (DC blocking, compression, etc.)
     updateSampleRateDependentCoefficients(sampleRate);
@@ -896,7 +896,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     if (!std::isnan(lfoModulation) && !std::isinf(lfoModulation))
         modulatedDistortionParam = juce::jlimit(0.0f, 100.0f, distortionParam + lfoModulation * 50.0f);
 
-    float distortionDrive = 1.0f + (modulatedDistortionParam / 100.0f) * 7.0f;  // Brutal range: 1.0 to 8.0
+    float distortionDrive = 1.0f + (modulatedDistortionParam / 100.0f) * 3.0f;  // Reduced range: 1.0 to 4.0
 
     // SAFETY: Final validation of distortion drive (critical parameter)
     if (std::isnan(distortionDrive) || std::isinf(distortionDrive) || distortionDrive < 1.0f)

@@ -72,15 +72,18 @@ The plugin processes audio through a carefully ordered chain:
 1. **Input Stage** → Pre Hi-Pass Filter (removes DC and low-frequency rumble)
 2. **Oversampling** → 4x oversampling applied for distortion processing (polyphase IIR, 2 stages)
 3. **Pre-Distortion Compression** → Hardcoded transient tamer (1ms attack, 50ms release, 2.5:1 ratio at -12dB threshold)
-4. **Band Splitting (Optional)** → Splits signal into low (<150Hz) and high (>150Hz) bands for 808-safe processing
-5. **Distortion Stage** → Applied to high band only (if band-split enabled) or full signal
+4. **Sub Guard Band-Split (Optional)** → Variable-slope crossover (50-200Hz) protects sub-bass from distortion
+5. **Distortion Stage** → Applied to high band only (if Sub Guard enabled) or full signal
 6. **Tone Filter & Waveshaper (Flexible Order)** → Order controlled by "Clean Mode" toggle:
    - **Clean Mode (ON)**: Waveshaper → Tone Filter (reduces aliasing, smoother analog character)
    - **Gritty Mode (OFF)**: Tone Filter → Waveshaper (original order, edgier digital character)
-7. **Downsampling** → Return to original sample rate
-8. **LA2A Compression** → LA2A-style optical compressor with optional band-split (150-350Hz adjustable)
-9. **DC Blocking** → Manual one-pole DC blocker (~35Hz cutoff, R=0.995)
-10. **Output Stage** → Final gain staging (±12dB)
+7. **Auto-Gain Compensation** → Maintains consistent perceived loudness (RMS-based, ±12dB range)
+8. **Soft Clipper (ISP Protection)** → Prevents inter-sample peaks at -0.3dBFS before downsampling
+9. **Downsampling** → Return to original sample rate
+10. **LA2A Compression** → LA2A-style optical compressor (full-band processing)
+11. **DC Blocking** → Manual one-pole DC blocker (~35Hz cutoff, R=0.995)
+12. **Output Limiter** → Final stereo-linked safety limiter (-0.5dBFS, 0.5ms attack, 50ms release)
+13. **Output Stage** → Final gain staging (±12dB)
 
 ### Core Processing Components
 
@@ -146,19 +149,13 @@ The compressor simulates a Teletronix LA-2A optical cell (T4 cell) with:
 - **Program-dependent behavior**: RMS history tracking for adaptive response
 - **Soft knee**: 2dB knee width for smooth compression onset
 - **Tube harmonics**: 15% blend with 1.5x drive for analog warmth
-- **Parallel compression**: Wet/Dry mix control (0-100%)
-- **Band-split mode**: Independent crossover (150-350Hz) from distortion crossover
-- **Oversampled band-split**: Band-split filters operate in oversampled domain for improved anti-aliasing
+- **Full-band processing**: Simple compression without crossover (crossover was removed)
 
 **State Variables** (`PluginProcessor` private):
 - `compEnvelopeState`: Optical cell charge/discharge state
 - `compRmsHistory`: Program-dependent RMS tracking
 - `smoothedGainReduction`: Visual smoothing for gain reduction meter (500ms)
 - `tubeWarmth`: Tube harmonic state accumulator
-
-**Filter Architecture**:
-- Normal rate filters (deprecated): `compLowPassFilter1/2`, `compHighPassFilter1/2`
-- Oversampled filters (active): `compLowPassFilter1/2Oversampled`, `compHighPassFilter1/2Oversampled` for band-split at 4x sample rate
 
 ### GUI Architecture
 
@@ -178,7 +175,7 @@ The compressor simulates a Teletronix LA-2A optical cell (T4 cell) with:
 - Top section: Compression controls (Peak Reduction, Makeup Gain, Wet/Dry, Crossover, Mode dropdown, COMP toggle, Gain Reduction Meter)
 - Middle section: Oscilloscope display (real-time dual-channel waveform)
 - Bottom section: 6 main knobs (Input Gain, Hi-Pass Filter, Distortion Amount, Output Gain, LFO Rate, LFO Depth)
-- Middle row controls: 808-Safe toggle, Clip Type dropdown, **Dist Mix knob** (50x50px, positioned between Distortion Amount and Output Gain)
+- Middle row controls: Sub Guard knob (crossover frequency), Clip Type dropdown, **Dist Mix knob** (50x50px, positioned between Distortion Amount and Output Gain)
 
 **Thread Safety:**
 - Scope buffer uses `juce::AbstractFifo` + `juce::SpinLock` for lock-free audio→GUI transfer
@@ -191,10 +188,12 @@ All processing constants centralized in `DSPConstants` namespace (PluginProcesso
 - **Oversampling**: 4x factor, 2 polyphase IIR stages
 - **Pre-Distortion Compression**: Attack 1ms, Release 50ms, 2.5:1 ratio at -12dB, 6dB knee
 - **Harmonic Density Scaling**: Attack 2ms, Release 30ms, 10% minimum scale (prevents 2-5kHz harshness)
-- **Distortion Crossover**: 150Hz (fixed Linkwitz-Riley 4th order for band-split)
-- **LA2A Compression**: Attack 10ms, Release 500ms, 3:1 or 12:1 ratio, 2dB knee
-- **LA2A Compression Crossover**: 150-350Hz adjustable (Linkwitz-Riley 4th order)
+- **LA2A Compression**: Attack 10ms, Release 500ms, 3:1 or 12:1 ratio, 2dB knee (full-band, no crossover)
 - **ISP Protection**: Soft clipper at -0.3dBFS with 0.5dB knee (prevents inter-sample peaks during downsampling)
+- **Auto-Gain Compensation**: Attack 5ms, Release 100ms, range -20dB to +12dB (maintains perceived loudness)
+- **Output Limiter**: -0.5dBFS threshold, 0.5ms attack, 50ms release, 1dB knee (final stereo-linked safety)
+- **Sub Guard Crossover**: 50-200Hz adjustable (0=OFF), snap points at 60/100/150Hz with variable slopes (LR12/18/24)
+- **Distortion Scaling**: Input scale 0.6×, Drive scale 1.2× (pre-algorithm gain staging)
 - **DC Blocking**: 20Hz high-pass cutoff for stable, low-phase-shift DC removal
 - **Scope/Meter Configuration**: Buffer sizes, refresh rates, decimation factors
 - **Parameter Smoothing**: Gain (20ms), Distortion (150ms), Compression GR (500ms)
@@ -206,13 +205,13 @@ All processing constants centralized in `DSPConstants` namespace (PluginProcesso
 ### Studio Distortion Processing
 
 **7 Professional Clip Types** (implemented in `applyStudioDistortion()`):
-- **Studio Tanh** (0): Enhanced tanh with asymmetric bias and 2nd-order shaping
-- **Soft Knee** (1): Soft knee compression above 0.5 threshold
-- **Dynamic Compress** (2): Dynamic ratio compression with program-dependent behavior
-- **Multi-Stage** (3): Multi-stage hard clipping with progressive limiting
-- **Harmonic** (4): Tanh with 2nd harmonic boost for tube-like character
-- **Asymmetric** (5): Asymmetric clipping with different positive/negative thresholds
-- **Hard Limit** (6): Aggressive brick-wall clipping (3.5x drive, 0.65 threshold, only 5% overshoot allowed, ±0.85 final limit)
+- **Brutal Fuzz** (0): Aggressive hard clipping with input-dependent analog noise (silent on silence, warm with signal)
+- **Tube Overdrive** (1): Asymmetric tube saturation with even/odd harmonics
+- **Bit Crusher** (2): Digital bit reduction with aliasing character
+- **Tape Saturation** (3): Analog tape with magnetic hysteresis simulation
+- **Transformer Saturation** (4): Rich harmonic distortion with multi-stage waveshaping
+- **Diode Clipper** (5): Asymmetric diode clipping with crossover distortion
+- **Decimator** (6): Extreme digital destruction with sample foldback
 
 **True Bypass Architecture**:
 - When `distortion < 0.5%` AND `compression OFF`: **Complete bypass mode**
@@ -231,15 +230,22 @@ All processing constants centralized in `DSPConstants` namespace (PluginProcesso
 6. Downsampling
 7. Additional DC blocking stages (5Hz IIR filters)
 
-**808-Safe Mode** (Band-Split):
-- Crossover: 150Hz (Linkwitz-Riley 4th order, dual cascaded filters)
-- Low band (<150Hz): **Bypasses distortion entirely** (preserves kick/808 bass)
-- High band (>150Hz): Full distortion processing
+**Sub Guard Mode** (Variable-Slope Band-Split):
+- Replaces old 808-Safe toggle with continuous frequency control
+- Crossover range: 0 Hz (OFF) to 200 Hz, default OFF
+- **Variable filter slopes with snap points**:
+  - 60 Hz ± 8 Hz → LR24 (steepest, maximum sub protection)
+  - 100 Hz ± 8 Hz → LR18 (balanced)
+  - 150 Hz ± 8 Hz → LR12 (gentle slope)
+- 10ms crossfade when switching filter orders (prevents clicks)
+- 50ms frequency smoothing for automation
+- Low band: **Bypasses distortion entirely** (preserves kick/808 bass)
+- High band: Full distortion processing
 - Prevents bass frequency aliasing and maintains sub-bass integrity
 
 **Gain Staging**:
 - Input gain: Unity (1.0) at default 50, range 0-2.83 via `pow(param/50, 1.5)`
-- Distortion drive: 1.0-4.5 range for controlled saturation
+- Distortion drive: 1.0-4.0 range for controlled saturation (reduced from 1.0-8.0 for more gradual response at low percentages)
 - Output gain: ±12dB range around unity
 
 ### Filter Coefficient Caching
@@ -262,10 +268,10 @@ Decimation factor of 2 reduces CPU load. Update rate: 30Hz.
 
 When adding new parameters, use these existing patterns:
 - Gains: `"inputGain"`, `"outputGain"`
-- Distortion: `"distortionAmount"`, `"clipType"`, `"bandSplitEnabled"`, `"distMix"`, `"waveshaperClean"`
-- Filters: `"highPassFreq"`
-- LFO: `"lfoRate"`, `"lfoDepth"`
-- Compression: `"compPeakReduction"`, `"compMakeupGain"`, `"compRatio"`, `"compEnabled"`, `"compWetDry"`, `"compCrossover"`
+- Distortion: `"distortionAmount"`, `"clipType"`, `"distMix"`, `"waveshaperClean"`, `"waveshaperMix"`
+- Filters: `"highPassFreq"`, `"tone"` (2000-20000Hz post-distortion lowpass), `"subGuardFreq"` (0-200Hz crossover)
+- LFO: `"lfoRate"`, `"lfoDepth"`, `"lfoWaveform"`
+- Compression: `"compPeakReduction"`, `"compMakeupGain"`, `"compRatio"`, `"compEnabled"`
 
 ### Critical Processing Loop Patterns
 
@@ -312,7 +318,71 @@ for (size_t channel = 0; channel < numChannels; ++channel)
 
 ## Recent Architectural Changes
 
-**Current Session Changes (Real-Time Audio Safety Audit & Fixes)**:
+**Current Session Changes (Soft Drive - Reduced Internal Drive Scaling)**:
+- **Reduced Main Drive Range**: Changed distortion drive formula from 1.0-8.0 to 1.0-4.0 range for more gradual response at low percentages
+  - Line 899: `* 7.0f` → `* 3.0f` in main processBlock calculation
+  - Line 443: `* 7.0f` → `* 3.0f` in prepareToPlay initialization
+- **Reduced Per-Algorithm Multipliers (50% reduction)**: All 7 clip types now have halved internal drive multipliers for less aggressive distortion at low settings
+  - Brutal Fuzz: 4.5f → 2.25f
+  - Tube Overdrive: 2.8f → 1.4f
+  - Bit Crusher: 3.2f → 1.6f
+  - Tape Saturation: 2.5f → 1.25f
+  - Transformer Saturation: 3.0f → 1.5f
+  - Diode Clipper: 3.8f → 1.9f
+  - Decimator: 5.0f → 2.5f
+- **Effective Drive Summary**:
+  - 10% distortion: was 1.7× algo mult, now 1.3× algo mult
+  - 50% distortion: was 4.5× algo mult, now 2.5× algo mult
+  - 100% distortion: was 8.0× algo mult, now 4.0× algo mult
+- **Version**: Updated to v1.6 Soft Drive
+- **Tests**: All 2000 assertions pass (100% success rate)
+
+**Previous Session Changes (Sub Guard & Output Limiter)**:
+- **Sub Guard Variable-Slope Crossover**: Replaces old 808-Safe toggle with continuous frequency control
+  - Range: 0 Hz (OFF) to 200 Hz with snap points at 60/100/150 Hz
+  - Variable filter slopes: LR24 (60Hz), LR18 (100Hz), LR12 (150Hz)
+  - 10ms crossfade for order transitions, 50ms frequency smoothing
+  - **Parameter**: `"subGuardFreq"` (float, 0-200Hz, default 0=OFF)
+  - **DSP Constants** (PluginProcessor.h:24-34):
+    - `SUBGUARD_FREQ_MIN = 50.0f`, `SUBGUARD_FREQ_MAX = 200.0f`
+    - Snap tolerances and crossfade times
+- **Output Limiter**: Final stereo-linked safety limiter (always-on)
+  - Prevents digital overs at final output stage
+  - **DSP Constants** (PluginProcessor.h:101-105):
+    - `OUTPUT_LIMITER_THRESHOLD_DB = -0.5f`
+    - `OUTPUT_LIMITER_ATTACK_TIME_S = 0.0005f` (0.5ms)
+    - `OUTPUT_LIMITER_RELEASE_TIME_S = 0.050f` (50ms)
+    - `OUTPUT_LIMITER_KNEE_DB = 1.0f`
+  - **State Variables**: `outputLimiterEnvelope`, `outputLimiterAttackCoeff`, `outputLimiterReleaseCoeff`
+- **Tone Filter**: Post-distortion lowpass for brightness/darkness control
+  - **Parameter**: `"tone"` (float, 2000-20000Hz, default 20kHz = bright/bypass)
+- **Waveshaper Mix**: Parallel waveshaper blend control
+  - **Parameter**: `"waveshaperMix"` (float, 0-100%, default 0%)
+
+**Previous Session Changes (Auto-Gain Compensation & ISP Protection)**:
+- **Auto-Gain Compensation**: Maintains consistent perceived loudness as distortion amount changes
+  - Measures input/output RMS with envelope followers (5ms attack, 100ms release)
+  - Calculates compensation ratio: `inputRMS / outputRMS`
+  - Limits compensation to -20dB to +12dB range to prevent extreme adjustments
+  - Applied in oversampled domain after distortion processing
+  - **DSP Constants** (PluginProcessor.h:95-99):
+    - `AUTO_GAIN_ATTACK_TIME_S = 0.005f` (5ms)
+    - `AUTO_GAIN_RELEASE_TIME_S = 0.100f` (100ms)
+    - `AUTO_GAIN_MIN = 0.1f` (-20dB)
+    - `AUTO_GAIN_MAX = 4.0f` (+12dB)
+  - **State Variables**: `autoGainInputEnvelope`, `autoGainOutputEnvelope`, `autoGainCompensation`
+- **Soft Clipper (ISP Protection)**: Prevents inter-sample peaks before downsampling
+  - Applied at -0.3dBFS with 0.5dB soft knee
+  - Prevents digital overs that could occur during sample rate conversion
+  - **DSP Constants** (PluginProcessor.h:84-86):
+    - `SOFT_CLIP_THRESHOLD_DB = -0.3f`
+    - `SOFT_CLIP_KNEE_DB = 0.5f`
+- **Input-Dependent Analog Noise (Brutal Fuzz)**: Noise scales with input level for realistic analog behavior
+  - Silent when input is silent (biggest improvement for silence)
+  - Formula: `noiseAmount = min(abs(x) * 0.01, 0.002)` - caps at 0.2% noise
+  - Provides warm analog character only when signal is present
+
+**Previous Session Changes (Real-Time Audio Safety Audit & Fixes)**:
 - **Critical RT-Safety Improvements**: Comprehensive audit against `realtime-audio-safety-checklist.md` with 7 fixes implemented
   - **Removed all logging from processBlock()**: Eliminated 25+ blocking `juce::Logger::writeToLog()` calls that caused audio thread blocking
     - Replaced with atomic debug flags: `debugHadNaN`, `debugHadBufferOverflow`, `debugHadDistortionCorruption`
@@ -325,7 +395,7 @@ for (size_t channel = 0; channel < numChannels; ++channel)
   - **Parameter smoothing**: Added `SmoothedValue` for automation-sensitive parameters (`lfoDepth`, `compWetDry`, `distMix`) to prevent zipper noise
   - **Thread safety**: `setStateInformation()` now uses atomic flag handoff instead of directly modifying DSP state from GUI thread
   - **Version**: Updated to v1.2 RT-Safe
-  - **Tests**: All 1991 assertions pass (100% success rate)
+  - **Tests**: All 1991 assertions passed (100% success rate at time of release)
 
 **Previous Session Changes (Sub-Linear Harmonic Density Scaling)**:
 - **Harmonic Density Control**: Added input-level-dependent harmonic scaling to prevent 2-5 kHz harshness at high input levels
@@ -339,7 +409,7 @@ for (size_t channel = 0; channel < numChannels; ++channel)
     - `HARMONIC_DENSITY_MIN_SCALE = 0.1f` (10% minimum harmonics)
   - **State Variables**: `harmonicDensityEnvelope[2]` (per-channel), `harmonicDensityAttackCoeff`, `harmonicDensityReleaseCoeff`
   - **Always-on**: Automatically active when distortion is engaged (like transient tamer)
-  - **Tests**: Added `HarmonicDensityTests` class with 429 new assertions (total: 1991)
+  - **Tests**: Added `HarmonicDensityTests` class with 429 new assertions
 
 **Previous Session Changes (Waveshaper Order Toggle & UI Layout)**:
 - **Waveshaper Order Toggle ("Clean Mode")**: Added parameter to control signal flow ordering for optimized aliasing vs character trade-off
@@ -369,7 +439,7 @@ for (size_t channel = 0; channel < numChannels; ++channel)
   - Added `compLowBandBufferOversampled`, `compHighBandBufferOversampled`, `compDryBufferOversampled` for oversampled processing
 - **ISP Protection Constants**: Added soft clipper constants (-0.3dBFS threshold, 0.5dB knee) for pre-downsampling clipping to prevent inter-sample peaks
 
-**Latest Session Changes (Pre-Distortion Compression & CMake)**:
+**Previous Session Changes (Pre-Distortion Compression & CMake)**:
 - **Pre-Distortion Transient Tamer**: Added hardcoded compression before distortion (1ms attack, 50ms release, 2.5:1 ratio) to tame transients and make distortion sound richer
 - **CMake Build System**: Added CMake support for cross-platform building (Linux, macOS, Windows) with automatic JUCE 7.0.12 fetching
 - **Unit Tests for Pre-Compression**: Created 6 comprehensive test suites covering transient reduction, bypass behavior, envelope dynamics, stereo independence, edge cases, and gain reduction range
@@ -416,14 +486,14 @@ for (size_t channel = 0; channel < numChannels; ++channel)
 - **LA2A Compression Tests**: Threshold mapping, ratio modes, makeup gain, envelope follower, gain reduction meter
 - **Pre-Distortion Compression Tests** (NEW): Transient reduction, bypass behavior, envelope attack/release, stereo independence, edge cases, gain reduction range (47 assertions)
 - **LFO Tests**: All 5 waveform types with output range validation
-- **ProcessBlock Integration**: True bypass, 808-safe mode, oversampling, DC blocking, wet/dry mix
+- **ProcessBlock Integration**: True bypass, Sub Guard mode, oversampling, DC blocking, wet/dry mix
 - **Parameter Tests**: Range validation, defaults, smoothing, pointer validity
 - **Sample Rate Tests**: Multi-rate support (44.1k, 48k, 88.2k, 96k, 192k)
 - **Thread Safety Tests**: Scope buffer access, atomic gain reduction, multi-instance independence
 - **State I/O Tests**: Parameter serialization and deserialization
 - **Golden Audio Tests**: Reference file comparison
 
-**Current Test Status**: **1562 total assertions - 100% PASS RATE**
+**Current Test Status**: **2000 total assertions - 100% PASS RATE**
 
 ## NaN Root Cause Investigation & Fixes (Latest)
 
@@ -499,7 +569,7 @@ Root cause was JUCE's second-order IIR filters (`makeHighPass`/`makeLowPass`) be
      ```cpp
      y[n] = x[n] - x[n-1] + R * y[n-1]  // R = 0.995 for ~35Hz cutoff
      ```
-   - **Impact**: Eliminated ALL remaining NaN issues - **100% test pass rate (1515 assertions)**
+   - **Impact**: Eliminated ALL remaining NaN issues - **100% test pass rate**
 
 **Files Modified**:
 - `Source/PluginProcessor.cpp`: ~300 lines modified (filter fixes, manual DC blocker)
