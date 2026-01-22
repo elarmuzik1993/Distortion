@@ -161,3 +161,32 @@ add_custom_target(run_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     COMMENT "Running Distortion Tests..."
 )
+
+# ============================================================================
+# Install targets
+# ============================================================================
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Install VST3 to user's VST3 directory on Linux
+    install(DIRECTORY ${CMAKE_BINARY_DIR}/Distortion_artefacts/${CMAKE_BUILD_TYPE}/VST3/
+            DESTINATION "$ENV{HOME}/.vst3"
+            USE_SOURCE_PERMISSIONS)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    # Install VST3 to user's VST3 directory on macOS
+    install(DIRECTORY ${CMAKE_BINARY_DIR}/Distortion_artefacts/${CMAKE_BUILD_TYPE}/VST3/
+            DESTINATION "$ENV{HOME}/Library/Audio/Plug-Ins/VST3"
+            USE_SOURCE_PERMISSIONS)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    # Install VST3 to Common Files on Windows
+    install(DIRECTORY ${CMAKE_BINARY_DIR}/Distortion_artefacts/${CMAKE_BUILD_TYPE}/VST3/
+            DESTINATION "$ENV{COMMONPROGRAMFILES}/VST3"
+            USE_SOURCE_PERMISSIONS)
+endif()
+
+# Custom target to build and install in one step
+add_custom_target(build_install
+    COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target Distortion_VST3 -j --clean-first
+    COMMAND ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR}
+    COMMAND ${CMAKE_COMMAND} -E echo "Installation complete! VST3 installed successfully."
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    COMMENT "Building and installing Distortion VST3..."
+)
