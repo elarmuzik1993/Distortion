@@ -49,10 +49,12 @@
       <CONFIGURATIONS>
         <CONFIGURATION isDebug="1" name="Debug" targetName="Distortion" enablePluginBinaryCopyStep="1"
                        vst3BinaryLocation_Win32="C:\Program Files\Common Files\VST3"
-                       vst3BinaryLocation_x64="C:\Program Files\Common Files\VST3"/>
+                       vst3BinaryLocation_x64="C:\Program Files\Common Files\VST3"
+                       postbuildCommand="python &quot;$(ProjectDir)..\..\scripts\fix_moduleinfo_json.py&quot; &quot;$(OutDir)&quot; --all&#10;python &quot;$(ProjectDir)..\..\scripts\fix_moduleinfo_json.py&quot; &quot;C:\Program Files\Common Files\VST3\Distortion.vst3&quot;"/>
         <CONFIGURATION isDebug="0" name="Release" targetName="Distortion" enablePluginBinaryCopyStep="1"
                        vst3BinaryLocation_Win32="%CommonProgramFiles(x86)%\VST3" vst3BinaryLocation_x64="%CommonProgramW6432%\VST3"
-                       vst3BinaryLocation_arm64=" "/>
+                       vst3BinaryLocation_arm64=" "
+                       postbuildCommand="python &quot;$(ProjectDir)..\..\scripts\fix_moduleinfo_json.py&quot; &quot;$(OutDir)&quot; --all&#10;python &quot;$(ProjectDir)..\..\scripts\fix_moduleinfo_json.py&quot; &quot;%CommonProgramW6432%\VST3\Distortion.vst3&quot;"/>
       </CONFIGURATIONS>
       <MODULEPATHS>
         <MODULEPATH id="juce_audio_basics" path="../../../Documents/JUCE/modules"/>

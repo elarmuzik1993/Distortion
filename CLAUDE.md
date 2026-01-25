@@ -10,6 +10,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a JUCE project supporting both **CMake (Linux/Mac/Windows)** and **Projucer (Windows VS2022)**.
 
+### GitHub Actions CI/CD (Recommended)
+
+The easiest way to build for both Windows and Linux is using GitHub Actions. Push code to GitHub and it automatically builds release artifacts.
+
+**Automatic builds trigger on:**
+- Push to `main` or `develop` branches
+- Pull requests to `main`
+- Manual trigger via GitHub UI
+- Tag pushes (creates a GitHub Release)
+
+**Download built plugins:**
+1. Go to repository → Actions tab
+2. Click latest successful workflow run
+3. Download artifacts: `Distortion-VST3-Windows` or `Distortion-VST3-Linux`
+
+**Create a release:**
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+This creates a GitHub Release with Windows and Linux ZIP files.
+
 ### CMake Build (Recommended for Linux/Cross-platform)
 
 **Setup:**
@@ -33,7 +55,8 @@ cmake --build . --target DistortionTests -j$(nproc)
 **Notes:**
 - CMake will automatically fetch JUCE 7.0.12 from GitHub if not found locally
 - To use local JUCE: `cmake .. -DJUCE_PATH=/path/to/JUCE`
-- Requires: CMake 3.22+, C++17 compiler, ALSA development libraries (Linux)
+- Requires: CMake 3.22+, C++17 compiler, Python 3, ALSA development libraries (Linux)
+- Post-build automatically fixes moduleinfo.json (see below)
 
 ### Projucer Build (Windows Visual Studio 2022)
 
@@ -62,6 +85,27 @@ cd "Builds/VisualStudio2022"
 - Edit project settings via Projucer: Open `Distortion.jucer` in Projucer
 - After making changes in Projucer, save and it will regenerate the Visual Studio project files
 - JUCE modules path: `../../../Documents/JUCE/modules` (relative to project)
+
+### VST3 moduleinfo.json Fix (Post-Build)
+
+JUCE's VST3 manifest helper generates `moduleinfo.json` with **invalid JSON** (trailing commas). This causes some DAWs (Ableton, FL Studio, Cubase, etc.) to reject the plugin during validation.
+
+**Solution**: A post-build script (`scripts/fix_moduleinfo_json.py`) automatically fixes the JSON after each build.
+
+**Manual Usage:**
+```bash
+# Fix a specific VST3 bundle
+python scripts/fix_moduleinfo_json.py "C:\Program Files\Common Files\VST3\Distortion.vst3"
+
+# Fix all moduleinfo.json in a build directory
+python scripts/fix_moduleinfo_json.py build --all
+```
+
+**Troubleshooting DAW loading issues:**
+1. Close the DAW completely
+2. Run the fix script on the installed VST3
+3. Clear DAW's plugin cache (varies by DAW)
+4. Restart DAW and rescan plugins
 
 ## Architecture
 

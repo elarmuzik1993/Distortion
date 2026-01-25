@@ -103,6 +103,20 @@ target_link_libraries(Distortion
 )
 
 # ============================================================================
+# Post-build: Fix invalid JSON in VST3 moduleinfo.json
+# JUCE generates JSON with trailing commas which breaks some DAWs
+# ============================================================================
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_FOUND)
+    add_custom_command(TARGET Distortion POST_BUILD
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/scripts/fix_moduleinfo_json.py"
+                "${CMAKE_BINARY_DIR}/Distortion_artefacts/$<CONFIG>/VST3" --all
+        COMMENT "Fixing moduleinfo.json trailing commas..."
+        VERBATIM
+    )
+endif()
+
+# ============================================================================
 # Test Runner Target (Console Application)
 # ============================================================================
 juce_add_console_app(DistortionTests
