@@ -50,6 +50,7 @@ set(TEST_SOURCES
 # ============================================================================
 juce_add_plugin(Distortion
     COMPANY_NAME "Elar Music Audio"
+    BUNDLE_ID "com.ElarMusicAudio.Distortion"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
     NEEDS_MIDI_OUTPUT FALSE
@@ -121,6 +122,7 @@ endif()
 # ============================================================================
 juce_add_console_app(DistortionTests
     COMPANY_NAME "Elar Music Audio"
+    BUNDLE_ID "com.ElarMusicAudio.DistortionTests"
     PRODUCT_NAME "DistortionTests"
 )
 
