@@ -827,7 +827,7 @@ void OutputLimiterTests::testEnvelopeAttackRelease()
     using namespace TestUtilities;
 
     PluginProcessor processor;
-    processor.prepareToPlay(44100.0, 512);
+    processor.prepareToPlay(44100.0, 1024);  // Match buffer size to prevent oversampling overflow
 
     setParameter(processor.parameters, "outputGain", 50.0f);  // Unity gain
     setParameter(processor.parameters, "distortionAmount", 0.0f);
@@ -981,6 +981,143 @@ void LFOTests::testOutputRange(PluginProcessor& processor)
         expect(maxVal <= 1.0f, "Waveform " + juce::String(waveform) + " max " +
                juce::String(maxVal) + " above 1");
     }
+}
+
+//==============================================================================
+// LFODestinationTests Implementation
+//==============================================================================
+
+void LFODestinationTests::runTest()
+{
+    beginTest("Destination parameter exists and defaults to 0");
+    {
+        PluginProcessor processor;
+        processor.prepareToPlay(44100.0, 512);
+
+        auto* param = processor.parameters.getParameter("lfoDestination");
+        expect(param != nullptr, "lfoDestination parameter exists");
+        expectWithinAbsoluteError(param->getValue(), 0.0f, 0.01f,
+            "Default destination is 0 (Distortion)");
+    }
+
+    beginTest("Destination 0: Distortion modulation");
+    testDestination(0, "distortionAmount", 50.0f);
+
+    beginTest("Destination 1: Tone filter modulation");
+    testDestination(1, "tone", 8000.0f);
+
+    beginTest("Destination 2: Hi-pass modulation");
+    testDestination(2, "highPassFreq", 100.0f);
+
+    beginTest("Destination 3: Dist mix modulation");
+    testDestination(3, "distMix", 50.0f);
+
+    beginTest("Destination 4: Output gain modulation");
+    testDestination(4, "outputGain", 50.0f);
+
+    beginTest("Extreme depth doesn't cause NaN on any destination");
+    {
+        PluginProcessor processor;
+        processor.prepareToPlay(44100.0, 4410);  // Match buffer size to prevent oversampling overflow
+
+        TestUtilities::setParameter(processor.parameters, "lfoEnabled", 1.0f);
+        TestUtilities::setParameter(processor.parameters, "lfoRate", 20.0f);
+        TestUtilities::setParameter(processor.parameters, "lfoDepth", 100.0f);
+        TestUtilities::setParameter(processor.parameters, "distortionAmount", 50.0f);
+
+        for (int dest = 0; dest <= 4; ++dest)
+        {
+            TestUtilities::setParameter(processor.parameters, "lfoDestination", static_cast<float>(dest));
+
+            juce::AudioBuffer<float> buffer(2, 4410);
+            buffer.clear();
+            // Add test signal
+            for (int i = 0; i < buffer.getNumSamples(); ++i)
+            {
+                float sample = 0.5f * std::sin(2.0f * juce::MathConstants<float>::pi * 440.0f * i / 44100.0f);
+                buffer.setSample(0, i, sample);
+                buffer.setSample(1, i, sample);
+            }
+
+            juce::MidiBuffer midi;
+            processor.processBlock(buffer, midi);
+
+            // Check for NaN in output
+            bool hasNaN = false;
+            for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            {
+                for (int i = 0; i < buffer.getNumSamples(); ++i)
+                {
+                    if (std::isnan(buffer.getSample(ch, i)) || std::isinf(buffer.getSample(ch, i)))
+                    {
+                        hasNaN = true;
+                        break;
+                    }
+                }
+            }
+
+            expect(!hasNaN, juce::String("No NaN with extreme depth on destination ") + juce::String(dest));
+        }
+    }
+
+    beginTest("Fast LFO rate (50Hz) is stable on all destinations");
+    {
+        PluginProcessor processor;
+        processor.prepareToPlay(44100.0, 44100);  // Match buffer size to prevent oversampling overflow
+
+        TestUtilities::setParameter(processor.parameters, "lfoEnabled", 1.0f);
+        TestUtilities::setParameter(processor.parameters, "lfoRate", 50.0f);  // Max rate
+        TestUtilities::setParameter(processor.parameters, "lfoDepth", 75.0f);
+
+        for (int dest = 0; dest <= 4; ++dest)
+        {
+            TestUtilities::setParameter(processor.parameters, "lfoDestination", static_cast<float>(dest));
+
+            juce::AudioBuffer<float> buffer(2, 44100);  // 1 second
+            buffer.clear();
+            for (int i = 0; i < buffer.getNumSamples(); ++i)
+            {
+                float sample = 0.3f * std::sin(2.0f * juce::MathConstants<float>::pi * 440.0f * i / 44100.0f);
+                buffer.setSample(0, i, sample);
+                buffer.setSample(1, i, sample);
+            }
+
+            juce::MidiBuffer midi;
+            processor.processBlock(buffer, midi);
+
+            expect(!processor.debugHadNaN.load(),
+                juce::String("No NaN with 50Hz LFO on destination ") + juce::String(dest));
+        }
+    }
+}
+
+void LFODestinationTests::testDestination(int destIndex, const juce::String& paramID, float centerValue)
+{
+    PluginProcessor processor;
+    processor.prepareToPlay(44100.0, 4410);  // Match buffer size to prevent oversampling overflow
+
+    TestUtilities::setParameter(processor.parameters, "lfoEnabled", 1.0f);
+    TestUtilities::setParameter(processor.parameters, "lfoRate", 2.0f);
+    TestUtilities::setParameter(processor.parameters, "lfoDepth", 50.0f);
+    TestUtilities::setParameter(processor.parameters, "lfoWaveform", 0.0f);  // Sine
+    TestUtilities::setParameter(processor.parameters, "lfoDestination", static_cast<float>(destIndex));
+    TestUtilities::setParameter(processor.parameters, paramID, centerValue);
+    TestUtilities::setParameter(processor.parameters, "distortionAmount", 50.0f);  // Ensure distortion active
+
+    juce::AudioBuffer<float> buffer(2, 4410);  // 100ms
+    buffer.clear();
+    for (int i = 0; i < buffer.getNumSamples(); ++i)
+    {
+        float sample = 0.5f * std::sin(2.0f * juce::MathConstants<float>::pi * 440.0f * i / 44100.0f);
+        buffer.setSample(0, i, sample);
+        buffer.setSample(1, i, sample);
+    }
+
+    juce::MidiBuffer midi;
+    processor.processBlock(buffer, midi);
+
+    expect(!processor.debugHadNaN.load(),
+        juce::String("No NaN during modulation of ") + paramID);
 }
 
 //==============================================================================

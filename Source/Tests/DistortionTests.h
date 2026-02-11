@@ -94,6 +94,17 @@ private:
     void testRandomSampleHold(PluginProcessor& processor);
 };
 
+/** Tests for LFO destination routing */
+class LFODestinationTests : public juce::UnitTest
+{
+public:
+    LFODestinationTests() : UnitTest("LFO Destination Routing", TestCategories::DSP) {}
+    void runTest() override;
+
+private:
+    void testDestination(int destIndex, const juce::String& paramID, float centerValue);
+};
+
 //==============================================================================
 // Integration Tests
 //==============================================================================
@@ -297,6 +308,7 @@ inline void registerAllTests()
     static HarmonicDensityTests harmonicDensityTests;
     static OutputLimiterTests outputLimiterTests;
     static LFOTests lfoTests;
+    static LFODestinationTests lfoDestinationTests;
     static ProcessBlockTests processBlockTests;
     static ParameterTests parameterTests;
     static SampleRateTests sampleRateTests;
