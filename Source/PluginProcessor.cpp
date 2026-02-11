@@ -55,6 +55,23 @@ PluginProcessor::PluginProcessor()
         && compPeakReductionParam && compMakeupGainParam && compRatioParam && compEnabledParam
         && distMixParam && toneParam && waveshaperCleanParam);
 
+    // Initialize SmoothedValues with default sample rate to prevent assertions
+    // They will be properly re-initialized in prepareToPlay() with actual sample rate
+    const double defaultSampleRate = 44100.0;
+    smoothedOutputGain.reset(defaultSampleRate, DSPConstants::GAIN_SMOOTH_TIME_S);
+    smoothedOutputGain.setCurrentAndTargetValue(1.0f);
+    bypassRamp.reset(defaultSampleRate, 0.01);
+    bypassRamp.setCurrentAndTargetValue(0.0f);
+    smoothedLfoDepth.reset(defaultSampleRate, 0.02);
+    smoothedLfoDepth.setCurrentAndTargetValue(0.0f);
+    smoothedDistMix.reset(defaultSampleRate, 0.02);
+    smoothedDistMix.setCurrentAndTargetValue(1.0f);
+    smoothedToneParam.reset(defaultSampleRate, 0.02);
+    smoothedToneParam.setCurrentAndTargetValue(20000.0f);
+    smoothedGainReduction.reset(defaultSampleRate, DSPConstants::COMP_GR_SMOOTH_TIME_S);
+    smoothedGainReduction.setCurrentAndTargetValue(1.0f);
+    smoothedSubGuardFreq.reset(defaultSampleRate, DSPConstants::SUBGUARD_FREQ_SMOOTH_TIME_S);
+    smoothedSubGuardFreq.setCurrentAndTargetValue(0.0f);
 }
 
 PluginProcessor::~PluginProcessor()
@@ -424,8 +441,11 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 
     // Smoothed parameters for automation (20ms smoothing)
     smoothedLfoDepth.reset(sampleRate, 0.02);
+    smoothedLfoDepth.setCurrentAndTargetValue(lfoDepthParam ? lfoDepthParam->load() : 0.0f);
     smoothedDistMix.reset(sampleRate, 0.02);
+    smoothedDistMix.setCurrentAndTargetValue(distMixParam ? distMixParam->load() / 100.0f : 1.0f);
     smoothedToneParam.reset(sampleRate, 0.02);
+    smoothedToneParam.setCurrentAndTargetValue(toneParam ? toneParam->load() : 20000.0f);
 
     compEnvelopeState = 0.0f;
     compRmsHistory = 0.0f;
@@ -804,20 +824,37 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Some DAWs can change sample rate without calling prepareToPlay
     // This ensures all sample-rate-dependent processing works correctly at any rate (44.1, 48, 88.2, 96, 192 kHz)
     const double currentSR = getSampleRate();
-    if (std::abs(currentSR - lastSampleRate) > 0.1)
+    if (currentSR > 0 && std::abs(currentSR - lastSampleRate) > 0.1)
     {
         currentSampleRate = static_cast<float>(currentSR);
 
         // Update time-constant coefficients (DC blocking, compression envelope)
         updateSampleRateDependentCoefficients(currentSR);
 
-        // Update smoothed values for new sample rate
+        // Update smoothed values for new sample rate (preserve current values)
+        auto tempOutputGain = smoothedOutputGain.getCurrentValue();
         smoothedOutputGain.reset(currentSR, DSPConstants::GAIN_SMOOTH_TIME_S);
+        smoothedOutputGain.setCurrentAndTargetValue(tempOutputGain);
+
+        auto tempGainReduction = smoothedGainReduction.getCurrentValue();
         smoothedGainReduction.reset(currentSR, DSPConstants::COMP_GR_SMOOTH_TIME_S);
+        smoothedGainReduction.setCurrentAndTargetValue(tempGainReduction);
+
+        auto tempBypassRamp = bypassRamp.getCurrentValue();
         bypassRamp.reset(currentSR, 0.01);
+        bypassRamp.setCurrentAndTargetValue(tempBypassRamp);
+
+        auto tempLfoDepth = smoothedLfoDepth.getCurrentValue();
         smoothedLfoDepth.reset(currentSR, 0.02);
+        smoothedLfoDepth.setCurrentAndTargetValue(tempLfoDepth);
+
+        auto tempDistMix = smoothedDistMix.getCurrentValue();
         smoothedDistMix.reset(currentSR, 0.02);
+        smoothedDistMix.setCurrentAndTargetValue(tempDistMix);
+
+        auto tempToneParam = smoothedToneParam.getCurrentValue();
         smoothedToneParam.reset(currentSR, 0.02);
+        smoothedToneParam.setCurrentAndTargetValue(tempToneParam);
 
         // Force update of all dynamic filters on next use
         lastHighPassFreq = -1.0f;  // Force hi-pass filter update
