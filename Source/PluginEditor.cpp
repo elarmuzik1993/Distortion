@@ -34,7 +34,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 
     // Setup version label (bottom left corner)
     addAndMakeVisible(versionLabel);
-    versionLabel.setText("v1.6 Soft Drive", juce::dontSendNotification);
+    versionLabel.setText("v1.8 LFO Routing", juce::dontSendNotification);
     versionLabel.setFont(juce::Font(10.0f));
     versionLabel.setColour(juce::Label::textColourId, juce::Colour(0x88, 0x88, 0x88));  // Gray text
     versionLabel.setJustificationType(juce::Justification::left);
@@ -80,6 +80,33 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     lfoWaveformAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.parameters, "lfoWaveform", lfoWaveformComboBox);
 
+    addAndMakeVisible(lfoWaveformLabel);
+    lfoWaveformLabel.setText("Wave", juce::dontSendNotification);
+    lfoWaveformLabel.setJustificationType(juce::Justification::centred);
+    lfoWaveformLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+    lfoWaveformLabel.setFont(juce::Font(10.0f, juce::Font::bold));
+
+    // LFO Destination Selector
+    addAndMakeVisible(lfoDestinationComboBox);
+    lfoDestinationComboBox.setLookAndFeel(&comboBoxLookAndFeel);
+    lfoDestinationComboBox.addItem("Distortion", 1);
+    lfoDestinationComboBox.addItem("Tone", 2);
+    lfoDestinationComboBox.addItem("Hi-Pass", 3);
+    lfoDestinationComboBox.addItem("Dist Mix", 4);
+    lfoDestinationComboBox.addItem("Out Gain", 5);
+
+    lfoDestinationAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.parameters, "lfoDestination", lfoDestinationComboBox);
+
+    addAndMakeVisible(lfoDestinationLabel);
+    lfoDestinationLabel.setText("Target", juce::dontSendNotification);
+    lfoDestinationLabel.setJustificationType(juce::Justification::centred);
+    lfoDestinationLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+    lfoDestinationLabel.setFont(juce::Font(10.0f, juce::Font::bold));
+
+    // Add destination lock icon
+    addAndMakeVisible(lfoDestinationLock);
+
     // Setup waveshaper mix knob
     setupSlider(waveshaperSlider, waveshaperLabel, "Wave Mix",
         waveshaperAttachment, "waveshaperMix");
@@ -121,7 +148,27 @@ PluginEditor::PluginEditor(PluginProcessor& p)
         updateCompressionVisibility();
         resized(); // Recalculate layout with new height
     };
-    
+
+    // Setup LFO enable toggle
+    addAndMakeVisible(lfoEnableToggle);
+    lfoEnableToggle.setButtonText("LFO");
+    lfoEnableToggle.setLookAndFeel(&checkboxLookAndFeel);
+
+    lfoEnableAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        audioProcessor.parameters, "lfoEnabled", lfoEnableToggle);
+
+    // Setup collapsible LFO tab header
+    addAndMakeVisible(lfoTabHeader);
+    lfoTabHeader.onToggle = [this](bool expanded)
+    {
+        isLFOExpanded = expanded;
+        updateLFOVisibility();
+        resized(); // Recalculate layout with new height
+    };
+
+    // Add LFO lock icon
+    addAndMakeVisible(lfoEnableLock);
+
     // Setup Sub Guard knob with snap behavior
     setupSlider(subGuardSlider, subGuardLabel, "SUB GUARD", subGuardAttachment, "subGuardFreq");
 
@@ -362,6 +409,8 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     parameterLocks["distMix"] = false;
     parameterLocks["lfoRate"] = false;
     parameterLocks["lfoDepth"] = false;
+    parameterLocks["lfoEnabled"] = false;
+    parameterLocks["lfoDestination"] = false;
     parameterLocks["compPeakReduction"] = false;
     parameterLocks["compMakeupGain"] = false;
     parameterLocks["compRatio"] = false;
@@ -398,20 +447,30 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     setupKnobRightClick(clipTypeComboBox, "clipType");
     setupKnobRightClick(compRatioComboBox, "compRatio");
     setupKnobRightClick(compEnableToggle, "compEnabled");
+    setupKnobRightClick(lfoEnableToggle, "lfoEnabled");
+    setupKnobRightClick(lfoDestinationComboBox, "lfoDestination");
 
-    // Initialize compression section visibility
+    // Initialize section visibility
     updateCompressionVisibility();
+    updateLFOVisibility();
+
+    // Start timer for LFO modulation visual feedback (30Hz)
+    startTimerHz(30);
 }
 
 PluginEditor::~PluginEditor()
 {
+    stopTimer();
+
     // Reset LookAndFeel to nullptr before destruction to prevent crash
     // Components must not reference a LookAndFeel that may be destroyed before them
     cleanModeToggle.setLookAndFeel(nullptr);
     compEnableToggle.setLookAndFeel(nullptr);
+    lfoEnableToggle.setLookAndFeel(nullptr);
     clipTypeComboBox.setLookAndFeel(nullptr);
     compRatioComboBox.setLookAndFeel(nullptr);
     lfoWaveformComboBox.setLookAndFeel(nullptr);
+    lfoDestinationComboBox.setLookAndFeel(nullptr);
     presetSelector.setLookAndFeel(nullptr);
 }
 
@@ -522,92 +581,140 @@ void PluginEditor::resized()
 
     auto contentArea = bounds;
 
-    // ========== COMPRESSION SECTION (COLLAPSIBLE) ==========
+    // ========== SIDE-BY-SIDE LFO & COMPRESSION SECTIONS ==========
     const int tabHeaderHeight = 25;
-    const int expandedCompressionHeight = 90;
-
-    // Dynamic height based on collapse state
-    const int compressionSectionHeight = isCompressionExpanded
-        ? expandedCompressionHeight
-        : tabHeaderHeight;
-
-    auto compressionArea = contentArea.removeFromTop(compressionSectionHeight);
+    const int expandedSectionHeight = 90;
 
     // Calculate actual window height for footer positioning
     const int actualWindowHeight = getHeight();
 
-    // Tab header (always visible, clickable) - sized to fit text
-    auto tabArea = compressionArea.removeFromTop(tabHeaderHeight);
+    // Calculate section height (max of either section if expanded)
+    const int lfoSectionHeight = isLFOExpanded ? expandedSectionHeight : tabHeaderHeight;
+    const int compressionSectionHeight = isCompressionExpanded ? expandedSectionHeight : tabHeaderHeight;
+    const int topSectionHeight = std::max(lfoSectionHeight, compressionSectionHeight);
 
-    // Calculate width for "COMPRESSION" text + padding + chevron
-    const int tabTextWidth = 120;  // Width for text
+    auto topSectionArea = contentArea.removeFromTop(topSectionHeight);
+
+    // Split horizontally: LFO on left (40%), Compression on right (60%)
+    const int lfoSectionWidth = static_cast<int>(topSectionArea.getWidth() * 0.4f);
+    auto lfoArea = topSectionArea.removeFromLeft(lfoSectionWidth);
+    auto compressionArea = topSectionArea;  // Remaining space
+
+    // ========== LFO SECTION (LEFT SIDE) ==========
+    const int lfoTabTextWidth = 50;  // Width for "LFO" text
     const int tabChevronWidth = 30;  // Space for chevron
-    const int tabTotalWidth = tabTextWidth + tabChevronWidth;
-    const int tabX = (getWidth() - tabTotalWidth) / 2;  // Center horizontally
+    const int lfoTabTotalWidth = lfoTabTextWidth + tabChevronWidth;
+    const int lfoTabX = lfoArea.getX() + (lfoArea.getWidth() - lfoTabTotalWidth) / 2;
 
-    compressionTabHeader.setBounds(tabX, tabArea.getY(), tabTotalWidth, tabHeaderHeight);
+    lfoTabHeader.setBounds(lfoTabX, lfoArea.getY(), lfoTabTotalWidth, tabHeaderHeight);
+    lfoTabHeader.setExpanded(isLFOExpanded);
+
+    // Only layout LFO controls if expanded
+    if (isLFOExpanded)
+    {
+        const int lfoKnobSize = 60;
+        const int lfoSpacing = 8;
+        const int toggleSize = 24;
+        const int lfoKnobY = lfoArea.getY() + tabHeaderHeight + 5;
+        const int waveformDropdownWidth = 50;
+        const int destinationDropdownWidth = 65;
+        const int dropdownHeight = 18;
+
+        // Calculate total width for centering
+        const int lfoControlsWidth = toggleSize + 8 + lfoKnobSize + lfoSpacing + lfoKnobSize +
+                                      lfoSpacing + waveformDropdownWidth + lfoSpacing + destinationDropdownWidth;
+        int lfoStartX = lfoArea.getX() + (lfoArea.getWidth() - lfoControlsWidth) / 2;
+
+        // LFO Enable Toggle
+        lfoEnableToggle.setBounds(lfoStartX, lfoKnobY + 15, toggleSize, toggleSize);
+        lfoEnableLock.setBounds(lfoStartX + toggleSize - 12, lfoKnobY + 15, 12, 12);
+        lfoStartX += toggleSize + 8;
+
+        // LFO Rate Knob
+        lfoRateSlider.setBounds(lfoStartX, lfoKnobY, lfoKnobSize, lfoKnobSize);
+        lfoRateLabel.setBounds(lfoStartX, lfoKnobY + lfoKnobSize, lfoKnobSize, 15);
+        lfoRateLock.setBounds(lfoStartX + lfoKnobSize - 14 - 3, lfoKnobY + 3, 14, 14);
+        lfoStartX += lfoKnobSize + lfoSpacing;
+
+        // LFO Depth Knob
+        lfoDepthSlider.setBounds(lfoStartX, lfoKnobY, lfoKnobSize, lfoKnobSize);
+        lfoDepthLabel.setBounds(lfoStartX, lfoKnobY + lfoKnobSize, lfoKnobSize, 15);
+        lfoDepthLock.setBounds(lfoStartX + lfoKnobSize - 14 - 3, lfoKnobY + 3, 14, 14);
+        lfoStartX += lfoKnobSize + lfoSpacing;
+
+        // LFO Waveform Dropdown
+        lfoWaveformComboBox.setBounds(lfoStartX, lfoKnobY + 15, waveformDropdownWidth, dropdownHeight);
+        lfoWaveformLabel.setBounds(lfoStartX, lfoKnobY + 35, waveformDropdownWidth, 14);
+        lfoStartX += waveformDropdownWidth + lfoSpacing;
+
+        // LFO Destination Dropdown (NEW)
+        lfoDestinationComboBox.setBounds(lfoStartX, lfoKnobY + 15, destinationDropdownWidth, dropdownHeight);
+        lfoDestinationLabel.setBounds(lfoStartX, lfoKnobY + 35, destinationDropdownWidth, 14);
+        lfoDestinationLock.setBounds(lfoStartX + destinationDropdownWidth - 12, lfoKnobY + 15, 12, 12);
+    }
+
+    // ========== COMPRESSION SECTION (RIGHT SIDE) ==========
+    const int compTabTextWidth = 120;  // Width for "COMPRESSION" text
+    const int compTabTotalWidth = compTabTextWidth + tabChevronWidth;
+    const int compTabX = compressionArea.getX() + (compressionArea.getWidth() - compTabTotalWidth) / 2;
+
+    compressionTabHeader.setBounds(compTabX, compressionArea.getY(), compTabTotalWidth, tabHeaderHeight);
     compressionTabHeader.setExpanded(isCompressionExpanded);
 
-    // Only layout controls if expanded
+    // Only layout compression controls if expanded
     if (isCompressionExpanded)
     {
-        // ========== COMPRESSION CONTROLS LAYOUT (4 knobs + dropdown + toggle) ==========
         const int compKnobSize = 60;
         const int compSpacing = 15;
-        const int compControlsWidth = (4 * compKnobSize) + (3 * compSpacing) + 60 + 30;
-        const int compStartX = compressionArea.getRight() - compControlsWidth - 20;
-        const int compKnobY = compressionArea.getY() + 5;
+        const int compKnobY = compressionArea.getY() + tabHeaderHeight + 5;
+
+        // Calculate controls width: toggle + 2 knobs + dropdown + meter
+        const int compControlsWidth = 24 + 10 + compKnobSize + compSpacing + compKnobSize + compSpacing + 60 + 15 + 20;
+        int compStartX = compressionArea.getX() + (compressionArea.getWidth() - compControlsWidth) / 2;
+
+        // COMP Enable Toggle
+        const int toggleSize = 24;
+        compEnableToggle.setBounds(compStartX, compKnobY + 15, toggleSize, toggleSize);
+        compEnableLock.setBounds(compStartX + toggleSize - 12, compKnobY + 15, 12, 12);
+        compStartX += toggleSize + 10;
 
         // Peak Reduction knob
         compPeakReductionSlider.setBounds(compStartX, compKnobY, compKnobSize, compKnobSize);
         compPeakReductionLabel.setBounds(compStartX, compKnobY + compKnobSize, compKnobSize, 15);
+        compPeakReductionLock.setBounds(compStartX + compKnobSize - 14 - 3, compKnobY + 3, 14, 14);
+        compStartX += compKnobSize + compSpacing;
 
         // Makeup Gain knob
-        const int makeupX = compStartX + compKnobSize + compSpacing;
-        compMakeupGainSlider.setBounds(makeupX, compKnobY, compKnobSize, compKnobSize);
-        compMakeupGainLabel.setBounds(makeupX, compKnobY + compKnobSize, compKnobSize, 15);
+        compMakeupGainSlider.setBounds(compStartX, compKnobY, compKnobSize, compKnobSize);
+        compMakeupGainLabel.setBounds(compStartX, compKnobY + compKnobSize, compKnobSize, 15);
+        compMakeupGainLock.setBounds(compStartX + compKnobSize - 14 - 3, compKnobY + 3, 14, 14);
+        compStartX += compKnobSize + compSpacing;
 
-        // Compress/Limit dropdown (now directly after Makeup Gain)
-        const int dropdownX = makeupX + compKnobSize + compSpacing;
+        // Compress/Limit dropdown
         const int dropdownWidth = 60;
-        compRatioComboBox.setBounds(dropdownX, compKnobY + 15, dropdownWidth, 20);
-        compRatioLabel.setBounds(dropdownX, compKnobY + 37, dropdownWidth, 12);
+        compRatioComboBox.setBounds(compStartX, compKnobY + 15, dropdownWidth, 20);
+        compRatioLabel.setBounds(compStartX, compKnobY + 37, dropdownWidth, 12);
+        compRatioLock.setBounds(compStartX + dropdownWidth - 14 - 2, compKnobY + 15, 14, 14);
+        compStartX += dropdownWidth + 15;
 
-        // ========== ENABLE TOGGLE (LEFT OF PEAK REDUCTION) ==========
-        const int toggleSize = 24;
-        const int toggleX = compStartX - toggleSize - 15;
-        compEnableToggle.setBounds(toggleX, compKnobY + 15, toggleSize, toggleSize);
-
-        // ========== GAIN REDUCTION METER (RIGHT, AFTER DROPDOWN - SLIM) ==========
-        const int meterWidth = 20;  // Slim meter
+        // Gain Reduction Meter
+        const int meterWidth = 20;
         const int meterHeight = 55;
-        const int meterX = dropdownX + dropdownWidth + 15;
-        const int meterY = compKnobY + 5;
-        gainReductionMeter.setBounds(meterX, meterY, meterWidth, meterHeight);
-
-        // Position compression lock icons
-        const int compLockSize = 14;
-        const int compLockOffset = 3;
-        compPeakReductionLock.setBounds(compStartX + compKnobSize - compLockSize - compLockOffset,
-                                       compKnobY + compLockOffset, compLockSize, compLockSize);
-        compMakeupGainLock.setBounds(makeupX + compKnobSize - compLockSize - compLockOffset,
-                                    compKnobY + compLockOffset, compLockSize, compLockSize);
-        compRatioLock.setBounds(dropdownX + dropdownWidth - compLockSize - 2,
-                               compKnobY + 15, compLockSize, compLockSize);
-        compEnableLock.setBounds(toggleX + toggleSize - compLockSize,
-                                compKnobY + 15, compLockSize, compLockSize);
+        gainReductionMeter.setBounds(compStartX, compKnobY + 5, meterWidth, meterHeight);
     }
     // ===========================================================
 
-    // ========== SINGLE ROW LAYOUT AT BOTTOM ==========
+    // ========== SINGLE ROW LAYOUT AT BOTTOM (without LFO controls - now in top section) ==========
     const int knobSize = 75;  // Large knob size
     const int smallKnobSize = 45;  // Small knob size
     const int controlSpacing = 8;  // Spacing between controls
     const int bottomMargin = 20;
     const int rowY = actualWindowHeight - bottomMargin - knobSize - labelHeight - 10;  // Bottom row position
 
-    // Calculate total width to center controls
-    const int totalControlsWidth = 60 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 75;  // All controls + spacing
+    // Calculate total width to center controls (removed LFO controls: 45 + 8 + 75 + 8 + 75 = 211)
+    // Old: 60 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 75 = 770
+    // New: 60 + 8 + 88 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75 = 633
+    const int totalControlsWidth = 60 + 8 + 88 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75;
     int currentX = (getWidth() - totalControlsWidth) / 2;  // Center horizontally
 
     // Sub Guard Knob (60x60) - replaces old Clean Sub toggle
@@ -629,7 +736,7 @@ void PluginEditor::resized()
     cleanModeLock.setBounds(currentX + cleanSubToggleSize - 12, rowY + toggleYOffset, 12, 12);
     currentX += cleanSubToggleSize + 4 + 60 + controlSpacing;
 
-    // Input Gain (100x100)
+    // Input Gain (75x75)
     inputGainSlider.setBounds(currentX, rowY, knobSize, knobSize);
     inputGainLabel.setBounds(currentX, rowY + knobSize + 5, knobSize, labelHeight);
     inputGainLock.setBounds(currentX + knobSize - 16 - 5, rowY + 5, 16, 16);
@@ -644,58 +751,42 @@ void PluginEditor::resized()
     clipTypeLock.setBounds(currentX + comboWidth - 12 - 2, rowY + comboYOffset, 12, 12);
     currentX += comboWidth + controlSpacing;
 
-    // Hi-Pass Filter (100x100)
+    // Hi-Pass Filter (75x75)
     highPassFreqSlider.setBounds(currentX, rowY, knobSize, knobSize);
     highPassFreqLabel.setBounds(currentX, rowY + knobSize + 5, knobSize, labelHeight);
     highPassFreqLock.setBounds(currentX + knobSize - 16 - 5, rowY + 5, 16, 16);
     currentX += knobSize + controlSpacing;
 
-    // Dist Mix (50x50)
+    // Dist Mix (45x45)
     const int smallKnobYOffset = (knobSize - smallKnobSize) / 2;
     distMixSlider.setBounds(currentX, rowY + smallKnobYOffset, smallKnobSize, smallKnobSize);
     distMixLabel.setBounds(currentX, rowY + smallKnobYOffset + smallKnobSize + 2, smallKnobSize, 14);
     distMixLock.setBounds(currentX + smallKnobSize - 12 - 3, rowY + smallKnobYOffset + 3, 12, 12);
     currentX += smallKnobSize + controlSpacing;
 
-    // Distortion Amount (100x100)
+    // Distortion Amount (75x75)
     distortionAmountSlider.setBounds(currentX, rowY, knobSize, knobSize);
     distortionAmountLabel.setBounds(currentX, rowY + knobSize + 5, knobSize, labelHeight);
     distortionAmountLock.setBounds(currentX + knobSize - 16 - 5, rowY + 5, 16, 16);
     currentX += knobSize + controlSpacing;
 
-    // Tone (50x50) - post-distortion darkness/brightness
+    // Tone (45x45) - post-distortion darkness/brightness
     toneSlider.setBounds(currentX, rowY + smallKnobYOffset, smallKnobSize, smallKnobSize);
     toneLabel.setBounds(currentX, rowY + smallKnobYOffset + smallKnobSize + 2, smallKnobSize, 14);
     currentX += smallKnobSize + controlSpacing;
 
-    // Wave Mix (50x50)
+    // Wave Mix (45x45)
     waveshaperSlider.setBounds(currentX, rowY + smallKnobYOffset, smallKnobSize, smallKnobSize);
     waveshaperLabel.setBounds(currentX, rowY + smallKnobYOffset + smallKnobSize + 2, smallKnobSize, 14);
     currentX += smallKnobSize + controlSpacing;
 
-    // Output Gain (100x100)
+    // Output Gain (75x75)
     outputGainSlider.setBounds(currentX, rowY, knobSize, knobSize);
     outputGainLabel.setBounds(currentX, rowY + knobSize + 5, knobSize, labelHeight);
     outputGainLock.setBounds(currentX + knobSize - 16 - 5, rowY + 5, 16, 16);
-    currentX += knobSize + controlSpacing;
-
-    // LFO Waveform Dropdown (50x18)
-    lfoWaveformComboBox.setBounds(currentX, rowY + comboYOffset, comboWidth, comboHeight);
-    lfoWaveformLabel.setBounds(currentX, rowY + comboYOffset + comboHeight + 2, comboWidth, 14);
-    currentX += comboWidth + controlSpacing;
-
-    // LFO Rate (100x100)
-    lfoRateSlider.setBounds(currentX, rowY, knobSize, knobSize);
-    lfoRateLabel.setBounds(currentX, rowY + knobSize + 5, knobSize, labelHeight);
-    lfoRateLock.setBounds(currentX + knobSize - 16 - 5, rowY + 5, 16, 16);
-    currentX += knobSize + controlSpacing;
-
-    // LFO Depth (100x100)
-    lfoDepthSlider.setBounds(currentX, rowY, knobSize, knobSize);
-    lfoDepthLabel.setBounds(currentX, rowY + knobSize + 5, knobSize, labelHeight);
-    lfoDepthLock.setBounds(currentX + knobSize - 16 - 5, rowY + 5, 16, 16);
 
     // All controls and lock icons positioned above in single row layout
+    // LFO controls are now in the top LFO section
 }
 
 bool PluginEditor::isParameterLocked(const juce::String& paramID) const
@@ -719,6 +810,8 @@ void PluginEditor::updateLockIcons()
     distMixLock.setLocked(isParameterLocked("distMix"));
     lfoRateLock.setLocked(isParameterLocked("lfoRate"));
     lfoDepthLock.setLocked(isParameterLocked("lfoDepth"));
+    lfoEnableLock.setLocked(isParameterLocked("lfoEnabled"));
+    lfoDestinationLock.setLocked(isParameterLocked("lfoDestination"));
     compPeakReductionLock.setLocked(isParameterLocked("compPeakReduction"));
     compMakeupGainLock.setLocked(isParameterLocked("compMakeupGain"));
     subGuardLock.setLocked(isParameterLocked("subGuardFreq"));
@@ -774,6 +867,71 @@ void PluginEditor::updateCompressionVisibility()
     compMakeupGainLock.setVisible(visible);
     compRatioLock.setVisible(visible);
     compEnableLock.setVisible(visible);
+}
+
+void PluginEditor::updateLFOVisibility()
+{
+    const bool visible = isLFOExpanded;
+
+    // Knobs + labels
+    lfoRateSlider.setVisible(visible);
+    lfoRateLabel.setVisible(visible);
+    lfoDepthSlider.setVisible(visible);
+    lfoDepthLabel.setVisible(visible);
+
+    // Dropdowns
+    lfoWaveformComboBox.setVisible(visible);
+    lfoWaveformLabel.setVisible(visible);
+    lfoDestinationComboBox.setVisible(visible);   // NEW
+    lfoDestinationLabel.setVisible(visible);      // NEW
+    lfoDestinationLock.setVisible(visible);       // NEW
+
+    // Toggle
+    lfoEnableToggle.setVisible(visible);
+
+    // Lock icons
+    lfoRateLock.setVisible(visible);
+    lfoDepthLock.setVisible(visible);
+    lfoEnableLock.setVisible(visible);
+}
+
+void PluginEditor::updateModulationHighlight()
+{
+    const bool lfoEnabled = audioProcessor.parameters.getParameter("lfoEnabled")->getValue() > 0.5f;
+    const float lfoDepth = audioProcessor.parameters.getParameter("lfoDepth")->getValue();
+
+    if (!lfoEnabled || lfoDepth < 0.01f)
+    {
+        // LFO disabled - reset all highlights
+        distortionAmountSlider.setModulationIndicator(false, 0.0f);
+        toneSlider.setModulationIndicator(false, 0.0f);
+        highPassFreqSlider.setModulationIndicator(false, 0.0f);
+        distMixSlider.setModulationIndicator(false, 0.0f);
+        outputGainSlider.setModulationIndicator(false, 0.0f);
+        return;
+    }
+
+    // Get current destination
+    const int destination = static_cast<int>(
+        audioProcessor.parameters.getParameter("lfoDestination")->getValue() * 4.0f + 0.5f);
+
+    // Update pulse phase for animation (30Hz timer = ~12 degree increment)
+    modulationPulsePhase += 0.2f;
+    if (modulationPulsePhase > 6.28f) modulationPulsePhase -= 6.28f;
+    const float pulseIntensity = 0.5f + 0.5f * std::sin(modulationPulsePhase);
+
+    // Clear all and highlight active destination
+    distortionAmountSlider.setModulationIndicator(destination == 0, pulseIntensity);
+    toneSlider.setModulationIndicator(destination == 1, pulseIntensity);
+    highPassFreqSlider.setModulationIndicator(destination == 2, pulseIntensity);
+    distMixSlider.setModulationIndicator(destination == 3, pulseIntensity);
+    outputGainSlider.setModulationIndicator(destination == 4, pulseIntensity);
+}
+
+void PluginEditor::timerCallback()
+{
+    // Update LFO modulation indicator
+    updateModulationHighlight();
 }
 
 void PluginEditor::morphDistortionParameters(float x, float y)
@@ -866,6 +1024,8 @@ void PluginEditor::randomizeAllParameters()
     // LFO SECTION
     randomizeFloatParam("lfoRate", 0.1f, 10.0f);
     randomizeFloatParam("lfoDepth", 0.0f, 100.0f);
+    randomizeBoolParam("lfoEnabled");
+    randomizeChoiceParam("lfoDestination", 5);  // 5 destinations: Distortion, Tone, Hi-Pass, Dist Mix, Output Gain
 
     // COMPRESSION SECTION
     randomizeFloatParam("compPeakReduction", 0.0f, 100.0f);

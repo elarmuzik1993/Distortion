@@ -597,7 +597,7 @@ public:
     }
 };
 
-class PluginEditor : public juce::AudioProcessorEditor
+class PluginEditor : public juce::AudioProcessorEditor, public juce::Timer
 {
 public:
     explicit PluginEditor(PluginProcessor&);
@@ -605,6 +605,7 @@ public:
 
     //==============================================================================
     void paint(juce::Graphics&) override;
+    void timerCallback() override;
     void resized() override;
     void mouseUp(const juce::MouseEvent& e) override;
 
@@ -627,6 +628,9 @@ private:
     juce::Label lfoRateLabel, lfoDepthLabel;
     juce::ComboBox lfoWaveformComboBox;
     juce::Label lfoWaveformLabel;
+    juce::ComboBox lfoDestinationComboBox;
+    juce::Label lfoDestinationLabel;
+    LockIcon lfoDestinationLock;
 
     CustomKnob waveshaperSlider;
     juce::Label waveshaperLabel;
@@ -640,6 +644,11 @@ private:
     // Collapsible compression section
     bool isCompressionExpanded = true;  // Default: expanded
     CollapsibleTabHeader compressionTabHeader{"COMPRESSION"};
+
+    // Collapsible LFO section
+    bool isLFOExpanded = true;  // Default: expanded
+    CollapsibleTabHeader lfoTabHeader{"LFO"};
+    juce::ToggleButton lfoEnableToggle;
 
     CustomKnob subGuardSlider;
     juce::Label subGuardLabel;
@@ -674,7 +683,7 @@ private:
 
     // Lock icons for each parameter
     LockIcon inputGainLock, outputGainLock, distortionAmountLock, highPassFreqLock;
-    LockIcon distMixLock, lfoRateLock, lfoDepthLock;
+    LockIcon distMixLock, lfoRateLock, lfoDepthLock, lfoEnableLock;
     LockIcon compPeakReductionLock, compMakeupGainLock;
     LockIcon subGuardLock, clipTypeLock, compRatioLock, compEnableLock, cleanModeLock;
 
@@ -695,6 +704,8 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoRateAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoDepthAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lfoWaveformAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lfoDestinationAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> lfoEnableAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> waveshaperAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> compPeakReductionAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> compMakeupGainAttachment;
@@ -714,7 +725,13 @@ private:
     void updateLockIcons();
     void setupKnobRightClick(juce::Component& component, const juce::String& paramID);
     void updateCompressionVisibility();
+    void updateLFOVisibility();
+    void updateModulationHighlight();
     void morphDistortionParameters(float x, float y);  // XY Morph Pad callback
+
+    // LFO modulation visual feedback state
+    int currentModulatedDestination = -1;
+    float modulationPulsePhase = 0.0f;
 
     // Preset management methods
     void savePreset(const juce::String& presetName);

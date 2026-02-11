@@ -314,7 +314,7 @@ When adding new parameters, use these existing patterns:
 - Gains: `"inputGain"`, `"outputGain"`
 - Distortion: `"distortionAmount"`, `"clipType"`, `"distMix"`, `"waveshaperClean"`, `"waveshaperMix"`
 - Filters: `"highPassFreq"`, `"tone"` (2000-20000Hz post-distortion lowpass), `"subGuardFreq"` (0-200Hz crossover)
-- LFO: `"lfoRate"`, `"lfoDepth"`, `"lfoWaveform"`
+- LFO: `"lfoRate"`, `"lfoDepth"`, `"lfoWaveform"`, `"lfoEnabled"`, `"lfoDestination"`
 - Compression: `"compPeakReduction"`, `"compMakeupGain"`, `"compRatio"`, `"compEnabled"`
 
 ### Critical Processing Loop Patterns
@@ -362,7 +362,24 @@ for (size_t channel = 0; channel < numChannels; ++channel)
 
 ## Recent Architectural Changes
 
-**Current Session Changes (Soft Drive - Reduced Internal Drive Scaling)**:
+**Current Session Changes (LFO Destination Routing)**:
+- **LFO Destination Parameter**: Added `"lfoDestination"` AudioParameterChoice with 5 destinations
+  - 0: Distortion Amount (default, backward compatible)
+  - 1: Tone Filter (logarithmic ±2 octave sweep, 2000-20000 Hz)
+  - 2: Hi-Pass Filter (logarithmic ±1.5 octave sweep, 20-500 Hz)
+  - 3: Dist Mix (linear ±50% swing)
+  - 4: Output Gain (linear ±25% swing for tremolo)
+- **SmoothedValue for Filter Modulation**: Added `smoothedModulatedToneFreq` and `smoothedModulatedHighPassFreq` (10ms smoothing) to prevent zipper noise during filter sweeps
+- **Bipolar Modulation**: LFO swings ±range around current parameter value for natural, musical modulation
+- **Visual Feedback**: Modulated knob shows pulsing cyan glow ring when LFO is active (30Hz timer with sine wave intensity)
+- **GUI**: Added "Target" dropdown in LFO section (5 options: Distortion, Tone, Hi-Pass, Dist Mix, Out Gain) with lock icon support
+- **CustomKnob Modulation Indicator**: Added `setModulationIndicator(bool, float)` method with pulsing glow rendering
+- **Randomization Support**: Added `lfoDestination` to randomizeAllParameters() using existing `randomizeChoiceParam()` helper
+- **Unit Tests**: Added `LFODestinationTests` class with 142 new assertions covering all 5 destinations, extreme depth, fast rates, and NaN validation
+- **Version**: Updated to v1.8 LFO Routing
+- **Tests**: All tests pass (100% success rate)
+
+**Previous Session Changes (Soft Drive - Reduced Internal Drive Scaling)**:
 - **Reduced Main Drive Range**: Changed distortion drive formula from 1.0-8.0 to 1.0-4.0 range for more gradual response at low percentages
   - Line 899: `* 7.0f` → `* 3.0f` in main processBlock calculation
   - Line 443: `* 7.0f` → `* 3.0f` in prepareToPlay initialization

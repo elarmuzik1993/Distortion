@@ -189,6 +189,11 @@ public:
     // Atomic gain reduction for UI meter (in dB) - public for UI access
     std::atomic<float> currentGainReductionDB{ 0.0f };
 
+    // Real-time safe debug flags (atomic, no logging in audio thread) - public for test access
+    std::atomic<bool> debugHadNaN{false};
+    std::atomic<bool> debugHadBufferOverflow{false};
+    std::atomic<bool> debugHadDistortionCorruption{false};
+
     // Sub Guard filter order enum (public for method signatures)
     enum class SubGuardFilterOrder { LR12, LR18, LR24 };
 
@@ -268,6 +273,8 @@ private:
     std::atomic<float>* lfoRateParam = nullptr;
     std::atomic<float>* lfoDepthParam = nullptr;
     std::atomic<float>* lfoWaveformParam = nullptr;  // LFO waveform type
+    std::atomic<float>* lfoEnabledParam = nullptr;   // LFO on/off toggle
+    std::atomic<float>* lfoDestinationParam = nullptr;  // LFO destination (0-4: Dist, Tone, Hi-Pass, Mix, Gain)
     std::atomic<float>* waveshaperMixParam = nullptr;  // Waveshaper wet/dry mix (0-100)
 
     // Compressor parameters
@@ -308,11 +315,6 @@ private:
     // Debug counters (per-instance, not static to avoid multi-instance bugs)
     int debugBlockCounter = 0;
     int deltaLogCounter = 0;
-
-    // Real-time safe debug flags (atomic, no logging in audio thread)
-    std::atomic<bool> debugHadNaN{false};
-    std::atomic<bool> debugHadBufferOverflow{false};
-    std::atomic<bool> debugHadDistortionCorruption{false};
 
     // Compression optical cell coefficients (sample-rate-dependent)
     float compAttackCoeff = 0.9995f;

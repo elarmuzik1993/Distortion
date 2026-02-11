@@ -1,106 +1,100 @@
-# Distortion - Audio Plugin
+# Distortion v1.8 - Audio Plugin
 
-A professional JUCE audio plugin featuring multi-stage distortion, LA2A-style compression, and advanced signal processing.
+A professional JUCE audio plugin featuring multi-stage distortion, LA2A-style compression, LFO modulation routing, and advanced signal processing.
 
 ## Project Overview
 
 **Distortion** - A JUCE audio plugin by Elar Music Audio
-- **Type**: Audio Plugin (VST3 + Standalone)
-- **Framework**: JUCE
-- **Platform**: Windows (Visual Studio 2022)
-- **Architecture**: Multi-stage audio processor with parallel compression
+- **Version**: 1.8 LFO Routing
+- **Type**: Audio Plugin (VST3, VST2, Standalone)
+- **Framework**: JUCE 7.0.12
+- **Platforms**: Windows, Linux, macOS
+- **Build Systems**: CMake (cross-platform), Visual Studio 2022
 
-## Recent Features
-- Gain reduction meter with visual feedback
-- Parallel compression (LA2A-style compressor)
-- Thread-safe scope buffer access
-- Hi-pass filter
-- LFO with rate/depth controls
-- Multiple clip types
-- Dual-stage DC blocking
+## Features
+
+### Distortion Engine
+- **7 Professional Clip Types**: Brutal Fuzz, Tube Overdrive, Bit Crusher, Tape Saturation, Transformer Saturation, Diode Clipper, Decimator
+- **4x Oversampling**: Polyphase IIR anti-aliasing
+- **Sub Guard**: Variable-slope crossover (50-200Hz) protects sub-bass from distortion
+- **True Bypass**: Zero processing when distortion < 0.5%
+- **Dist Mix**: Parallel distortion blending (0-100%)
+
+### LFO Modulation System (v1.8)
+- **5 Waveforms**: Sine, Triangle, Square, Saw, Random S&H
+- **5 Modulation Destinations**: Distortion Amount, Tone Filter, Hi-Pass, Dist Mix, Output Gain
+- **Rate**: 0.1-50Hz
+- **Visual Feedback**: Pulsing cyan glow on modulated knobs
+
+### LA2A-Style Compression
+- Optical cell envelope simulation
+- Program-dependent behavior with RMS tracking
+- 3:1 or 12:1 ratio modes
+- 15% tube harmonics for analog warmth
+
+### Signal Processing
+- Pre-distortion transient tamer (hardcoded compression)
+- Harmonic density scaling (prevents 2-5kHz harshness)
+- Auto-gain compensation (RMS-based loudness maintenance)
+- ISP protection (soft clipper at -0.3dBFS)
+- Output limiter (-0.5dBFS safety)
+- DC blocking with manual one-pole filter
+
+## Build Instructions
+
+### CMake (Recommended)
+```bash
+mkdir -p build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+cmake --build . -j$(nproc)
+```
+
+### Run Tests
+```bash
+./DistortionTests_artefacts/Debug/DistortionTests
+```
+
+### Visual Studio 2022 (Windows)
+```bash
+cd Builds/VisualStudio2022
+MSBuild Distortion.sln -p:Configuration=Release -p:Platform=x64
+```
 
 ## Project Structure
 
 ```
 Distortion/
 ├── Source/
-│   ├── PluginProcessor.cpp/h    # Audio processing logic
+│   ├── PluginProcessor.cpp/h    # Audio processing (2200+ lines)
 │   ├── PluginEditor.cpp/h       # GUI implementation
-│   └── CustomKnob.cpp/h         # Custom UI components
-├── Builds/                       # Build outputs
-├── JuceLibraryCode/             # JUCE generated code
-├── Distortion.jucer             # JUCE project file
-└── Distortion.filtergraph       # Audio graph configuration
+│   ├── CustomKnob.cpp/h         # Custom rotary controls
+│   └── Tests/                   # Unit test suite (2000+ assertions)
+├── Resources/                   # Images and assets
+├── CMakeLists.txt              # Cross-platform build
+├── Distortion.jucer            # Projucer project
+├── CLAUDE.md                   # Developer documentation
+└── .github/workflows/          # CI/CD pipeline
 ```
 
-## Plugin Architecture
+## Plugin Formats
 
-### Core Features
+- **VST3**: Primary format
+- **VST2**: Legacy DAW support
+- **Standalone**: Testing without DAW
 
-**Distortion Engine**
-- Multi-stage distortion with tanh and exponential clipping types
-- 4x oversampling for high-quality processing
-- Band-split processing for frequency-specific distortion
+## Installation
 
-**LA2A-Style Compressor**
-- Optical cell envelope follower simulation
-- Program-dependent compression behavior
-- Adjustable peak reduction and makeup gain
-- Multiple ratio modes
-- Parallel compression with wet/dry mix control
+- **Linux**: `~/.vst3/`
+- **macOS**: `~/Library/Audio/Plug-Ins/VST3/`
+- **Windows**: `%CommonProgramFiles%\VST3\`
 
-**Signal Processing**
-- Band-split processing: Separate low and high frequency paths
-- Adjustable crossover frequency (150-350Hz)
-- Dual-stage DC blocking filters
-- Pre-distortion hi-pass filter
-- LFO modulation system
+## Requirements
 
-### Current Parameters
+- CMake 3.22+
+- C++17 compiler
+- JUCE 7.0.12 (auto-fetched by CMake)
+- ALSA development libraries (Linux)
 
-**Main Controls:**
-- Input Gain
-- Output Gain
-- Distortion Amount
-- Hi-Pass Frequency
-- Clip Type (combo box selection)
-- Band Split Enable/Disable
-- LFO Rate
-- LFO Depth
+## License
 
-**Compressor Section:**
-- Peak Reduction
-- Makeup Gain
-- Compression Ratio (combo box selection)
-- Enable/Disable
-- Wet/Dry Mix (parallel compression)
-- Crossover Frequency
-
-### GUI Components
-
-- **Custom Rotary Knobs**: Professional-looking parameter controls
-- **Oscilloscope Display**: Dual-channel waveform visualization with glow effects
-- **Gain Reduction Meter**: Visual compression feedback (0-20dB range)
-- **Custom Checkbox Styling**: Solid black with green tick indicators
-
-### Signal Flow
-
-1. **Input Stage**: Audio input → Pre Hi-Pass Filter
-2. **Oversampling**: 4x oversampling for distortion processing
-3. **Band Splitting**: Split into low and high frequency bands
-4. **Distortion**: Parallel distortion applied to high band
-5. **Compression**: LA2A-style compression with optional band-split
-6. **Mixing**: Blend dry/wet signals for parallel compression
-7. **Output Stage**: DC blocking → Final output
-
-## Tech Stack
-
-- **JUCE Framework**: Core audio plugin framework
-- **C++**: Primary programming language
-- **DSP Modules**: juce_dsp for audio processing
-- **VST3**: Plugin format
-- **Visual Studio 2022**: Build system
-
-## Development
-
-The project uses JUCE's Projucer for project management. Open `Distortion.jucer` in Projucer to modify project settings and regenerate build files.
+Elar Music Audio

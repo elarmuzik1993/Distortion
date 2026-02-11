@@ -38,6 +38,8 @@ PluginProcessor::PluginProcessor()
     lfoRateParam = parameters.getRawParameterValue("lfoRate");
     lfoDepthParam = parameters.getRawParameterValue("lfoDepth");
     lfoWaveformParam = parameters.getRawParameterValue("lfoWaveform");
+    lfoEnabledParam = parameters.getRawParameterValue("lfoEnabled");
+    lfoDestinationParam = parameters.getRawParameterValue("lfoDestination");
     waveshaperMixParam = parameters.getRawParameterValue("waveshaperMix");
     compPeakReductionParam = parameters.getRawParameterValue("compPeakReduction");
     compMakeupGainParam = parameters.getRawParameterValue("compMakeupGain");
@@ -49,7 +51,7 @@ PluginProcessor::PluginProcessor()
     // Verify all parameters were found
     jassert(inputGainParam && outputGainParam && distortionAmountParam
         && highPassFreqParam && subGuardFreqParam && clipTypeParam
-        && lfoRateParam && lfoDepthParam && lfoWaveformParam && waveshaperMixParam
+        && lfoRateParam && lfoDepthParam && lfoWaveformParam && lfoEnabledParam && lfoDestinationParam && waveshaperMixParam
         && compPeakReductionParam && compMakeupGainParam && compRatioParam && compEnabledParam
         && distMixParam && toneParam && waveshaperCleanParam);
 
@@ -856,17 +858,12 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
     // Set targets for smoothed parameters (prevent zipper noise from automation)
     smoothedLfoDepth.setTargetValue(lfoDepth);
-    smoothedDistMix.setTargetValue(distMix);
-
-    // Scale to actual ranges for processing (studio distortion style)
-    const float inputGain = std::pow(inGainParam / 50.0f, 1.5f);  // Unity at 50, range 0-2.83
-    const auto outGainDB = (outGainParam - 50.0f) * 0.18f;  // Maps 0->-9dB, 50->0dB, 100->+9dB
-    const auto outGain = juce::Decibels::decibelsToGain(outGainDB);
 
     // LFO modulation for dynamic distortion effects
     // Calculate LFO value using selected waveform (output -1 to +1)
     float lfoValue = 0.0f;
-    if (lfoRate > 0.0f && currentSampleRate > 0.0f)  // Only compute LFO if rate > 0 AND sample rate is valid
+    const bool lfoEnabled = lfoEnabledParam->load() > 0.5f;
+    if (lfoEnabled && lfoRate > 0.0f && currentSampleRate > 0.0f)  // Only compute LFO if enabled AND rate > 0 AND sample rate is valid
     {
         // Generate waveform based on selected type
         lfoValue = generateLFOWaveform(lfoPhase, lfoWaveform);
@@ -888,21 +885,79 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             lfoPhase = 0.0f;
     }
 
-    // Apply LFO modulation to distortion amount
+    // LFO Routing: Apply modulation to selected destination
+    const int lfoDestination = static_cast<int>(lfoDestinationParam->load());
     const float lfoModulation = (lfoValue * lfoDepth / 100.0f);  // -1 to +1 scaled by depth
 
-    // SAFETY: Validate modulation calculation
+    // Load tone parameter (not loaded earlier in processBlock)
+    const float toneParamValue = toneParam ? toneParam->load() : 20000.0f;
+
+    // Initialize modulated parameter copies
     float modulatedDistortionParam = distortionParam;
+    float modulatedToneFreq = toneParamValue;
+    float modulatedHighPassFreq = highPassFreq;
+    float modulatedDistMix = distMix;
+    float modulatedOutputGain = outGainParam;
+
+    // Apply modulation based on destination (bipolar ±range)
     if (!std::isnan(lfoModulation) && !std::isinf(lfoModulation))
-        modulatedDistortionParam = juce::jlimit(0.0f, 100.0f, distortionParam + lfoModulation * 50.0f);
-
-    float distortionDrive = 1.0f + (modulatedDistortionParam / 100.0f) * 3.0f;  // Reduced range: 1.0 to 4.0
-
-    // SAFETY: Final validation of distortion drive (critical parameter)
-    if (std::isnan(distortionDrive) || std::isinf(distortionDrive) || distortionDrive < 1.0f)
     {
-        distortionDrive = 1.0f;  // Safe fallback
+        switch (lfoDestination)
+        {
+        case 0:  // Distortion Amount (0-100%)
+            modulatedDistortionParam = juce::jlimit(0.0f, 100.0f,
+                distortionParam + lfoModulation * 50.0f);  // ±50% swing
+            break;
+
+        case 1:  // Tone Filter (2000-20000 Hz) - Logarithmic for musical sweep
+            {
+                const float centerFreqLog = std::log2(juce::jmax(2000.0f, toneParamValue));
+                const float modulatedFreqLog = juce::jlimit(10.96f, 14.29f,
+                    centerFreqLog + (lfoModulation * 2.0f));  // ±2 octaves, pre-clamped
+                modulatedToneFreq = std::pow(2.0f, modulatedFreqLog);
+            }
+            break;
+
+        case 2:  // Hi-Pass Filter (20-500 Hz) - Logarithmic
+            {
+                const float centerFreqLog = std::log2(juce::jmax(20.0f, highPassFreq));
+                const float modulatedFreqLog = juce::jlimit(4.32f, 8.97f,
+                    centerFreqLog + (lfoModulation * 1.5f));  // ±1.5 octaves, pre-clamped
+                modulatedHighPassFreq = std::pow(2.0f, modulatedFreqLog);
+            }
+            break;
+
+        case 3:  // Dist Mix (0-100%)
+            modulatedDistMix = juce::jlimit(0.0f, 100.0f,
+                distMix + lfoModulation * 50.0f);  // ±50% swing
+            break;
+
+        case 4:  // Output Gain (0-100, maps to ±9dB)
+            modulatedOutputGain = juce::jlimit(0.0f, 100.0f,
+                outGainParam + lfoModulation * 25.0f);  // ±25% swing (±4.5dB)
+            break;
+
+        default:  // Fallback to distortion
+            modulatedDistortionParam = juce::jlimit(0.0f, 100.0f,
+                distortionParam + lfoModulation * 50.0f);
+            break;
+        }
     }
+
+    // Update dist mix smoothed value to use modulated parameter
+    smoothedDistMix.setTargetValue(modulatedDistMix);
+
+    // Calculate distortion drive from modulated parameter
+    float distortionDrive = 1.0f + (modulatedDistortionParam / 100.0f) * 3.0f;
+
+    // Validate distortion drive
+    if (std::isnan(distortionDrive) || std::isinf(distortionDrive) || distortionDrive < 1.0f)
+        distortionDrive = 1.0f;
+
+    // Convert modulated gain parameters to processing values
+    const float inputGain = std::pow(inGainParam / 50.0f, 1.5f);
+    const auto modulatedOutGainDB = (modulatedOutputGain - 50.0f) * 0.18f;
+    const auto outGain = juce::Decibels::decibelsToGain(modulatedOutGainDB);
 
     // Mix amount for wet/dry blend
     const float mixAmount = distMix / 100.0f;  // 0.0 to 1.0
@@ -1017,15 +1072,16 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
     // ========== PRE-HIGHPASS FILTER (BEFORE upsampling for efficiency) ==========
     // Update filter coefficients if frequency changed (at BASE sample rate)
+    // Use modulated frequency for LFO-controlled filter sweeps
     const double baseSampleRate = getSampleRate();
-    if (std::abs(highPassFreq - lastHighPassFreq) > 0.01f)
+    if (std::abs(modulatedHighPassFreq - lastHighPassFreq) > 0.5f)  // Only update if changed
     {
         if (baseSampleRate >= 1000.0 && baseSampleRate <= 500000.0 &&
-            highPassFreq >= 1.0f && highPassFreq <= (baseSampleRate / 2.0f) &&
+            modulatedHighPassFreq >= 1.0f && modulatedHighPassFreq <= (baseSampleRate / 2.0f) &&
             preHighPassFilter.state)
         {
-            *preHighPassFilter.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(baseSampleRate, highPassFreq);
-            lastHighPassFreq = highPassFreq;
+            *preHighPassFilter.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(baseSampleRate, modulatedHighPassFreq);
+            lastHighPassFreq = modulatedHighPassFreq;
         }
     }
 
@@ -1389,7 +1445,8 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // ========== TONE FILTER & WAVESHAPER (oversampled domain) ==========
     // Order controlled by Clean Mode toggle to optimize aliasing vs character
     const bool cleanMode = waveshaperCleanParam ? (waveshaperCleanParam->load() > 0.5f) : false;
-    const float toneFreq = toneParam ? toneParam->load() : 20000.0f;
+    // Use modulated frequency for LFO-controlled tone sweeps
+    const float toneFreq = modulatedToneFreq;
     const float waveshaperMix = *waveshaperMixParam;
 
     // Update tone filter coefficients if frequency changed
@@ -2032,6 +2089,23 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         "LFO Waveform",
         juce::StringArray{ "Sine", "Triangle", "Square", "Saw", "Random" },
         0));  // Default 0 = Sine wave
+
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{ "lfoEnabled", 1 },
+        "LFO Enable",
+        false));  // Default OFF
+
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID{ "lfoDestination", 1 },
+        "LFO Destination",
+        juce::StringArray{
+            "Distortion",   // 0 (default for backward compatibility)
+            "Tone Filter",  // 1
+            "Hi-Pass",      // 2
+            "Dist Mix",     // 3
+            "Output Gain"   // 4
+        },
+        0));  // Default to Distortion
 
     // Waveshaper parameter (mix knob 0-100%)
     params.push_back(std::make_unique<juce::AudioParameterFloat>(

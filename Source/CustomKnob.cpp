@@ -46,6 +46,18 @@ void CustomKnob::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xff2a2a2a));
     g.fillEllipse(knobBounds);
 
+    // Draw modulation indicator ring (pulsing glow when LFO is targeting this knob)
+    if (modulationActive && modulationIntensity > 0.0f)
+    {
+        const float glowAlpha = 0.3f + 0.4f * modulationIntensity;
+        g.setColour(juce::Colours::cyan.withAlpha(glowAlpha));
+        g.drawEllipse(knobBounds.reduced(2.0f), 2.0f);
+
+        // Inner glow
+        g.setColour(juce::Colours::cyan.withAlpha(glowAlpha * 0.5f));
+        g.drawEllipse(knobBounds.reduced(4.0f), 1.5f);
+    }
+
     // Arc parameters
     auto startAngle = 7.0f * juce::MathConstants<float>::pi / 6.0f;
     auto endAngle = startAngle + (5.0f * juce::MathConstants<float>::pi / 3.0f);
