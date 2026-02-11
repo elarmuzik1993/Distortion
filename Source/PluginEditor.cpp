@@ -488,8 +488,8 @@ void PluginEditor::setupSlider(CustomKnob& slider,
 
     addAndMakeVisible(slider);
 
-    
-    if (auto* param = audioProcessor.parameters.getParameter(paramID))
+
+    if (audioProcessor.parameters.getParameter(paramID) != nullptr)
     {
         attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
             audioProcessor.parameters, paramID, slider);
@@ -531,7 +531,6 @@ void PluginEditor::resized()
     const int titleHeight = 50;
     const int bottomControlsHeight = 130;
     const int margin = 20;
-    const int compressionBarHeight = 90;
 
     // ========== TITLE LABEL ==========
     titleLabel.setBounds(0, 0, getWidth(), titleHeight);
