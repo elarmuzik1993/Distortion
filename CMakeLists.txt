@@ -71,6 +71,7 @@ juce_generate_juce_header(Distortion)
 # Add binary data (background image)
 juce_add_binary_data(DistortionData SOURCES
     Resources/background.png
+    "Resources/Logo Title.png"
 )
 
 target_compile_definitions(Distortion
@@ -109,7 +110,7 @@ target_link_libraries(Distortion
 # ============================================================================
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_FOUND)
-    add_custom_command(TARGET Distortion POST_BUILD
+    add_custom_command(TARGET Distortion_VST3 POST_BUILD
         COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/scripts/fix_moduleinfo_json.py"
                 "${CMAKE_BINARY_DIR}/Distortion_artefacts/$<CONFIG>/VST3" --all
         COMMENT "Fixing moduleinfo.json trailing commas..."

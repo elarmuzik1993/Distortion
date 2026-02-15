@@ -25,12 +25,8 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 
     addAndMakeVisible(gainReductionMeter);
 
-    // Setup title label
-    addAndMakeVisible(titleLabel);
-    titleLabel.setText("MONOLIT BEATZ", juce::dontSendNotification);
-    titleLabel.setFont(juce::Font(24.0f, juce::Font::bold));
-    titleLabel.setColour(juce::Label::textColourId, juce::Colour(0xFF, 0x00, 0x44));
-    titleLabel.setJustificationType(juce::Justification::centred);
+    // Setup logo title
+    addAndMakeVisible(logoTitle);
 
     // Setup version label (bottom left corner)
     addAndMakeVisible(versionLabel);
@@ -532,8 +528,8 @@ void PluginEditor::resized()
     const int bottomControlsHeight = 130;
     const int margin = 20;
 
-    // ========== TITLE LABEL ==========
-    titleLabel.setBounds(0, 0, getWidth(), titleHeight);
+    // ========== LOGO TITLE ==========
+    logoTitle.setBounds(0, 0, getWidth(), titleHeight);
 
     // ========== VERSION LABEL (bottom left corner) ==========
     versionLabel.setBounds(margin, getHeight() - 20, 100, 16);

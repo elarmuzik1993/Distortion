@@ -268,6 +268,88 @@ private:
     float currentGainReduction = 0.0f;
 };
 
+// Logo Title Component - Displays branded logo image
+class LogoTitle : public juce::Component
+{
+public:
+    LogoTitle()
+    {
+        // Load logo image from binary data
+        logoImage = juce::ImageCache::getFromMemory(
+            BinaryData::Logo_Title_png,
+            BinaryData::Logo_Title_pngSize
+        );
+
+        // Verify image loaded successfully
+        if (!logoImage.isValid())
+        {
+            DBG("WARNING: Logo Title image failed to load!");
+        }
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        if (!logoImage.isValid())
+        {
+            // Fallback: draw error text for debugging
+            g.setColour(juce::Colours::red.withAlpha(0.5f));
+            g.setFont(12.0f);
+            g.drawText("Logo Missing", getLocalBounds(), juce::Justification::centred);
+            return;
+        }
+
+        auto bounds = getLocalBounds().toFloat();
+
+        // Scale down by 3x - use only 1/3 of the available space
+        const float scaleFactor = 3.0f;
+        auto scaledBounds = bounds.withSizeKeepingCentre(
+            bounds.getWidth() / scaleFactor,
+            bounds.getHeight() / scaleFactor
+        );
+
+        // Calculate scaling to fit within scaled bounds while maintaining aspect ratio
+        const float imageAspect = (float)logoImage.getWidth() / (float)logoImage.getHeight();
+        const float boundsAspect = scaledBounds.getWidth() / scaledBounds.getHeight();
+
+        juce::Rectangle<float> targetBounds;
+
+        if (imageAspect > boundsAspect)
+        {
+            // Image is wider - fit to width
+            float scaledHeight = scaledBounds.getWidth() / imageAspect;
+            float yOffset = (scaledBounds.getHeight() - scaledHeight) * 0.5f;
+            targetBounds = juce::Rectangle<float>(
+                scaledBounds.getX(),
+                scaledBounds.getY() + yOffset,
+                scaledBounds.getWidth(),
+                scaledHeight
+            );
+        }
+        else
+        {
+            // Image is taller - fit to height
+            float scaledWidth = scaledBounds.getHeight() * imageAspect;
+            float xOffset = (scaledBounds.getWidth() - scaledWidth) * 0.5f;
+            targetBounds = juce::Rectangle<float>(
+                scaledBounds.getX() + xOffset,
+                scaledBounds.getY(),
+                scaledWidth,
+                scaledBounds.getHeight()
+            );
+        }
+
+        // Draw logo with high quality interpolation
+        g.setOpacity(1.0f);
+        g.drawImage(logoImage, targetBounds,
+                    juce::RectanglePlacement::centred | juce::RectanglePlacement::onlyReduceInSize);
+    }
+
+private:
+    juce::Image logoImage;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LogoTitle)
+};
+
 // Lock Icon Component
 class LockIcon : public juce::Component
 {
@@ -617,7 +699,7 @@ private:
     GainReductionMeter gainReductionMeter;
     CheckboxLookAndFeel checkboxLookAndFeel;
     ComboBoxLookAndFeel comboBoxLookAndFeel;  // Neon red styling for dropdowns
-    juce::Label titleLabel;  // Title text "MONOLIT BEATZ"
+    LogoTitle logoTitle;  // Logo image title
     juce::Label versionLabel;  // Build version display at bottom left
 
     // UI Components
