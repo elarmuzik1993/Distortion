@@ -516,9 +516,9 @@ void PluginEditor::paint(juce::Graphics& g)
     // Black background
     g.fillAll(juce::Colours::black);
 
-    // Draw neon red border
-    g.setColour(juce::Colour(0xFF, 0x00, 0x44).withAlpha(0.7f));
-    g.drawRect(getLocalBounds(), 2);
+    // Draw solid neon red frame (consistent width on all 4 sides)
+    g.setColour(juce::Colour(0xFF, 0x00, 0x44));  // Fully opaque neon red
+    g.drawRect(getLocalBounds(), 2);  // 2px solid frame
 }
 
 void PluginEditor::resized()
@@ -527,6 +527,7 @@ void PluginEditor::resized()
     const int titleHeight = 50;
     const int bottomControlsHeight = 130;
     const int margin = 20;
+    const int borderWidth = 2;  // Red frame border width
 
     // ========== LOGO TITLE ==========
     logoTitle.setBounds(0, 0, getWidth(), titleHeight);
@@ -534,8 +535,10 @@ void PluginEditor::resized()
     // ========== VERSION LABEL (bottom left corner) ==========
     versionLabel.setBounds(margin, getHeight() - 20, 100, 16);
 
-    // ========== OSCILLOSCOPE (below title, above controls) ==========
-    oscilloscope.setBounds(0, titleHeight, getWidth(), getHeight() - titleHeight - bottomControlsHeight);
+    // ========== OSCILLOSCOPE (below title, above controls, inset by border) ==========
+    oscilloscope.setBounds(borderWidth, titleHeight,
+                          getWidth() - (borderWidth * 2),
+                          getHeight() - titleHeight - bottomControlsHeight);
 
     // XY Morph Pad - same bounds as oscilloscope (invisible overlay)
     xyMorphPad.setBounds(oscilloscope.getBounds());
