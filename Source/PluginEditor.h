@@ -404,12 +404,12 @@ public:
 
         // Draw white border for visibility
         g.setColour(juce::Colours::white);
-        g.drawRoundedRectangle(bounds, 2.0f, 1.5f);
+        g.drawRoundedRectangle(bounds, 2.0f, 0.7f);
 
-        // Draw bright green tick if checked
+        // Draw neon red tick if checked
         if (ticked)
         {
-            g.setColour(juce::Colours::lime);
+            g.setColour(juce::Colour(0xFF, 0x00, 0x44));
             auto tick = bounds.reduced(w * 0.2f);
             g.fillRoundedRectangle(tick, 1.0f);
         }
