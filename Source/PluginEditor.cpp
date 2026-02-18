@@ -518,7 +518,7 @@ void PluginEditor::paint(juce::Graphics& g)
 
     // Draw solid neon red frame (consistent width on all 4 sides)
     g.setColour(juce::Colour(0xFF, 0x00, 0x44));  // Fully opaque neon red
-    g.drawRect(getLocalBounds(), 2);  // 2px solid frame
+    g.drawRect(getLocalBounds().toFloat(), 1.5f);  // 1.5px solid frame
 }
 
 void PluginEditor::resized()
@@ -527,7 +527,7 @@ void PluginEditor::resized()
     const int titleHeight = 50;
     const int bottomControlsHeight = 130;
     const int margin = 20;
-    const int borderWidth = 2;  // Red frame border width
+    const float borderWidth = 1.5f;  // Red frame border width
 
     // ========== LOGO TITLE ==========
     logoTitle.setBounds(0, 0, getWidth(), titleHeight);
@@ -703,25 +703,22 @@ void PluginEditor::resized()
     // ===========================================================
 
     // ========== SINGLE ROW LAYOUT AT BOTTOM (without LFO controls - now in top section) ==========
-    const int knobSize = 75;  // Large knob size
-    const int smallKnobSize = 45;  // Small knob size
+    const int knobSize = 75;  // Consistent knob size for all main controls
+    const int smallKnobSize = 45;  // Small knob size (for future use if needed)
     const int controlSpacing = 8;  // Spacing between controls
     const int bottomMargin = 20;
     const int rowY = actualWindowHeight - bottomMargin - knobSize - labelHeight - 10;  // Bottom row position
 
-    // Calculate total width to center controls (removed LFO controls: 45 + 8 + 75 + 8 + 75 = 211)
-    // Old: 60 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 75 = 770
-    // New: 60 + 8 + 88 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75 = 633
-    const int totalControlsWidth = 60 + 8 + 88 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 45 + 8 + 75;
+    // Calculate total width to center controls
+    // Layout: SubGuard(75) + AntiAlias(88) + InputGain(75) + ClipType(45) + HiPass(75) + DistMix(75) + Distortion(75) + Tone(75) + WaveMix(75) + Output(75) + 9 spacings
+    const int totalControlsWidth = 75 + 8 + 88 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 75 + 8 + 75 + 8 + 75 + 8 + 75 + 8 + 75;
     int currentX = (getWidth() - totalControlsWidth) / 2;  // Center horizontally
 
-    // Sub Guard Knob (60x60) - replaces old Clean Sub toggle
-    const int subGuardSize = 60;
-    const int subGuardYOffset = (knobSize - subGuardSize) / 2;  // Center vertically with big knobs
-    subGuardSlider.setBounds(currentX, rowY + subGuardYOffset, subGuardSize, subGuardSize);
-    subGuardLabel.setBounds(currentX, rowY + subGuardYOffset + subGuardSize + 2, subGuardSize + 20, 14);
-    subGuardLock.setBounds(currentX + subGuardSize - 16 - 3, rowY + subGuardYOffset + 3, 16, 16);
-    currentX += subGuardSize + controlSpacing;
+    // Sub Guard Knob (75x75) - consistent size with other main knobs
+    subGuardSlider.setBounds(currentX, rowY, knobSize, knobSize);
+    subGuardLabel.setBounds(currentX, rowY + knobSize + 2, knobSize + 20, 14);
+    subGuardLock.setBounds(currentX + knobSize - 16 - 3, rowY + 3, 16, 16);
+    currentX += knobSize + controlSpacing;
 
     // Anti-Alias Toggle (24x24) - Positioned to the right of Sub Guard
     const int cleanSubToggleSize = 24;
@@ -755,12 +752,11 @@ void PluginEditor::resized()
     highPassFreqLock.setBounds(currentX + knobSize - 16 - 5, rowY + 5, 16, 16);
     currentX += knobSize + controlSpacing;
 
-    // Dist Mix (45x45)
-    const int smallKnobYOffset = (knobSize - smallKnobSize) / 2;
-    distMixSlider.setBounds(currentX, rowY + smallKnobYOffset, smallKnobSize, smallKnobSize);
-    distMixLabel.setBounds(currentX, rowY + smallKnobYOffset + smallKnobSize + 2, smallKnobSize, 14);
-    distMixLock.setBounds(currentX + smallKnobSize - 12 - 3, rowY + smallKnobYOffset + 3, 12, 12);
-    currentX += smallKnobSize + controlSpacing;
+    // Dist Mix (75x75) - consistent size
+    distMixSlider.setBounds(currentX, rowY, knobSize, knobSize);
+    distMixLabel.setBounds(currentX, rowY + knobSize + 5, knobSize, labelHeight);
+    distMixLock.setBounds(currentX + knobSize - 16 - 5, rowY + 5, 16, 16);
+    currentX += knobSize + controlSpacing;
 
     // Distortion Amount (75x75)
     distortionAmountSlider.setBounds(currentX, rowY, knobSize, knobSize);
@@ -768,15 +764,15 @@ void PluginEditor::resized()
     distortionAmountLock.setBounds(currentX + knobSize - 16 - 5, rowY + 5, 16, 16);
     currentX += knobSize + controlSpacing;
 
-    // Tone (45x45) - post-distortion darkness/brightness
-    toneSlider.setBounds(currentX, rowY + smallKnobYOffset, smallKnobSize, smallKnobSize);
-    toneLabel.setBounds(currentX, rowY + smallKnobYOffset + smallKnobSize + 2, smallKnobSize, 14);
-    currentX += smallKnobSize + controlSpacing;
+    // Tone (75x75) - consistent size
+    toneSlider.setBounds(currentX, rowY, knobSize, knobSize);
+    toneLabel.setBounds(currentX, rowY + knobSize + 5, knobSize, labelHeight);
+    currentX += knobSize + controlSpacing;
 
-    // Wave Mix (45x45)
-    waveshaperSlider.setBounds(currentX, rowY + smallKnobYOffset, smallKnobSize, smallKnobSize);
-    waveshaperLabel.setBounds(currentX, rowY + smallKnobYOffset + smallKnobSize + 2, smallKnobSize, 14);
-    currentX += smallKnobSize + controlSpacing;
+    // Wave Mix (75x75) - consistent size
+    waveshaperSlider.setBounds(currentX, rowY, knobSize, knobSize);
+    waveshaperLabel.setBounds(currentX, rowY + knobSize + 5, knobSize, labelHeight);
+    currentX += knobSize + controlSpacing;
 
     // Output Gain (75x75)
     outputGainSlider.setBounds(currentX, rowY, knobSize, knobSize);
