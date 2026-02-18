@@ -703,15 +703,15 @@ void PluginEditor::resized()
     // ===========================================================
 
     // ========== SINGLE ROW LAYOUT AT BOTTOM (without LFO controls - now in top section) ==========
-    const int knobSize = 75;  // Consistent knob size for all main controls
+    const int knobSize = 67;  // Consistent knob size for all main controls (75 * 0.9)
     const int smallKnobSize = 45;  // Small knob size (for future use if needed)
     const int controlSpacing = 8;  // Spacing between controls
     const int bottomMargin = 20;
     const int rowY = actualWindowHeight - bottomMargin - knobSize - labelHeight - 10;  // Bottom row position
 
     // Calculate total width to center controls
-    // Layout: SubGuard(75) + AntiAlias(88) + InputGain(75) + ClipType(45) + HiPass(75) + DistMix(75) + Distortion(75) + Tone(75) + WaveMix(75) + Output(75) + 9 spacings
-    const int totalControlsWidth = 75 + 8 + 88 + 8 + 75 + 8 + 45 + 8 + 75 + 8 + 75 + 8 + 75 + 8 + 75 + 8 + 75 + 8 + 75;
+    // Layout: SubGuard(67) + AntiAlias+ClipType(88) + InputGain(67) + HiPass(67) + DistMix(67) + Distortion(67) + Tone(67) + WaveMix(67) + Output(67) + 8 spacings
+    const int totalControlsWidth = 67 + 8 + 88 + 8 + 67 + 8 + 67 + 8 + 67 + 8 + 67 + 8 + 67 + 8 + 67 + 8 + 67;
     int currentX = (getWidth() - totalControlsWidth) / 2;  // Center horizontally
 
     // Sub Guard Knob (75x75) - consistent size with other main knobs
@@ -720,31 +720,36 @@ void PluginEditor::resized()
     subGuardLock.setBounds(currentX + knobSize - 16 - 3, rowY + 3, 16, 16);
     currentX += knobSize + controlSpacing;
 
-    // Anti-Alias Toggle (24x24) - Positioned to the right of Sub Guard
+    // Clip Type Dropdown + Anti-Alias Toggle (stacked vertically in same 88px column)
     const int cleanSubToggleSize = 24;
-    const int toggleYOffset = (knobSize - cleanSubToggleSize) / 2;  // Center vertically with big knobs
     const int toggleLabelHeight = 16;
-    cleanModeToggle.setBounds(currentX, rowY + toggleYOffset, cleanSubToggleSize, cleanSubToggleSize);
+    const int comboWidth = 45;
+    const int comboHeight = 18;
+    const int stackGap = 5;
+    const int stackTotalHeight = comboHeight + stackGap + cleanSubToggleSize;
+    const int stackTopY = rowY + (knobSize - stackTotalHeight) / 2;
+    const int columnWidth = cleanSubToggleSize + 4 + 60;  // 88px total
+
+    // Clip Type Dropdown - centered above anti-alias toggle
+    const int comboXOffset = (columnWidth - comboWidth) / 2;
+    clipTypeComboBox.setBounds(currentX + comboXOffset, stackTopY, comboWidth, comboHeight);
+    clipTypeLabel.setBounds(currentX + comboXOffset, stackTopY - 14, comboWidth, 14);
+    clipTypeLock.setBounds(currentX + comboXOffset + comboWidth - 12 - 2, stackTopY, 12, 12);
+
+    // Anti-Alias Toggle - below clip type dropdown
+    const int toggleY = stackTopY + comboHeight + stackGap;
+    cleanModeToggle.setBounds(currentX, toggleY, cleanSubToggleSize, cleanSubToggleSize);
     cleanModeLabel.setBounds(currentX + cleanSubToggleSize + 4,
-                            rowY + toggleYOffset + (cleanSubToggleSize - toggleLabelHeight) / 2,
+                            toggleY + (cleanSubToggleSize - toggleLabelHeight) / 2,
                             60, toggleLabelHeight);
-    cleanModeLock.setBounds(currentX + cleanSubToggleSize - 12, rowY + toggleYOffset, 12, 12);
-    currentX += cleanSubToggleSize + 4 + 60 + controlSpacing;
+    cleanModeLock.setBounds(currentX + cleanSubToggleSize - 12, toggleY, 12, 12);
+    currentX += columnWidth + controlSpacing;
 
     // Input Gain (75x75)
     inputGainSlider.setBounds(currentX, rowY, knobSize, knobSize);
     inputGainLabel.setBounds(currentX, rowY + knobSize + 5, knobSize, labelHeight);
     inputGainLock.setBounds(currentX + knobSize - 16 - 5, rowY + 5, 16, 16);
     currentX += knobSize + controlSpacing;
-
-    // Clip Type Dropdown (45x18)
-    const int comboWidth = 45;  // Dropdown width
-    const int comboHeight = 18;
-    const int comboYOffset = (knobSize - comboHeight) / 2;
-    clipTypeComboBox.setBounds(currentX, rowY + comboYOffset, comboWidth, comboHeight);
-    clipTypeLabel.setBounds(currentX, rowY + comboYOffset + comboHeight + 2, comboWidth, 14);
-    clipTypeLock.setBounds(currentX + comboWidth - 12 - 2, rowY + comboYOffset, 12, 12);
-    currentX += comboWidth + controlSpacing;
 
     // Hi-Pass Filter (75x75)
     highPassFreqSlider.setBounds(currentX, rowY, knobSize, knobSize);

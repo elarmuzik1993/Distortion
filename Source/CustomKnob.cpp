@@ -11,33 +11,18 @@
 CustomKnob::CustomKnob()
 {
     setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-    setTextBoxStyle(juce::Slider::TextBoxBelow, false, 70, 25);
+    setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
 
     auto startAngle = 7.0f * juce::MathConstants<float>::pi / 6.0f;  // 7 o'clock (210°)
     auto endAngle = startAngle + (5.0f * juce::MathConstants<float>::pi / 3.0f);  // +300° rotation
 
     setRotaryParameters(startAngle, endAngle, true);
-
-    // Custom text display - shows clean integer values
-    setTextValueSuffix("");
-    textFromValueFunction = [](double value)
-        {
-            return juce::String(static_cast<int>(value));  // Show as whole number
-        };
-
-    // Style the text box like a digital display
-    setColour(juce::Slider::textBoxTextColourId, juce::Colour(0xff00ff00));  // Bright green text
-    setColour(juce::Slider::textBoxBackgroundColourId, juce::Colour(0xff1a1a1a));  // Dark background
-    setColour(juce::Slider::textBoxOutlineColourId, juce::Colour(0xff333333));  // Dark border
-    setColour(juce::Slider::textBoxHighlightColourId, juce::Colour(0xff004400));  // Dark green highlight
-
-    setTextBoxIsEditable(false);  // Make text box read-only
 }
 
 void CustomKnob::paint(juce::Graphics& g)
 {
     auto bounds = getLocalBounds().toFloat();
-    auto knobArea = bounds.removeFromTop(bounds.getHeight() - 25.0f);
+    auto knobArea = bounds;
     auto centre = knobArea.getCentre();
     auto radius = juce::jmin(knobArea.getWidth(), knobArea.getHeight()) / 2.0f - 5.0f;
     auto knobBounds = juce::Rectangle<float>(radius * 2.0f, radius * 2.0f).withCentre(centre);
