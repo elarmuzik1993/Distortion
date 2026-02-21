@@ -1821,6 +1821,23 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         }
     }
 
+    // Calculate phase correlation for UI meter
+    {
+        float sumLR = 0.0f, sumLL = 0.0f, sumRR = 0.0f;
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+        {
+            float pcL = buffer.getSample(0, i);
+            float pcR = buffer.getNumChannels() > 1 ? buffer.getSample(1, i) : pcL;
+            sumLR += pcL * pcR;
+            sumLL += pcL * pcL;
+            sumRR += pcR * pcR;
+        }
+        float denom = std::sqrt(sumLL * sumRR);
+        phaseCorrelation.store(
+            denom > 1e-8f ? juce::jlimit(-1.0f, 1.0f, sumLR / denom) : 1.0f,
+            std::memory_order_relaxed);
+    }
+
     // Push samples to oscilloscope (after all processing)
     for (int sample = 0; sample < buffer.getNumSamples(); sample += DSPConstants::SCOPE_UPDATE_DECIMATION)
     {

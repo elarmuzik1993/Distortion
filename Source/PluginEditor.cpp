@@ -12,7 +12,7 @@
 //Setup Slider in Constructor Here
 
 PluginEditor::PluginEditor(PluginProcessor& p)
-    : AudioProcessorEditor(&p), audioProcessor(p), oscilloscope(p), gainReductionMeter(p)
+    : AudioProcessorEditor(&p), audioProcessor(p), oscilloscope(p), gainReductionMeter(p), phaseCorrelationMeter(p)
 {
     addAndMakeVisible(oscilloscope);
 
@@ -24,6 +24,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     };
 
     addAndMakeVisible(gainReductionMeter);
+    addAndMakeVisible(phaseCorrelationMeter);
 
     // Setup logo title
     addAndMakeVisible(logoTitle);
@@ -536,12 +537,17 @@ void PluginEditor::resized()
     versionLabel.setBounds(margin, getHeight() - 20, 100, 16);
 
     // ========== OSCILLOSCOPE (below title, above controls, inset by border) ==========
+    const int phaseH = 16;
     oscilloscope.setBounds(borderWidth, titleHeight,
                           getWidth() - (borderWidth * 2),
-                          getHeight() - titleHeight - bottomControlsHeight);
+                          getHeight() - titleHeight - bottomControlsHeight - phaseH);
 
     // XY Morph Pad - same bounds as oscilloscope (invisible overlay)
     xyMorphPad.setBounds(oscilloscope.getBounds());
+
+    // Phase Correlation Meter - directly below oscilloscope, same width
+    phaseCorrelationMeter.setBounds(borderWidth, oscilloscope.getBottom(),
+                                    getWidth() - (borderWidth * 2), phaseH);
 
     const int labelHeight = 20;
 

@@ -188,6 +188,7 @@ public:
 
     // Atomic gain reduction for UI meter (in dB) - public for UI access
     std::atomic<float> currentGainReductionDB{ 0.0f };
+    std::atomic<float> phaseCorrelation{ 1.0f };  // Phase correlation for UI meter (-1.0 to +1.0)
 
     // Real-time safe debug flags (atomic, no logging in audio thread) - public for test access
     std::atomic<bool> debugHadNaN{false};

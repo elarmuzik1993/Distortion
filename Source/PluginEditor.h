@@ -268,6 +268,83 @@ private:
     float currentGainReduction = 0.0f;
 };
 
+// Phase Correlation Meter - horizontal bar with needle (-1 to +1)
+class PhaseCorrelationMeter : public juce::Component, public juce::Timer
+{
+public:
+    PhaseCorrelationMeter(PluginProcessor& p) : processor(p)
+    {
+        startTimerHz(30);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        auto bounds = getLocalBounds().toFloat();
+
+        // Background
+        g.setColour(juce::Colour(0xFF080808));
+        g.fillRect(bounds);
+
+        // Border
+        g.setColour(juce::Colours::grey.withAlpha(0.3f));
+        g.drawRect(bounds, 1.0f);
+
+        // Labels
+        g.setFont(juce::Font(8.0f));
+        g.setColour(juce::Colour(0xFFFF4466));
+        g.drawText("-1", bounds.withTrimmedLeft(6.0f).withWidth(16.0f), juce::Justification::centredLeft, false);
+        g.setColour(juce::Colour(0xFF44FF88));
+        g.drawText("+1", bounds.withTrimmedRight(6.0f).removeFromRight(16.0f), juce::Justification::centredRight, false);
+
+        // Track
+        float trackHeight = 5.0f;
+        float trackY = bounds.getCentreY() - trackHeight / 2.0f;
+        float trackLeft = bounds.getX() + 26.0f;
+        float trackRight = bounds.getRight() - 26.0f;
+        float trackWidth = trackRight - trackLeft;
+        auto trackBounds = juce::Rectangle<float>(trackLeft, trackY, trackWidth, trackHeight);
+
+        g.setColour(juce::Colour(0xFF111111));
+        g.fillRoundedRectangle(trackBounds, 3.0f);
+
+        // Tick marks at 0/25/50/75/100%
+        g.setColour(juce::Colour(0xFF333333));
+        for (int i = 0; i <= 4; ++i)
+        {
+            float tickX = trackLeft + trackWidth * (float)i / 4.0f;
+            float tickH = (i == 2) ? 5.0f : 3.0f;
+            g.drawLine(tickX, trackY - 1.0f, tickX, trackY + tickH + 1.0f, 1.0f);
+        }
+
+        // Needle position: -1.0 maps to left, +1.0 maps to right
+        float normalizedPos = (smoothedCorrelation + 1.0f) / 2.0f;
+        float needleX = trackLeft + normalizedPos * trackWidth;
+
+        // Glow trail
+        juce::ColourGradient trail(
+            juce::Colour(0xFF44FF88).withAlpha(0.3f), needleX, trackY,
+            juce::Colours::transparentBlack, needleX - 24.0f, trackY,
+            false);
+        g.setGradientFill(trail);
+        g.fillRect(needleX - 24.0f, trackY, 24.0f, trackHeight);
+
+        // Needle
+        g.setColour(juce::Colour(0xFF44FF88));
+        g.fillRoundedRectangle(needleX - 1.5f, trackY - 1.0f, 3.0f, trackHeight + 2.0f, 1.0f);
+    }
+
+    void timerCallback() override
+    {
+        float raw = processor.phaseCorrelation.load(std::memory_order_relaxed);
+        smoothedCorrelation += (raw - smoothedCorrelation) * 0.3f;
+        repaint();
+    }
+
+private:
+    PluginProcessor& processor;
+    float smoothedCorrelation = 1.0f;
+};
+
 // Logo Title Component - Displays branded logo image
 class LogoTitle : public juce::Component
 {
@@ -697,6 +774,7 @@ private:
     Oscilloscope oscilloscope;
     XYMorphPad xyMorphPad;  // Invisible XY pad overlay on oscilloscope
     GainReductionMeter gainReductionMeter;
+    PhaseCorrelationMeter phaseCorrelationMeter;
     CheckboxLookAndFeel checkboxLookAndFeel;
     ComboBoxLookAndFeel comboBoxLookAndFeel;  // Neon red styling for dropdowns
     LogoTitle logoTitle;  // Logo image title
