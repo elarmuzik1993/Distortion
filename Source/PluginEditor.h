@@ -30,6 +30,12 @@ public:
         cachedBuffer.clear();
     }
 
+    void setStereoMode(bool isStereo)
+    {
+        stereoMode = isStereo;
+        repaint();
+    }
+
     void resized() override
     {
         // Stop timer during resize to prevent concurrent buffer access
@@ -87,11 +93,18 @@ public:
         const juce::ScopedLock sl(bufferLock);
 
         // Draw waveforms with neon red glow effect
-        drawChannelWithGlow(g, 0, juce::Colour(0xffFF0044)); // Neon red with glow
-
-        if (cachedBuffer.getNumChannels() > 1)
+        if (stereoMode)
         {
-            drawChannelWithGlow(g, 1, juce::Colour(0xffFF3366)); // Light neon red with glow
+            drawChannelWithGlow(g, 0, juce::Colour(0xffFF0044)); // Neon red with glow
+
+            if (cachedBuffer.getNumChannels() > 1)
+            {
+                drawChannelWithGlow(g, 1, juce::Colour(0xffFF3366)); // Light neon red with glow
+            }
+        }
+        else
+        {
+            drawMonoWithGlow(g, juce::Colour(0xffFF0044)); // Summed mono with channel-0 color
         }
 
         // Draw border
@@ -113,6 +126,7 @@ private:
     PluginProcessor& processor;
     juce::AudioBuffer<float> cachedBuffer;   // Use this for drawing
     juce::CriticalSection bufferLock;
+    bool stereoMode = true;
 
     void drawChannelWithGlow(juce::Graphics& g, int channel, juce::Colour colour)
     {
@@ -185,6 +199,97 @@ private:
 
             // Draw main waveform
             g.setColour(colour.withAlpha(channel == 0 ? 0.9f : 0.6f));
+            g.strokePath(waveformPath, juce::PathStrokeType(2.0f));
+        }
+    }
+
+    void drawMonoWithGlow(juce::Graphics& g, juce::Colour colour)
+    {
+        auto bounds = getLocalBounds().toFloat();
+        const float height = bounds.getHeight();
+        const float width = bounds.getWidth();
+        const int numSamples = cachedBuffer.getNumSamples();
+        const int numChannels = cachedBuffer.getNumChannels();
+
+        if (numSamples < 2 || width < 2 || height < 2 || numChannels < 1) return;
+
+        juce::Path waveformPath;
+        const int numPoints = juce::jmin(DSPConstants::SCOPE_DISPLAY_POINTS, numSamples);
+        if (numPoints < 2) return;
+
+        bool pathStarted = false;
+
+        for (int i = 0; i < numPoints; ++i)
+        {
+            const float bufferPos = (float)i * (float)(numSamples - 1) / (float)(numPoints - 1);
+            const int bufferIndex = juce::jlimit(0, numSamples - 1, (int)bufferPos);
+            const float fraction = bufferPos - bufferIndex;
+
+            float sample;
+            if (numChannels >= 2)
+            {
+                float s0, s1;
+                if (bufferIndex < numSamples - 1 && fraction > 0.0f)
+                {
+                    s0 = cachedBuffer.getSample(0, bufferIndex) + fraction * (cachedBuffer.getSample(0, bufferIndex + 1) - cachedBuffer.getSample(0, bufferIndex));
+                    s1 = cachedBuffer.getSample(1, bufferIndex) + fraction * (cachedBuffer.getSample(1, bufferIndex + 1) - cachedBuffer.getSample(1, bufferIndex));
+                }
+                else
+                {
+                    s0 = cachedBuffer.getSample(0, bufferIndex);
+                    s1 = cachedBuffer.getSample(1, bufferIndex);
+                }
+                sample = (s0 + s1) * 0.5f;
+            }
+            else
+            {
+                if (bufferIndex < numSamples - 1 && fraction > 0.0f)
+                {
+                    const float sample1 = cachedBuffer.getSample(0, bufferIndex);
+                    const float sample2 = cachedBuffer.getSample(0, bufferIndex + 1);
+                    sample = sample1 + fraction * (sample2 - sample1);
+                }
+                else
+                {
+                    sample = cachedBuffer.getSample(0, bufferIndex);
+                }
+            }
+
+            if (!std::isfinite(sample))
+                continue;
+
+            sample = juce::jlimit(-1.0f, 1.0f, sample);
+
+            const float xPos = (float)i / (float)(numPoints - 1);
+            const float x = bounds.getX() + xPos * width;
+            const float y = bounds.getY() + (0.5f - sample * 0.45f) * height;
+
+            if (!std::isfinite(x) || !std::isfinite(y))
+                continue;
+
+            const float clampedX = juce::jlimit(bounds.getX(), bounds.getRight(), x);
+            const float clampedY = juce::jlimit(bounds.getY(), bounds.getBottom(), y);
+
+            if (!pathStarted)
+            {
+                waveformPath.startNewSubPath(clampedX, clampedY);
+                pathStarted = true;
+            }
+            else
+            {
+                waveformPath.lineTo(clampedX, clampedY);
+            }
+        }
+
+        if (pathStarted)
+        {
+            g.setColour(colour.withAlpha(0.15f));
+            g.strokePath(waveformPath, juce::PathStrokeType(6.0f));
+
+            g.setColour(colour.withAlpha(0.3f));
+            g.strokePath(waveformPath, juce::PathStrokeType(4.0f));
+
+            g.setColour(colour.withAlpha(0.9f));
             g.strokePath(waveformPath, juce::PathStrokeType(2.0f));
         }
     }
@@ -541,6 +646,7 @@ public:
 struct SettingsState
 {
     bool oscilloscopeEnabled = true;
+    bool oscilloscopeStereo = true;
     bool tooltipsEnabled = false;
     int windowScalePercent = 70;
     int oversamplingMode = 2; // 0=Off, 1=2x, 2=4x
@@ -549,6 +655,7 @@ struct SettingsState
     {
         juce::XmlElement xml("Settings");
         xml.setAttribute("oscilloscope", oscilloscopeEnabled);
+        xml.setAttribute("oscilloscopeStereo", oscilloscopeStereo);
         xml.setAttribute("tooltips", tooltipsEnabled);
         xml.setAttribute("windowScale", windowScalePercent);
         xml.setAttribute("oversampling", oversamplingMode);
@@ -561,6 +668,7 @@ struct SettingsState
         auto xml = juce::parseXML(file);
         if (xml == nullptr) return;
         oscilloscopeEnabled = xml->getBoolAttribute("oscilloscope", true);
+        oscilloscopeStereo = xml->getBoolAttribute("oscilloscopeStereo", true);
         tooltipsEnabled = xml->getBoolAttribute("tooltips", false);
         windowScalePercent = xml->getIntAttribute("windowScale", 100);
         oversamplingMode = xml->getIntAttribute("oversampling", 2);
@@ -663,6 +771,17 @@ public:
             if (onOscilloscopeToggled)
                 onOscilloscopeToggled(oscilloscopeToggle.getToggleState());
         };
+
+        // Scope Stereo/Mono toggle
+        addAndMakeVisible(scopeStereoToggle);
+        scopeStereoToggle.setButtonText("");
+        scopeStereoToggle.setLookAndFeel(&pillLnf);
+        scopeStereoToggle.setToggleState(state.oscilloscopeStereo, juce::dontSendNotification);
+        scopeStereoToggle.onClick = [this]() {
+            settingsState.oscilloscopeStereo = scopeStereoToggle.getToggleState();
+            if (onScopeChannelModeChanged)
+                onScopeChannelModeChanged(scopeStereoToggle.getToggleState());
+        };
     }
 
     ~SettingsOverlay() override
@@ -670,6 +789,7 @@ public:
         antiAliasToggle.setLookAndFeel(nullptr);
         tooltipsToggle.setLookAndFeel(nullptr);
         oscilloscopeToggle.setLookAndFeel(nullptr);
+        scopeStereoToggle.setLookAndFeel(nullptr);
         oversamplingCombo.setLookAndFeel(nullptr);
         windowScaleCombo.setLookAndFeel(nullptr);
     }
@@ -759,6 +879,12 @@ public:
         // Oscilloscope row label
         auto scRow = inner.removeFromTop(24.0f);
         g.drawText("Oscilloscope", scRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
+
+        inner.removeFromTop(6.0f);
+
+        // Stereo row label
+        auto stRow = inner.removeFromTop(24.0f);
+        g.drawText("Stereo", stRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
     }
 
     void resized() override
@@ -813,6 +939,13 @@ public:
         auto scRow = inner.removeFromTop(24.0f);
         scRow.removeFromLeft(140.0f);
         oscilloscopeToggle.setBounds(scRow.removeFromLeft(50).reduced(0, 2).toNearestInt());
+
+        inner.removeFromTop(6.0f);
+
+        // Stereo row
+        auto stRow = inner.removeFromTop(24.0f);
+        stRow.removeFromLeft(140.0f);
+        scopeStereoToggle.setBounds(stRow.removeFromLeft(50).reduced(0, 2).toNearestInt());
     }
 
     void mouseDown(const juce::MouseEvent& e) override
@@ -834,6 +967,7 @@ public:
 
     std::function<void()> onClose;
     std::function<void(bool)> onOscilloscopeToggled;
+    std::function<void(bool)> onScopeChannelModeChanged;
     std::function<void(int)> onWindowScaleChanged;
 
 private:
@@ -861,13 +995,14 @@ private:
     juce::ComboBox windowScaleCombo;
     juce::ToggleButton tooltipsToggle;
     juce::ToggleButton oscilloscopeToggle;
+    juce::ToggleButton scopeStereoToggle;
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> cleanModeAttachment;
 
     juce::Rectangle<float> getPanelBounds() const
     {
         const float panelW = 320.0f;
-        const float panelH = 340.0f;
+        const float panelH = 370.0f;
         return juce::Rectangle<float>(panelW, panelH)
             .withCentre(getLocalBounds().getCentre().toFloat());
     }

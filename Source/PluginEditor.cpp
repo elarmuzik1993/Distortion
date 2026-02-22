@@ -446,6 +446,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     // Load UI settings
     loadSettings();
     applyOscilloscopeEnabled(settingsState.oscilloscopeEnabled);
+    oscilloscope.setStereoMode(settingsState.oscilloscopeStereo);
     applyWindowScale(settingsState.windowScalePercent);
 
     // Start timer for LFO modulation visual feedback (30Hz)
@@ -1252,6 +1253,9 @@ void PluginEditor::showSettingsOverlay()
     settingsOverlay->onClose = [this]() { hideSettingsOverlay(); };
     settingsOverlay->onOscilloscopeToggled = [this](bool enabled) {
         applyOscilloscopeEnabled(enabled);
+    };
+    settingsOverlay->onScopeChannelModeChanged = [this](bool isStereo) {
+        oscilloscope.setStereoMode(isStereo);
     };
     settingsOverlay->onWindowScaleChanged = [this](int scalePercent) {
         applyWindowScale(scalePercent);
