@@ -542,7 +542,7 @@ struct SettingsState
 {
     bool oscilloscopeEnabled = true;
     bool tooltipsEnabled = false;
-    int windowScalePercent = 100;
+    int windowScalePercent = 70;
     int oversamplingMode = 2; // 0=Off, 1=2x, 2=4x
 
     void saveToFile(const juce::File& file) const
@@ -631,11 +631,18 @@ public:
 
         // Window Scale combo
         addAndMakeVisible(windowScaleCombo);
-        windowScaleCombo.addItem("100%", 1);
-        windowScaleCombo.addItem("125%", 2);
-        windowScaleCombo.addItem("150%", 3);
-        windowScaleCombo.setSelectedId(1, juce::dontSendNotification);
+        windowScaleCombo.addItem("70%", 70);
+        windowScaleCombo.addItem("80%", 80);
+        windowScaleCombo.addItem("90%", 90);
+        windowScaleCombo.addItem("100%", 100);
+        windowScaleCombo.setSelectedId(state.windowScalePercent, juce::dontSendNotification);
         windowScaleCombo.setLookAndFeel(&comboLnf);
+        windowScaleCombo.onChange = [this]() {
+            int percent = windowScaleCombo.getSelectedId();
+            settingsState.windowScalePercent = percent;
+            if (onWindowScaleChanged)
+                onWindowScaleChanged(percent);
+        };
 
         // Tooltips toggle
         addAndMakeVisible(tooltipsToggle);
@@ -827,6 +834,7 @@ public:
 
     std::function<void()> onClose;
     std::function<void(bool)> onOscilloscopeToggled;
+    std::function<void(int)> onWindowScaleChanged;
 
 private:
     SettingsState& settingsState;
@@ -1286,6 +1294,7 @@ private:
     void showSettingsOverlay();
     void hideSettingsOverlay();
     void applyOscilloscopeEnabled(bool enabled);
+    void applyWindowScale(int scalePercent);
     void loadSettings();
     void saveSettings();
     juce::File getSettingsFile();
