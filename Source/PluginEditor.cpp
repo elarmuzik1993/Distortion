@@ -549,8 +549,7 @@ void PluginEditor::resized()
     auto bounds = getLocalBounds().reduced(margin);
     auto titleArea = bounds.removeFromTop(titleHeight);
 
-    // ========== PRESET SELECTOR (TOP-LEFT) ==========
-    // No label - preset selector starts at left edge
+    // ========== PRESET SELECTOR + RANDOMIZE + SETTINGS (TOP-LEFT) ==========
     const int presetSelectorWidth = 150;
     const int presetButtonWidth = 50;
     const int presetSpacing = 5;
@@ -562,145 +561,131 @@ void PluginEditor::resized()
     // Hide the label (set to zero width)
     presetLabel.setBounds(0, 0, 0, 0);
 
-    // Preset selector starts at presetX (no label offset)
+    // Preset selector row
     presetSelector.setBounds(presetX, presetY, presetSelectorWidth, presetHeight);
     savePresetButton.setBounds(presetX + presetSelectorWidth + presetSpacing,
                                presetY, presetButtonWidth, presetHeight);
     deletePresetButton.setBounds(presetX + presetSelectorWidth + presetSpacing + presetButtonWidth + presetSpacing,
                                  presetY, presetButtonWidth, presetHeight);
 
-    // Randomize button top-right (opposite preset selector, same size as preset dropdown)
-    const int randomizeButtonWidth = presetSelectorWidth;   // Match preset dropdown width (150px)
-    const int randomizeButtonHeight = presetHeight;         // Match preset dropdown height (24px)
-    const int randomizeButtonX = getWidth() - randomizeButtonWidth - 20;  // Right-aligned, 20px margin
-    const int randomizeButtonY = presetY;  // Same height as preset row
-    randomizeButton.setBounds(randomizeButtonX, randomizeButtonY,
-                             randomizeButtonWidth, randomizeButtonHeight);
+    // Randomize + Settings buttons - right after Delete button
+    const int randomizeX = presetX + presetSelectorWidth + presetSpacing + presetButtonWidth + presetSpacing + presetButtonWidth + presetSpacing;
+    const int randomizeButtonWidth = 80;
+    randomizeButton.setBounds(randomizeX, presetY, randomizeButtonWidth, presetHeight);
 
-    // Settings (gear) button - left of Randomize button
     const int settingsBtnSize = 24;
-    settingsButton.setBounds(randomizeButtonX - settingsBtnSize - 8,
-                             randomizeButtonY, settingsBtnSize, settingsBtnSize);
+    settingsButton.setBounds(randomizeX + randomizeButtonWidth + presetSpacing,
+                             presetY, settingsBtnSize, settingsBtnSize);
+
+    // ========== LFO & COMPRESSION TABS (TOP-RIGHT) ==========
+    const int tabHeaderHeight = 25;
+    const int tabChevronWidth = 30;
+    const int toggleSize = 24;
+
+    // Compression tab (far right)
+    const int compTabTextWidth = 120;
+    const int compTabTotalWidth = compTabTextWidth + tabChevronWidth;
+    const int compTabX = getWidth() - margin - compTabTotalWidth;
+    compressionTabHeader.setBounds(compTabX, presetY, compTabTotalWidth, tabHeaderHeight);
+    compressionTabHeader.setExpanded(isCompressionExpanded);
+
+    // COMP Enable Toggle - to the left of compression tab
+    compEnableToggle.setBounds(compTabX - toggleSize - 4, presetY, toggleSize, toggleSize);
+    compEnableLock.setBounds(compTabX - toggleSize - 4 + toggleSize - 12, presetY, 12, 12);
+
+    // LFO tab (left of compression toggle)
+    const int lfoTabTextWidth = 50;
+    const int lfoTabTotalWidth = lfoTabTextWidth + tabChevronWidth;
+    const int lfoTabX = compTabX - toggleSize - 4 - 10 - lfoTabTotalWidth;
+    lfoTabHeader.setBounds(lfoTabX, presetY, lfoTabTotalWidth, tabHeaderHeight);
+    lfoTabHeader.setExpanded(isLFOExpanded);
+
+    // LFO Enable Toggle - to the left of LFO tab
+    lfoEnableToggle.setBounds(lfoTabX - toggleSize - 4, presetY, toggleSize, toggleSize);
+    lfoEnableLock.setBounds(lfoTabX - toggleSize - 4 + toggleSize - 12, presetY, 12, 12);
 
     auto contentArea = bounds;
 
-    // ========== SIDE-BY-SIDE LFO & COMPRESSION SECTIONS ==========
-    const int tabHeaderHeight = 25;
-    const int expandedSectionHeight = 90;
-
-    // Calculate actual window height for footer positioning
+    // ========== EXPANDED LFO & COMPRESSION SECTIONS (RIGHT-ALIGNED BELOW TABS) ==========
+    const int sKnob = 45;  // Smaller knobs for sections
+    const int sSpacing = 6;
+    const int expandedSectionHeight = sKnob + 18; // knob + label
     const int actualWindowHeight = getHeight();
 
-    // Calculate section height (max of either section if expanded)
-    const int lfoSectionHeight = isLFOExpanded ? expandedSectionHeight : tabHeaderHeight;
-    const int compressionSectionHeight = isCompressionExpanded ? expandedSectionHeight : tabHeaderHeight;
-    const int topSectionHeight = std::max(lfoSectionHeight, compressionSectionHeight);
+    // Right panel: from LFO toggle to right edge
+    const int rightPanelLeft = lfoTabX - toggleSize - 4;
+    const int rightPanelRight = getWidth() - margin;
+    const int expandedY = titleHeight + 4;  // Right below the title bar
 
-    auto topSectionArea = contentArea.removeFromTop(topSectionHeight);
+    // Calculate section height for oscilloscope positioning
+    const bool anyExpanded = isLFOExpanded || isCompressionExpanded;
+    const int topSectionHeight = anyExpanded ? expandedSectionHeight : 0;
+    contentArea.removeFromTop(topSectionHeight);
 
-    // Split horizontally: LFO on left (40%), Compression on right (60%)
-    const int lfoSectionWidth = static_cast<int>(topSectionArea.getWidth() * 0.4f);
-    auto lfoArea = topSectionArea.removeFromLeft(lfoSectionWidth);
-    auto compressionArea = topSectionArea;  // Remaining space
+    // LFO controls expand directly below LFO tab, Compression directly below its tab
+    // Each section is anchored to its own tab position, never shifts based on the other
 
-    // ========== LFO SECTION (LEFT SIDE) ==========
-    const int lfoTabTextWidth = 50;  // Width for "LFO" text
-    const int tabChevronWidth = 30;  // Space for chevron
-    const int toggleSize = 24;
-    const int lfoTabTotalWidth = lfoTabTextWidth + tabChevronWidth;
-    const int lfoTabX = lfoArea.getX() + (lfoArea.getWidth() - lfoTabTotalWidth) / 2;
-
-    lfoTabHeader.setBounds(lfoTabX, lfoArea.getY(), lfoTabTotalWidth, tabHeaderHeight);
-    lfoTabHeader.setExpanded(isLFOExpanded);
-
-    // LFO Enable Toggle - always visible, to the left of the tab header
-    lfoEnableToggle.setBounds(lfoTabX - toggleSize - 6, lfoArea.getY(), toggleSize, toggleSize);
-    lfoEnableLock.setBounds(lfoTabX - toggleSize - 6 + toggleSize - 12, lfoArea.getY(), 12, 12);
+    // Dividing point between LFO and Compression areas (shifted right to prevent overlap)
+    const int dividerX = (lfoTabX + lfoTabTotalWidth + compTabX - toggleSize - 4) / 2 + 15;
 
     // Only layout LFO controls if expanded
     if (isLFOExpanded)
     {
-        const int lfoKnobSize = 60;
-        const int lfoSpacing = 8;
-        const int lfoKnobY = lfoArea.getY() + tabHeaderHeight + 5;
-        const int waveformDropdownWidth = 50;
-        const int destinationDropdownWidth = 65;
-        const int dropdownHeight = 18;
+        const int dropW = 55;  // Shared width for both dropdowns
+        const int dropH = 16;
+        const int gap = 8;  // Gap between LFO and Compression controls
 
-        // Calculate total width for centering (no toggle - it's next to header now)
-        const int lfoControlsWidth = lfoKnobSize + lfoSpacing + lfoKnobSize +
-                                      lfoSpacing + waveformDropdownWidth + lfoSpacing + destinationDropdownWidth;
-        int lfoStartX = lfoArea.getX() + (lfoArea.getWidth() - lfoControlsWidth) / 2;
+        // Right-align LFO controls so dropdown ends at dividerX - gap
+        const int lfoControlsWidth = sKnob + sSpacing + sKnob + sSpacing + dropW;
+        int lx = dividerX - gap - lfoControlsWidth;
 
-        // LFO Rate Knob
-        lfoRateSlider.setBounds(lfoStartX, lfoKnobY, lfoKnobSize, lfoKnobSize);
-        lfoRateLabel.setBounds(lfoStartX, lfoKnobY + lfoKnobSize, lfoKnobSize, 15);
-        lfoRateLock.setBounds(lfoStartX + lfoKnobSize - 14 - 3, lfoKnobY + 3, 14, 14);
-        lfoStartX += lfoKnobSize + lfoSpacing;
+        lfoRateSlider.setBounds(lx, expandedY, sKnob, sKnob);
+        lfoRateLabel.setBounds(lx, expandedY + sKnob, sKnob, 13);
+        lfoRateLock.setBounds(lx + sKnob - 12 - 2, expandedY + 2, 12, 12);
+        lx += sKnob + sSpacing;
 
-        // LFO Depth Knob
-        lfoDepthSlider.setBounds(lfoStartX, lfoKnobY, lfoKnobSize, lfoKnobSize);
-        lfoDepthLabel.setBounds(lfoStartX, lfoKnobY + lfoKnobSize, lfoKnobSize, 15);
-        lfoDepthLock.setBounds(lfoStartX + lfoKnobSize - 14 - 3, lfoKnobY + 3, 14, 14);
-        lfoStartX += lfoKnobSize + lfoSpacing;
+        lfoDepthSlider.setBounds(lx, expandedY, sKnob, sKnob);
+        lfoDepthLabel.setBounds(lx, expandedY + sKnob, sKnob, 13);
+        lfoDepthLock.setBounds(lx + sKnob - 12 - 2, expandedY + 2, 12, 12);
+        lx += sKnob + sSpacing;
 
-        // LFO Waveform Dropdown
-        lfoWaveformComboBox.setBounds(lfoStartX, lfoKnobY + 15, waveformDropdownWidth, dropdownHeight);
-        lfoWaveformLabel.setBounds(lfoStartX, lfoKnobY + 35, waveformDropdownWidth, 14);
-        lfoStartX += waveformDropdownWidth + lfoSpacing;
+        // Wave dropdown on top
+        lfoWaveformComboBox.setBounds(lx, expandedY + 2, dropW, dropH);
+        lfoWaveformLabel.setBounds(lx, expandedY + 2 + dropH, dropW, 11);
 
-        // LFO Destination Dropdown
-        lfoDestinationComboBox.setBounds(lfoStartX, lfoKnobY + 15, destinationDropdownWidth, dropdownHeight);
-        lfoDestinationLabel.setBounds(lfoStartX, lfoKnobY + 35, destinationDropdownWidth, 14);
-        lfoDestinationLock.setBounds(lfoStartX + destinationDropdownWidth - 12, lfoKnobY + 15, 12, 12);
+        // Target dropdown directly below Wave
+        lfoDestinationComboBox.setBounds(lx, expandedY + 2 + dropH + 12, dropW, dropH);
+        lfoDestinationLabel.setBounds(lx, expandedY + 2 + dropH + 12 + dropH, dropW, 11);
+        lfoDestinationLock.setBounds(lx + dropW - 10, expandedY + 2 + dropH + 12, 10, 10);
     }
-
-    // ========== COMPRESSION SECTION (RIGHT SIDE) ==========
-    const int compTabTextWidth = 120;  // Width for "COMPRESSION" text
-    const int compTabTotalWidth = compTabTextWidth + tabChevronWidth;
-    const int compTabX = compressionArea.getX() + (compressionArea.getWidth() - compTabTotalWidth) / 2;
-
-    compressionTabHeader.setBounds(compTabX, compressionArea.getY(), compTabTotalWidth, tabHeaderHeight);
-    compressionTabHeader.setExpanded(isCompressionExpanded);
-
-    // COMP Enable Toggle - always visible, to the left of the tab header
-    compEnableToggle.setBounds(compTabX - toggleSize - 6, compressionArea.getY(), toggleSize, toggleSize);
-    compEnableLock.setBounds(compTabX - toggleSize - 6 + toggleSize - 12, compressionArea.getY(), 12, 12);
 
     // Only layout compression controls if expanded
     if (isCompressionExpanded)
     {
-        const int compKnobSize = 60;
-        const int compSpacing = 15;
-        const int compKnobY = compressionArea.getY() + tabHeaderHeight + 5;
+        const int dropW = 50;
+        const int meterW = 16;
+        const int meterH = 45;
 
-        // Calculate controls width: 2 knobs + dropdown + meter (no toggle - it's next to header now)
-        const int compControlsWidth = compKnobSize + compSpacing + compKnobSize + compSpacing + 60 + 15 + 20;
-        int compStartX = compressionArea.getX() + (compressionArea.getWidth() - compControlsWidth) / 2;
+        // Left-align compression controls starting at dividerX
+        const int compControlsWidth = sKnob + sSpacing + sKnob + sSpacing + dropW + sSpacing + meterW;
+        int cx = dividerX;
 
-        // Peak Reduction knob
-        compPeakReductionSlider.setBounds(compStartX, compKnobY, compKnobSize, compKnobSize);
-        compPeakReductionLabel.setBounds(compStartX, compKnobY + compKnobSize, compKnobSize, 15);
-        compPeakReductionLock.setBounds(compStartX + compKnobSize - 14 - 3, compKnobY + 3, 14, 14);
-        compStartX += compKnobSize + compSpacing;
+        compPeakReductionSlider.setBounds(cx, expandedY, sKnob, sKnob);
+        compPeakReductionLabel.setBounds(cx, expandedY + sKnob, sKnob, 13);
+        compPeakReductionLock.setBounds(cx + sKnob - 12 - 2, expandedY + 2, 12, 12);
+        cx += sKnob + sSpacing;
 
-        // Makeup Gain knob
-        compMakeupGainSlider.setBounds(compStartX, compKnobY, compKnobSize, compKnobSize);
-        compMakeupGainLabel.setBounds(compStartX, compKnobY + compKnobSize, compKnobSize, 15);
-        compMakeupGainLock.setBounds(compStartX + compKnobSize - 14 - 3, compKnobY + 3, 14, 14);
-        compStartX += compKnobSize + compSpacing;
+        compMakeupGainSlider.setBounds(cx, expandedY, sKnob, sKnob);
+        compMakeupGainLabel.setBounds(cx, expandedY + sKnob, sKnob, 13);
+        compMakeupGainLock.setBounds(cx + sKnob - 12 - 2, expandedY + 2, 12, 12);
+        cx += sKnob + sSpacing;
 
-        // Compress/Limit dropdown
-        const int dropdownWidth = 60;
-        compRatioComboBox.setBounds(compStartX, compKnobY + 15, dropdownWidth, 20);
-        compRatioLabel.setBounds(compStartX, compKnobY + 37, dropdownWidth, 12);
-        compRatioLock.setBounds(compStartX + dropdownWidth - 14 - 2, compKnobY + 15, 14, 14);
-        compStartX += dropdownWidth + 15;
+        compRatioComboBox.setBounds(cx, expandedY + 10, dropW, 16);
+        compRatioLabel.setBounds(cx, expandedY + 28, dropW, 12);
+        compRatioLock.setBounds(cx + dropW - 12, expandedY + 10, 12, 12);
+        cx += dropW + sSpacing;
 
-        // Gain Reduction Meter
-        const int meterWidth = 20;
-        const int meterHeight = 55;
-        gainReductionMeter.setBounds(compStartX, compKnobY + 5, meterWidth, meterHeight);
+        gainReductionMeter.setBounds(cx, expandedY + 2, meterW, meterH);
     }
     // ===========================================================
 
