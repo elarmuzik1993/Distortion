@@ -169,7 +169,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addAndMakeVisible(lfoEnableLock);
 
     // Setup Sub Guard knob with snap behavior
-    setupSlider(subGuardSlider, subGuardLabel, "SUB GUARD", subGuardAttachment, "subGuardFreq");
+    setupSlider(subGuardSlider, subGuardLabel, "Sub Guard", subGuardAttachment, "subGuardFreq");
 
     // Custom text display with mode indicators
     subGuardSlider.textFromValueFunction = [](double v) {
@@ -225,11 +225,80 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     presetSelector.setTextWhenNothingSelected("Select Preset...");
     presetSelector.onChange = [this]()
     {
-        if (presetSelector.getSelectedId() > 0)
+        int selectedId = presetSelector.getSelectedId();
+
+        // Handle Save action item
+        if (selectedId == 9990)
+        {
+            presetSelector.setSelectedId(0, juce::dontSendNotification);
+
+            auto* w = new juce::AlertWindow("Save Preset", "Enter preset name:", juce::AlertWindow::NoIcon);
+            w->addTextEditor("presetName", "", "Preset Name:");
+            w->addButton("OK", 1, juce::KeyPress(juce::KeyPress::returnKey));
+            w->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+
+            w->enterModalState(true, juce::ModalCallbackFunction::create([this, w](int result)
+            {
+                if (result == 1)
+                {
+                    juce::String presetName = w->getTextEditorContents("presetName");
+                    if (presetName.isNotEmpty())
+                    {
+                        savePreset(presetName);
+                        refreshPresetList();
+                    }
+                }
+                delete w;
+            }));
+            return;
+        }
+
+        // Handle Delete action item
+        if (selectedId == 9991)
+        {
+            presetSelector.setSelectedId(0, juce::dontSendNotification);
+
+            // Build a popup of deletable user presets
+            auto presetDir = getPresetDirectory();
+            auto presetFiles = presetDir.findChildFiles(juce::File::findFiles, false, "*.xml");
+
+            if (presetFiles.isEmpty()) return;
+
+            juce::PopupMenu deleteMenu;
+            for (int i = 0; i < presetFiles.size(); ++i)
+                deleteMenu.addItem(i + 1, presetFiles[i].getFileNameWithoutExtension());
+
+            deleteMenu.showMenuAsync(juce::PopupMenu::Options(), [this, presetFiles](int result)
+            {
+                if (result > 0)
+                {
+                    juce::String presetName = presetFiles[result - 1].getFileNameWithoutExtension();
+
+                    auto options = juce::MessageBoxOptions()
+                        .withIconType(juce::MessageBoxIconType::WarningIcon)
+                        .withTitle("Delete Preset")
+                        .withMessage("Are you sure you want to delete '" + presetName + "'?")
+                        .withButton("OK")
+                        .withButton("Cancel");
+
+                    juce::AlertWindow::showAsync(options, [this, presetName](int r)
+                    {
+                        if (r == 1)
+                        {
+                            deletePreset(presetName);
+                            refreshPresetList();
+                        }
+                    });
+                }
+            });
+            return;
+        }
+
+        // Normal preset selection
+        if (selectedId > 0)
         {
             juce::String presetName = presetSelector.getText();
 
-            // Check if it's a factory preset or user preset
             if (presetName == "Default" || presetName == "Warm Tube" ||
                 presetName == "Hard Clip" || presetName == "Soft Saturation" ||
                 presetName == "808 Safe")
@@ -240,73 +309,6 @@ PluginEditor::PluginEditor(PluginProcessor& p)
             {
                 loadPreset(presetName);
             }
-        }
-    };
-
-    addAndMakeVisible(savePresetButton);
-    savePresetButton.setButtonText("Save");
-
-    // Apply neon red styling
-    savePresetButton.setColour(juce::TextButton::buttonColourId, juce::Colours::black);
-    savePresetButton.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF, 0x00, 0x44));  // Neon red text
-    savePresetButton.setColour(juce::TextButton::textColourOnId, juce::Colours::white);  // White when pressed
-    savePresetButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xFF, 0x00, 0x44));  // Neon red when pressed
-    savePresetButton.setColour(juce::ComboBox::outlineColourId, juce::Colour(0xFF, 0x00, 0x44));  // Neon red outline
-
-    savePresetButton.onClick = [this]()
-    {
-        auto* w = new juce::AlertWindow("Save Preset", "Enter preset name:", juce::AlertWindow::NoIcon);
-        w->addTextEditor("presetName", "", "Preset Name:");
-        w->addButton("OK", 1, juce::KeyPress(juce::KeyPress::returnKey));
-        w->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
-
-        w->enterModalState(true, juce::ModalCallbackFunction::create([this, w](int result)
-        {
-            if (result == 1)
-            {
-                juce::String presetName = w->getTextEditorContents("presetName");
-                if (presetName.isNotEmpty())
-                {
-                    savePreset(presetName);
-                    refreshPresetList();
-                }
-            }
-            delete w;
-        }));
-    };
-
-    addAndMakeVisible(deletePresetButton);
-    deletePresetButton.setButtonText("Delete");
-
-    // Apply neon red styling
-    deletePresetButton.setColour(juce::TextButton::buttonColourId, juce::Colours::black);
-    deletePresetButton.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF, 0x00, 0x44));  // Neon red text
-    deletePresetButton.setColour(juce::TextButton::textColourOnId, juce::Colours::white);  // White when pressed
-    deletePresetButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xFF, 0x00, 0x44));  // Neon red when pressed
-    deletePresetButton.setColour(juce::ComboBox::outlineColourId, juce::Colour(0xFF, 0x00, 0x44));  // Neon red outline
-
-    deletePresetButton.onClick = [this]()
-    {
-        if (presetSelector.getSelectedId() > 0)
-        {
-            juce::String presetName = presetSelector.getText();
-
-            // Create confirmation dialog
-            auto options = juce::MessageBoxOptions()
-                .withIconType(juce::MessageBoxIconType::WarningIcon)
-                .withTitle("Delete Preset")
-                .withMessage("Are you sure you want to delete '" + presetName + "'?")
-                .withButton("OK")
-                .withButton("Cancel");
-
-            juce::AlertWindow::showAsync(options, [this, presetName](int result)
-            {
-                if (result == 1)  // OK button pressed
-                {
-                    deletePreset(presetName);
-                    refreshPresetList();
-                }
-            });
         }
     };
 
@@ -560,7 +562,6 @@ void PluginEditor::resized()
 
     // ========== PRESET SELECTOR + RANDOMIZE + SETTINGS (TOP-LEFT) ==========
     const int presetSelectorWidth = S(150);
-    const int presetButtonWidth = S(50);
     const int presetSpacing = S(5);
     const int presetHeight = S(24);
 
@@ -570,15 +571,11 @@ void PluginEditor::resized()
     // Hide the label (set to zero width)
     presetLabel.setBounds(0, 0, 0, 0);
 
-    // Preset selector row
+    // Preset selector (Save/Delete are inside the dropdown)
     presetSelector.setBounds(presetX, presetY, presetSelectorWidth, presetHeight);
-    savePresetButton.setBounds(presetX + presetSelectorWidth + presetSpacing,
-                               presetY, presetButtonWidth, presetHeight);
-    deletePresetButton.setBounds(presetX + presetSelectorWidth + presetSpacing + presetButtonWidth + presetSpacing,
-                                 presetY, presetButtonWidth, presetHeight);
 
-    // Randomize + Settings buttons - right after Delete button
-    const int randomizeX = presetX + presetSelectorWidth + presetSpacing + presetButtonWidth + presetSpacing + presetButtonWidth + presetSpacing;
+    // Randomize + Settings buttons - right after preset selector
+    const int randomizeX = presetX + presetSelectorWidth + presetSpacing;
     const int randomizeButtonWidth = S(80);
     randomizeButton.setBounds(randomizeX, presetY, randomizeButtonWidth, presetHeight);
 
@@ -704,8 +701,8 @@ void PluginEditor::resized()
 
     // Sub Guard Knob
     subGuardSlider.setBounds(currentX, rowY, knobSize, knobSize);
-    subGuardLabel.setBounds(currentX, rowY + knobSize + S(2), knobSize + S(20), S(14));
-    subGuardLock.setBounds(currentX + knobSize - lockSize - S(3), rowY + S(3), lockSize, lockSize);
+    subGuardLabel.setBounds(currentX, rowY + knobSize + lockInset, knobSize, labelHeight);
+    subGuardLock.setBounds(currentX + knobSize - lockSize - lockInset, rowY + lockInset, lockSize, lockSize);
     currentX += knobSize + controlSpacing;
 
     // Input Gain
@@ -738,7 +735,7 @@ void PluginEditor::resized()
     const int comboXOffset = (clipTypeColumnWidth - comboWidth) / 2;
     const int comboY = rowY + (knobSize - comboHeight) / 2;
     clipTypeComboBox.setBounds(currentX + comboXOffset, comboY, comboWidth, comboHeight);
-    clipTypeLabel.setBounds(currentX + comboXOffset, comboY - S(14), comboWidth, S(14));
+    clipTypeLabel.setBounds(currentX, rowY + knobSize + lockInset, clipTypeColumnWidth, labelHeight);
     clipTypeLock.setBounds(currentX + comboXOffset + comboWidth - S(12) - S(2), comboY, S(12), S(12));
     currentX += clipTypeColumnWidth + controlSpacing;
 
@@ -1125,6 +1122,11 @@ void PluginEditor::refreshPresetList()
             presetSelector.addItem(file.getFileNameWithoutExtension(), id++);
         }
     }
+
+    // Add Save/Delete actions at the bottom
+    presetSelector.addSeparator();
+    presetSelector.addItem("Save Preset...", 9990);
+    presetSelector.addItem("Delete Preset...", 9991);
 
     // Select "Default" preset by default (ID = 1)
     presetSelector.setSelectedId(1, juce::dontSendNotification);

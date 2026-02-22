@@ -1222,8 +1222,6 @@ private:
 
     // Preset selector components
     juce::ComboBox presetSelector;
-    juce::TextButton savePresetButton;
-    juce::TextButton deletePresetButton;
     juce::Label presetLabel;
 
     // Lock icons for each parameter
