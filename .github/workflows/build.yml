@@ -37,7 +37,8 @@ jobs:
 
     - name: Fix moduleinfo.json
       run: |
-        python scripts/fix_moduleinfo_json.py build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3 --all
+        python scripts/fix_moduleinfo_json.py build/Distortion_artefacts --all
+      continue-on-error: true
 
     - name: Build Tests
       run: |
@@ -49,10 +50,19 @@ jobs:
       continue-on-error: true
 
     - name: Prepare Windows Artifact
+      shell: bash
       run: |
         mkdir -p artifact/Windows
-        cp -r build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Distortion.vst3 artifact/Windows/
-      shell: bash
+        # MSVC multi-config puts output under a config subfolder
+        if [ -d "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3" ]; then
+          cp -r build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Distortion.vst3 artifact/Windows/
+        elif [ -d "build/Distortion_artefacts/VST3" ]; then
+          cp -r build/Distortion_artefacts/VST3/Distortion.vst3 artifact/Windows/
+        else
+          echo "Searching for VST3 output..."
+          find build/Distortion_artefacts -name "Distortion.vst3" -type d
+          cp -r $(find build/Distortion_artefacts -name "Distortion.vst3" -type d | head -1) artifact/Windows/
+        fi
 
     - name: Upload Windows VST3
       uses: actions/upload-artifact@v4
@@ -87,7 +97,7 @@ jobs:
           libxinerama-dev \
           libxrandr-dev \
           libxrender-dev \
-          libwebkit2gtk-4.0-dev \
+          libwebkit2gtk-4.1-dev \
           libglu1-mesa-dev \
           mesa-common-dev
 
@@ -106,7 +116,8 @@ jobs:
 
     - name: Fix moduleinfo.json
       run: |
-        python scripts/fix_moduleinfo_json.py build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3 --all
+        python scripts/fix_moduleinfo_json.py build/Distortion_artefacts --all
+      continue-on-error: true
 
     - name: Build Tests
       run: |
