@@ -615,7 +615,7 @@ void PluginEditor::resized()
     // Right panel: from LFO toggle to right edge
     const int rightPanelLeft = lfoTabX - toggleSize - 4;
     const int rightPanelRight = getWidth() - margin;
-    const int expandedY = titleHeight + 4;  // Right below the title bar
+    const int expandedY = presetY + presetHeight + 8;  // Below the tab headers with gap
 
     // Calculate section height for oscilloscope positioning
     const bool anyExpanded = isLFOExpanded || isCompressionExpanded;
