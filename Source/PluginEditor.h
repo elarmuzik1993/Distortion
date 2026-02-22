@@ -10,6 +10,7 @@
 
 #include <JuceHeader.h>
 #include "CustomKnob.h"
+#include "FontHelper.h"
 #include "PluginProcessor.h"
 class PluginProcessor;
 
@@ -493,6 +494,384 @@ public:
     }
 };
 
+// Custom gear button that draws a gear icon programmatically
+class GearButton : public juce::Button
+{
+public:
+    GearButton() : juce::Button("Settings") {}
+
+    void paintButton(juce::Graphics& g, bool isMouseOver, bool isButtonDown) override
+    {
+        auto bounds = getLocalBounds().toFloat().reduced(2.0f);
+        auto centre = bounds.getCentre();
+        float outerR = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.45f;
+        float innerR = outerR * 0.55f;
+        float holeR = outerR * 0.28f;
+
+        juce::Colour col = isButtonDown ? juce::Colours::white
+                         : isMouseOver  ? juce::Colour(0xFFFF4466)
+                                        : juce::Colour(0xFFFF0044);
+
+        // Draw gear teeth
+        const int numTeeth = 6;
+        juce::Path gear;
+        for (int i = 0; i < numTeeth * 2; ++i)
+        {
+            float angle = juce::MathConstants<float>::twoPi * i / (numTeeth * 2);
+            float r = (i % 2 == 0) ? outerR : innerR;
+            float x = centre.x + std::cos(angle) * r;
+            float y = centre.y + std::sin(angle) * r;
+            if (i == 0)
+                gear.startNewSubPath(x, y);
+            else
+                gear.lineTo(x, y);
+        }
+        gear.closeSubPath();
+
+        // Cut out center hole
+        gear.addEllipse(centre.x - holeR, centre.y - holeR, holeR * 2, holeR * 2);
+        gear.setUsingNonZeroWinding(false);
+
+        g.setColour(col);
+        g.fillPath(gear);
+    }
+};
+
+// Settings state for UI-only settings persisted via XML
+struct SettingsState
+{
+    bool oscilloscopeEnabled = true;
+    bool tooltipsEnabled = false;
+    int windowScalePercent = 100;
+    int oversamplingMode = 2; // 0=Off, 1=2x, 2=4x
+
+    void saveToFile(const juce::File& file) const
+    {
+        juce::XmlElement xml("Settings");
+        xml.setAttribute("oscilloscope", oscilloscopeEnabled);
+        xml.setAttribute("tooltips", tooltipsEnabled);
+        xml.setAttribute("windowScale", windowScalePercent);
+        xml.setAttribute("oversampling", oversamplingMode);
+        xml.writeTo(file);
+    }
+
+    void loadFromFile(const juce::File& file)
+    {
+        if (!file.existsAsFile()) return;
+        auto xml = juce::parseXML(file);
+        if (xml == nullptr) return;
+        oscilloscopeEnabled = xml->getBoolAttribute("oscilloscope", true);
+        tooltipsEnabled = xml->getBoolAttribute("tooltips", false);
+        windowScalePercent = xml->getIntAttribute("windowScale", 100);
+        oversamplingMode = xml->getIntAttribute("oversampling", 2);
+    }
+};
+
+// Pill-shaped toggle LookAndFeel for settings overlay
+class PillToggleLookAndFeel : public juce::LookAndFeel_V4
+{
+public:
+    void drawTickBox(juce::Graphics& g, juce::Component&,
+        float x, float y, float w, float h,
+        bool ticked, bool, bool, bool) override
+    {
+        juce::ignoreUnused(w, h);
+        const float pillW = 36.0f;
+        const float pillH = 18.0f;
+        const float pillX = x;
+        const float pillY = y + (h - pillH) / 2.0f;
+        const float knobDiameter = pillH - 4.0f;
+
+        auto pillBounds = juce::Rectangle<float>(pillX, pillY, pillW, pillH);
+
+        // Background
+        g.setColour(ticked ? juce::Colour(0xFFFF2244).withAlpha(0.3f)
+                           : juce::Colour(0xFF1A1A1A));
+        g.fillRoundedRectangle(pillBounds, pillH / 2.0f);
+
+        // Border
+        g.setColour(ticked ? juce::Colour(0xFFFF2244) : juce::Colour(0xFF333333));
+        g.drawRoundedRectangle(pillBounds, pillH / 2.0f, 1.0f);
+
+        // Knob
+        float knobX = ticked ? (pillX + pillW - knobDiameter - 3.0f)
+                             : (pillX + 3.0f);
+        float knobY = pillY + (pillH - knobDiameter) / 2.0f;
+        g.setColour(ticked ? juce::Colour(0xFFFF2244) : juce::Colour(0xFF888888));
+        g.fillEllipse(knobX, knobY, knobDiameter, knobDiameter);
+    }
+};
+
+// Settings overlay modal panel
+class SettingsOverlay : public juce::Component
+{
+public:
+    SettingsOverlay(juce::AudioProcessorValueTreeState& apvts, SettingsState& state)
+        : settingsState(state)
+    {
+        setInterceptsMouseClicks(true, true);
+
+        // Anti-Alias toggle (attached to waveshaperClean parameter)
+        addAndMakeVisible(antiAliasToggle);
+        antiAliasToggle.setButtonText("");
+        antiAliasToggle.setLookAndFeel(&pillLnf);
+        cleanModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+            apvts, "waveshaperClean", antiAliasToggle);
+
+        // Oversampling combo
+        addAndMakeVisible(oversamplingCombo);
+        oversamplingCombo.addItem("Off", 1);
+        oversamplingCombo.addItem("2x", 2);
+        oversamplingCombo.addItem("4x", 3);
+        oversamplingCombo.setSelectedId(state.oversamplingMode + 1, juce::dontSendNotification);
+        oversamplingCombo.setLookAndFeel(&comboLnf);
+        oversamplingCombo.onChange = [this]() {
+            settingsState.oversamplingMode = oversamplingCombo.getSelectedId() - 1;
+        };
+
+        // Window Scale combo
+        addAndMakeVisible(windowScaleCombo);
+        windowScaleCombo.addItem("100%", 1);
+        windowScaleCombo.addItem("125%", 2);
+        windowScaleCombo.addItem("150%", 3);
+        windowScaleCombo.setSelectedId(1, juce::dontSendNotification);
+        windowScaleCombo.setLookAndFeel(&comboLnf);
+
+        // Tooltips toggle
+        addAndMakeVisible(tooltipsToggle);
+        tooltipsToggle.setButtonText("");
+        tooltipsToggle.setLookAndFeel(&pillLnf);
+        tooltipsToggle.setToggleState(state.tooltipsEnabled, juce::dontSendNotification);
+        tooltipsToggle.onClick = [this]() {
+            settingsState.tooltipsEnabled = tooltipsToggle.getToggleState();
+        };
+
+        // Oscilloscope toggle
+        addAndMakeVisible(oscilloscopeToggle);
+        oscilloscopeToggle.setButtonText("");
+        oscilloscopeToggle.setLookAndFeel(&pillLnf);
+        oscilloscopeToggle.setToggleState(state.oscilloscopeEnabled, juce::dontSendNotification);
+        oscilloscopeToggle.onClick = [this]() {
+            settingsState.oscilloscopeEnabled = oscilloscopeToggle.getToggleState();
+            if (onOscilloscopeToggled)
+                onOscilloscopeToggled(oscilloscopeToggle.getToggleState());
+        };
+    }
+
+    ~SettingsOverlay() override
+    {
+        antiAliasToggle.setLookAndFeel(nullptr);
+        tooltipsToggle.setLookAndFeel(nullptr);
+        oscilloscopeToggle.setLookAndFeel(nullptr);
+        oversamplingCombo.setLookAndFeel(nullptr);
+        windowScaleCombo.setLookAndFeel(nullptr);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        // Dark backdrop
+        g.fillAll(juce::Colour(0xD9000000));
+
+        auto panelBounds = getPanelBounds();
+
+        // Panel background
+        g.setColour(juce::Colour(0xFF111111));
+        g.fillRoundedRectangle(panelBounds, 6.0f);
+
+        // Panel border
+        g.setColour(juce::Colour(0xFFFF2244));
+        g.drawRoundedRectangle(panelBounds, 6.0f, 1.0f);
+
+        auto inner = panelBounds.reduced(16.0f);
+
+        // Header: "SETTINGS"
+        g.setFont(Fonts::getOrbitron(12.0f, true));
+        g.setColour(juce::Colour(0xFFFF2244));
+        g.drawText("SETTINGS", inner.removeFromTop(24.0f), juce::Justification::centredLeft);
+
+        // Close button (X) - drawn in top-right of panel
+        auto closeBtn = getCloseBtnBounds();
+        g.setColour(juce::Colour(0xFFFF2244));
+        g.setFont(16.0f);
+        g.drawText(juce::CharPointer_UTF8("\xc3\x97"), closeBtn, juce::Justification::centred);
+
+        inner.removeFromTop(8.0f);
+
+        // PROCESSING section header
+        g.setFont(Fonts::getOrbitron(10.0f, true));
+        g.setColour(juce::Colour(0xFFFF2244).withAlpha(0.6f));
+        auto processingHeader = inner.removeFromTop(18.0f);
+        g.drawText("PROCESSING", processingHeader, juce::Justification::centredLeft);
+
+        // Divider
+        g.setColour(juce::Colour(0xFF282828));
+        inner.removeFromTop(4.0f);
+        g.fillRect(inner.removeFromTop(1.0f));
+        inner.removeFromTop(8.0f);
+
+        // Anti-Alias row label
+        g.setFont(12.0f);
+        g.setColour(juce::Colours::white);
+        auto aaRow = inner.removeFromTop(24.0f);
+        g.drawText("Anti-Alias", aaRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
+
+        inner.removeFromTop(6.0f);
+
+        // Oversampling row label
+        auto osRow = inner.removeFromTop(24.0f);
+        g.drawText("Oversampling", osRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
+
+        inner.removeFromTop(16.0f);
+
+        // INTERFACE section header
+        g.setFont(Fonts::getOrbitron(10.0f, true));
+        g.setColour(juce::Colour(0xFFFF2244).withAlpha(0.6f));
+        auto interfaceHeader = inner.removeFromTop(18.0f);
+        g.drawText("INTERFACE", interfaceHeader, juce::Justification::centredLeft);
+
+        // Divider
+        g.setColour(juce::Colour(0xFF282828));
+        inner.removeFromTop(4.0f);
+        g.fillRect(inner.removeFromTop(1.0f));
+        inner.removeFromTop(8.0f);
+
+        // Window Scale row label
+        g.setFont(12.0f);
+        g.setColour(juce::Colours::white);
+        auto wsRow = inner.removeFromTop(24.0f);
+        g.drawText("Window Scale", wsRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
+
+        inner.removeFromTop(6.0f);
+
+        // Tooltips row label
+        auto ttRow = inner.removeFromTop(24.0f);
+        g.drawText("Tooltips", ttRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
+
+        inner.removeFromTop(6.0f);
+
+        // Oscilloscope row label
+        auto scRow = inner.removeFromTop(24.0f);
+        g.drawText("Oscilloscope", scRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
+    }
+
+    void resized() override
+    {
+        auto panelBounds = getPanelBounds();
+        auto inner = panelBounds.reduced(16.0f);
+
+        inner.removeFromTop(24.0f); // header
+        inner.removeFromTop(8.0f);
+
+        // PROCESSING header + divider
+        inner.removeFromTop(18.0f);
+        inner.removeFromTop(4.0f);
+        inner.removeFromTop(1.0f);
+        inner.removeFromTop(8.0f);
+
+        // Anti-Alias row
+        auto aaRow = inner.removeFromTop(24.0f);
+        aaRow.removeFromLeft(140.0f);
+        antiAliasToggle.setBounds(aaRow.removeFromLeft(50).reduced(0, 2).toNearestInt());
+
+        inner.removeFromTop(6.0f);
+
+        // Oversampling row
+        auto osRow = inner.removeFromTop(24.0f);
+        osRow.removeFromLeft(140.0f);
+        oversamplingCombo.setBounds(osRow.removeFromLeft(70).reduced(0, 2).toNearestInt());
+
+        inner.removeFromTop(16.0f);
+
+        // INTERFACE header + divider
+        inner.removeFromTop(18.0f);
+        inner.removeFromTop(4.0f);
+        inner.removeFromTop(1.0f);
+        inner.removeFromTop(8.0f);
+
+        // Window Scale row
+        auto wsRow = inner.removeFromTop(24.0f);
+        wsRow.removeFromLeft(140.0f);
+        windowScaleCombo.setBounds(wsRow.removeFromLeft(70).reduced(0, 2).toNearestInt());
+
+        inner.removeFromTop(6.0f);
+
+        // Tooltips row
+        auto ttRow = inner.removeFromTop(24.0f);
+        ttRow.removeFromLeft(140.0f);
+        tooltipsToggle.setBounds(ttRow.removeFromLeft(50).reduced(0, 2).toNearestInt());
+
+        inner.removeFromTop(6.0f);
+
+        // Oscilloscope row
+        auto scRow = inner.removeFromTop(24.0f);
+        scRow.removeFromLeft(140.0f);
+        oscilloscopeToggle.setBounds(scRow.removeFromLeft(50).reduced(0, 2).toNearestInt());
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        // Click outside panel closes overlay
+        if (!getPanelBounds().contains(e.getPosition().toFloat()))
+        {
+            if (onClose) onClose();
+            return;
+        }
+
+        // Check close button
+        if (getCloseBtnBounds().contains(e.getPosition().toFloat()))
+        {
+            if (onClose) onClose();
+            return;
+        }
+    }
+
+    std::function<void()> onClose;
+    std::function<void(bool)> onOscilloscopeToggled;
+
+private:
+    SettingsState& settingsState;
+    PillToggleLookAndFeel pillLnf;
+
+    // Combo styling
+    struct OverlayComboLnf : public juce::LookAndFeel_V4
+    {
+        OverlayComboLnf()
+        {
+            setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xFF1A1A1A));
+            setColour(juce::ComboBox::textColourId, juce::Colours::white);
+            setColour(juce::ComboBox::outlineColourId, juce::Colour(0xFF333333));
+            setColour(juce::ComboBox::arrowColourId, juce::Colour(0xFFFF2244));
+            setColour(juce::PopupMenu::backgroundColourId, juce::Colour(0xFF111111));
+            setColour(juce::PopupMenu::textColourId, juce::Colours::white);
+            setColour(juce::PopupMenu::highlightedBackgroundColourId, juce::Colour(0xFFFF2244).withAlpha(0.3f));
+            setColour(juce::PopupMenu::highlightedTextColourId, juce::Colours::white);
+        }
+    } comboLnf;
+
+    juce::ToggleButton antiAliasToggle;
+    juce::ComboBox oversamplingCombo;
+    juce::ComboBox windowScaleCombo;
+    juce::ToggleButton tooltipsToggle;
+    juce::ToggleButton oscilloscopeToggle;
+
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> cleanModeAttachment;
+
+    juce::Rectangle<float> getPanelBounds() const
+    {
+        const float panelW = 320.0f;
+        const float panelH = 340.0f;
+        return juce::Rectangle<float>(panelW, panelH)
+            .withCentre(getLocalBounds().getCentre().toFloat());
+    }
+
+    juce::Rectangle<float> getCloseBtnBounds() const
+    {
+        auto panel = getPanelBounds();
+        return juce::Rectangle<float>(22.0f, 22.0f)
+            .withPosition(panel.getRight() - 30.0f, panel.getY() + 8.0f);
+    }
+};
+
 // Collapsible Tab Header for compression section
 class CollapsibleTabHeader : public juce::Component
 {
@@ -812,8 +1191,6 @@ private:
 
     CustomKnob subGuardSlider;
     juce::Label subGuardLabel;
-    juce::ToggleButton cleanModeToggle;
-    juce::Label cleanModeLabel;
 
     juce::ComboBox clipTypeComboBox;
     juce::Label clipTypeLabel;
@@ -845,7 +1222,7 @@ private:
     LockIcon inputGainLock, outputGainLock, distortionAmountLock, highPassFreqLock;
     LockIcon distMixLock, lfoRateLock, lfoDepthLock, lfoEnableLock;
     LockIcon compPeakReductionLock, compMakeupGainLock;
-    LockIcon subGuardLock, clipTypeLock, compRatioLock, compEnableLock, cleanModeLock;
+    LockIcon subGuardLock, clipTypeLock, compRatioLock, compEnableLock;
 
     // Lock toggles for randomization
     std::map<juce::String, bool> parameterLocks;
@@ -858,7 +1235,6 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> distMixAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> toneAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> subGuardAttachment;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> cleanModeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> clipTypeAttachment;
     juce::Image backgroundImage;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoRateAttachment;
@@ -892,6 +1268,7 @@ private:
     // LFO modulation visual feedback state
     int currentModulatedDestination = -1;
     float modulationPulsePhase = 0.0f;
+    float uiLfoPhase = 0.0f;  // Smooth UI-side phase accumulator for LFO arc animation
 
     // Preset management methods
     void savePreset(const juce::String& presetName);
@@ -900,6 +1277,18 @@ private:
     void deletePreset(const juce::String& presetName);
     void refreshPresetList();
     juce::File getPresetDirectory();
+
+    // Settings overlay
+    std::unique_ptr<SettingsOverlay> settingsOverlay;
+    GearButton settingsButton;
+    SettingsState settingsState;
+
+    void showSettingsOverlay();
+    void hideSettingsOverlay();
+    void applyOscilloscopeEnabled(bool enabled);
+    void loadSettings();
+    void saveSettings();
+    juce::File getSettingsFile();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginEditor)
 };

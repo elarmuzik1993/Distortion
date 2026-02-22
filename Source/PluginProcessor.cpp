@@ -920,6 +920,9 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             lfoPhase = std::fmod(lfoPhase, 1.0f);
         else
             lfoPhase = 0.0f;
+
+        // Expose phase to UI for arc animation
+        lfoPhaseForUI.store(lfoPhase, std::memory_order_relaxed);
     }
 
     // LFO Routing: Apply modulation to selected destination
@@ -2129,7 +2132,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "lfoRate", 1 },
         "LFO Rate",
-        juce::NormalisableRange<float>(0.1f, 50.0f, 0.1f),  // Increased from 10Hz to 50Hz for tremolo/ring mod
+        juce::NormalisableRange<float>(0.1f, 10.0f, 0.01f, 0.35f),  // 0.1-10Hz, log skew for more control at low rates
         0.0f));  // Default 0 = LFO off
 
     params.push_back(std::make_unique<juce::AudioParameterFloat>(

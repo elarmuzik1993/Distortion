@@ -198,20 +198,6 @@ PluginEditor::PluginEditor(PluginProcessor& p)
         else if (std::abs(v - 150.0) <= 8.0) subGuardSlider.setValue(150.0);
     };
 
-    // Setup Clean Mode toggle
-    addAndMakeVisible(cleanModeToggle);
-    cleanModeToggle.setButtonText("Clean");
-    cleanModeToggle.setLookAndFeel(&checkboxLookAndFeel);  // Apply custom black box with green tick
-
-    cleanModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
-        audioProcessor.parameters, "waveshaperClean", cleanModeToggle);
-
-    addAndMakeVisible(cleanModeLabel);
-    cleanModeLabel.setText("Anti-Alias", juce::dontSendNotification);
-    cleanModeLabel.setJustificationType(juce::Justification::centred);
-    cleanModeLabel.setColour(juce::Label::textColourId, juce::Colours::white);
-    cleanModeLabel.setFont(juce::Font(12.0f, juce::Font::bold));  // Bigger and bold
-
     addAndMakeVisible(clipTypeComboBox);
     clipTypeComboBox.setLookAndFeel(&comboBoxLookAndFeel);  // Apply neon red styling
     clipTypeComboBox.addItem("Brutal Fuzz", 1);
@@ -424,7 +410,6 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addAndMakeVisible(compPeakReductionLock);
     addAndMakeVisible(compMakeupGainLock);
     addAndMakeVisible(subGuardLock);
-    addAndMakeVisible(cleanModeLock);
     addAndMakeVisible(clipTypeLock);
     addAndMakeVisible(compRatioLock);
     addAndMakeVisible(compEnableLock);
@@ -440,7 +425,6 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     setupKnobRightClick(compPeakReductionSlider, "compPeakReduction");
     setupKnobRightClick(compMakeupGainSlider, "compMakeupGain");
     setupKnobRightClick(subGuardSlider, "subGuardFreq");
-    setupKnobRightClick(cleanModeToggle, "waveshaperClean");
     setupKnobRightClick(clipTypeComboBox, "clipType");
     setupKnobRightClick(compRatioComboBox, "compRatio");
     setupKnobRightClick(compEnableToggle, "compEnabled");
@@ -451,17 +435,27 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     updateCompressionVisibility();
     updateLFOVisibility();
 
+    // Setup settings (gear) button
+    addAndMakeVisible(settingsButton);
+    settingsButton.onClick = [this]() { showSettingsOverlay(); };
+
+    // Load UI settings
+    loadSettings();
+    applyOscilloscopeEnabled(settingsState.oscilloscopeEnabled);
+
     // Start timer for LFO modulation visual feedback (30Hz)
-    startTimerHz(30);
+    startTimerHz(60);
 }
 
 PluginEditor::~PluginEditor()
 {
     stopTimer();
 
+    // Destroy settings overlay before LookAndFeel instances
+    settingsOverlay.reset();
+
     // Reset LookAndFeel to nullptr before destruction to prevent crash
     // Components must not reference a LookAndFeel that may be destroyed before them
-    cleanModeToggle.setLookAndFeel(nullptr);
     compEnableToggle.setLookAndFeel(nullptr);
     lfoEnableToggle.setLookAndFeel(nullptr);
     clipTypeComboBox.setLookAndFeel(nullptr);
@@ -582,6 +576,11 @@ void PluginEditor::resized()
     const int randomizeButtonY = presetY;  // Same height as preset row
     randomizeButton.setBounds(randomizeButtonX, randomizeButtonY,
                              randomizeButtonWidth, randomizeButtonHeight);
+
+    // Settings (gear) button - left of Randomize button
+    const int settingsBtnSize = 24;
+    settingsButton.setBounds(randomizeButtonX - settingsBtnSize - 8,
+                             randomizeButtonY, settingsBtnSize, settingsBtnSize);
 
     auto contentArea = bounds;
 
@@ -716,40 +715,29 @@ void PluginEditor::resized()
     const int rowY = actualWindowHeight - bottomMargin - knobSize - labelHeight - 10;  // Bottom row position
 
     // Calculate total width to center controls
-    // Layout: SubGuard(67) + AntiAlias+ClipType(88) + InputGain(67) + HiPass(67) + DistMix(67) + Distortion(67) + Tone(67) + WaveMix(67) + Output(67) + 8 spacings
-    const int totalControlsWidth = 67 + 8 + 88 + 8 + 67 + 8 + 67 + 8 + 67 + 8 + 67 + 8 + 67 + 8 + 67 + 8 + 67;
+    // Layout: SubGuard(67) + ClipType(50) + InputGain(67) + HiPass(67) + DistMix(67) + Distortion(67) + Tone(67) + WaveMix(67) + Output(67) + 8 spacings
+    const int clipTypeColumnWidth = 50;
+    const int totalControlsWidth = knobSize + controlSpacing + clipTypeColumnWidth + controlSpacing +
+                                   knobSize + controlSpacing + knobSize + controlSpacing +
+                                   knobSize + controlSpacing + knobSize + controlSpacing +
+                                   knobSize + controlSpacing + knobSize + controlSpacing + knobSize;
     int currentX = (getWidth() - totalControlsWidth) / 2;  // Center horizontally
 
-    // Sub Guard Knob (75x75) - consistent size with other main knobs
+    // Sub Guard Knob (67x67) - consistent size with other main knobs
     subGuardSlider.setBounds(currentX, rowY, knobSize, knobSize);
     subGuardLabel.setBounds(currentX, rowY + knobSize + 2, knobSize + 20, 14);
     subGuardLock.setBounds(currentX + knobSize - 16 - 3, rowY + 3, 16, 16);
     currentX += knobSize + controlSpacing;
 
-    // Clip Type Dropdown + Anti-Alias Toggle (stacked vertically in same 88px column)
-    const int cleanSubToggleSize = 24;
-    const int toggleLabelHeight = 16;
+    // Clip Type Dropdown (centered in column, no Anti-Alias toggle)
     const int comboWidth = 45;
     const int comboHeight = 18;
-    const int stackGap = 5;
-    const int stackTotalHeight = comboHeight + stackGap + cleanSubToggleSize;
-    const int stackTopY = rowY + (knobSize - stackTotalHeight) / 2;
-    const int columnWidth = cleanSubToggleSize + 4 + 60;  // 88px total
-
-    // Clip Type Dropdown - centered above anti-alias toggle
-    const int comboXOffset = (columnWidth - comboWidth) / 2;
-    clipTypeComboBox.setBounds(currentX + comboXOffset, stackTopY, comboWidth, comboHeight);
-    clipTypeLabel.setBounds(currentX + comboXOffset, stackTopY - 14, comboWidth, 14);
-    clipTypeLock.setBounds(currentX + comboXOffset + comboWidth - 12 - 2, stackTopY, 12, 12);
-
-    // Anti-Alias Toggle - below clip type dropdown
-    const int toggleY = stackTopY + comboHeight + stackGap;
-    cleanModeToggle.setBounds(currentX, toggleY, cleanSubToggleSize, cleanSubToggleSize);
-    cleanModeLabel.setBounds(currentX + cleanSubToggleSize + 4,
-                            toggleY + (cleanSubToggleSize - toggleLabelHeight) / 2,
-                            60, toggleLabelHeight);
-    cleanModeLock.setBounds(currentX + cleanSubToggleSize - 12, toggleY, 12, 12);
-    currentX += columnWidth + controlSpacing;
+    const int comboXOffset = (clipTypeColumnWidth - comboWidth) / 2;
+    const int comboY = rowY + (knobSize - comboHeight) / 2;
+    clipTypeComboBox.setBounds(currentX + comboXOffset, comboY, comboWidth, comboHeight);
+    clipTypeLabel.setBounds(currentX + comboXOffset, comboY - 14, comboWidth, 14);
+    clipTypeLock.setBounds(currentX + comboXOffset + comboWidth - 12 - 2, comboY, 12, 12);
+    currentX += clipTypeColumnWidth + controlSpacing;
 
     // Input Gain (75x75)
     inputGainSlider.setBounds(currentX, rowY, knobSize, knobSize);
@@ -792,6 +780,10 @@ void PluginEditor::resized()
 
     // All controls and lock icons positioned above in single row layout
     // LFO controls are now in the top LFO section
+
+    // Settings overlay covers entire editor
+    if (settingsOverlay)
+        settingsOverlay->setBounds(getLocalBounds());
 }
 
 bool PluginEditor::isParameterLocked(const juce::String& paramID) const
@@ -904,15 +896,16 @@ void PluginEditor::updateModulationHighlight()
 {
     const bool lfoEnabled = audioProcessor.parameters.getParameter("lfoEnabled")->getValue() > 0.5f;
     const float lfoDepth = audioProcessor.parameters.getParameter("lfoDepth")->getValue();
+    const float lfoRate = audioProcessor.parameters.getParameter("lfoRate")->getValue();
 
     if (!lfoEnabled || lfoDepth < 0.01f)
     {
-        // LFO disabled - reset all highlights
-        distortionAmountSlider.setModulationIndicator(false, 0.0f);
-        toneSlider.setModulationIndicator(false, 0.0f);
-        highPassFreqSlider.setModulationIndicator(false, 0.0f);
-        distMixSlider.setModulationIndicator(false, 0.0f);
-        outputGainSlider.setModulationIndicator(false, 0.0f);
+        // LFO disabled or no depth - reset all arcs
+        distortionAmountSlider.setLFOArc(false, 0.0f, 0.0f);
+        toneSlider.setLFOArc(false, 0.0f, 0.0f);
+        highPassFreqSlider.setLFOArc(false, 0.0f, 0.0f);
+        distMixSlider.setLFOArc(false, 0.0f, 0.0f);
+        outputGainSlider.setLFOArc(false, 0.0f, 0.0f);
         return;
     }
 
@@ -920,17 +913,25 @@ void PluginEditor::updateModulationHighlight()
     const int destination = static_cast<int>(
         audioProcessor.parameters.getParameter("lfoDestination")->getValue() * 4.0f + 0.5f);
 
-    // Update pulse phase for animation (30Hz timer = ~12 degree increment)
-    modulationPulsePhase += 0.2f;
-    if (modulationPulsePhase > 6.28f) modulationPulsePhase -= 6.28f;
-    const float pulseIntensity = 0.5f + 0.5f * std::sin(modulationPulsePhase);
+    // Read LFO phase directly from audio thread
+    // With 60Hz timer and 10Hz max rate, we get at least 6 frames per cycle — smooth enough
+    auto* rateParam = audioProcessor.parameters.getParameter("lfoRate");
+    float lfoRateHz = rateParam->convertFrom0to1(lfoRate);
 
-    // Clear all and highlight active destination
-    distortionAmountSlider.setModulationIndicator(destination == 0, pulseIntensity);
-    toneSlider.setModulationIndicator(destination == 1, pulseIntensity);
-    highPassFreqSlider.setModulationIndicator(destination == 2, pulseIntensity);
-    distMixSlider.setModulationIndicator(destination == 3, pulseIntensity);
-    outputGainSlider.setModulationIndicator(destination == 4, pulseIntensity);
+    float lfoPhase;
+    if (lfoRateHz < 0.01f)
+        lfoPhase = 0.25f;  // Static arc at max positive swing
+    else
+        lfoPhase = audioProcessor.lfoPhaseForUI.load(std::memory_order_relaxed);
+
+    const float depthNorm = lfoDepth;
+
+    // Set arc on the targeted knob, clear others
+    distortionAmountSlider.setLFOArc(destination == 0, lfoPhase, depthNorm);
+    toneSlider.setLFOArc(destination == 1, lfoPhase, depthNorm);
+    highPassFreqSlider.setLFOArc(destination == 2, lfoPhase, depthNorm);
+    distMixSlider.setLFOArc(destination == 3, lfoPhase, depthNorm);
+    outputGainSlider.setLFOArc(destination == 4, lfoPhase, depthNorm);
 }
 
 void PluginEditor::timerCallback()
@@ -1262,4 +1263,59 @@ void PluginEditor::loadFactoryPreset(const juce::String& presetName)
         setParam("compRatio", 0.0f);
         setParam("compEnabled", 0.0f);
     }
+}
+
+// ============================================================================
+// Settings Overlay Methods
+// ============================================================================
+
+void PluginEditor::showSettingsOverlay()
+{
+    if (settingsOverlay) return;
+
+    settingsOverlay = std::make_unique<SettingsOverlay>(audioProcessor.parameters, settingsState);
+    addAndMakeVisible(*settingsOverlay);
+    settingsOverlay->setBounds(getLocalBounds());
+
+    settingsOverlay->onClose = [this]() { hideSettingsOverlay(); };
+    settingsOverlay->onOscilloscopeToggled = [this](bool enabled) {
+        applyOscilloscopeEnabled(enabled);
+    };
+}
+
+void PluginEditor::hideSettingsOverlay()
+{
+    saveSettings();
+    settingsOverlay.reset();
+}
+
+void PluginEditor::applyOscilloscopeEnabled(bool enabled)
+{
+    if (enabled)
+    {
+        oscilloscope.setVisible(true);
+        xyMorphPad.setVisible(true);
+        oscilloscope.startTimerHz(DSPConstants::SCOPE_REFRESH_RATE_HZ);
+    }
+    else
+    {
+        oscilloscope.stopTimer();
+        oscilloscope.setVisible(false);
+        xyMorphPad.setVisible(false);
+    }
+}
+
+void PluginEditor::loadSettings()
+{
+    settingsState.loadFromFile(getSettingsFile());
+}
+
+void PluginEditor::saveSettings()
+{
+    settingsState.saveToFile(getSettingsFile());
+}
+
+juce::File PluginEditor::getSettingsFile()
+{
+    return getPresetDirectory().getParentDirectory().getChildFile("settings.xml");
 }

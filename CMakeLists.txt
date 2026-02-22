@@ -72,6 +72,8 @@ juce_generate_juce_header(Distortion)
 juce_add_binary_data(DistortionData SOURCES
     Resources/background.png
     "Resources/Logo Title.png"
+    Resources/Orbitron-Bold.ttf
+    Resources/Orbitron-Regular.ttf
 )
 
 target_compile_definitions(Distortion
