@@ -33,7 +33,7 @@ jobs:
 
     - name: Build Plugin
       run: |
-        cmake --build build --config ${{ env.BUILD_TYPE }} --target Distortion -j
+        cmake --build build --config ${{ env.BUILD_TYPE }} --target Distortion_VST3 -j
 
     - name: Fix moduleinfo.json
       run: |
@@ -53,16 +53,9 @@ jobs:
       shell: bash
       run: |
         mkdir -p artifact/Windows
-        # MSVC multi-config puts output under a config subfolder
-        if [ -d "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3" ]; then
-          cp -r build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Distortion.vst3 artifact/Windows/
-        elif [ -d "build/Distortion_artefacts/VST3" ]; then
-          cp -r build/Distortion_artefacts/VST3/Distortion.vst3 artifact/Windows/
-        else
-          echo "Searching for VST3 output..."
-          find build/Distortion_artefacts -name "Distortion.vst3" -type d
-          cp -r $(find build/Distortion_artefacts -name "Distortion.vst3" -type d | head -1) artifact/Windows/
-        fi
+        echo "=== Distortion_artefacts contents ==="
+        find build/Distortion_artefacts -type d | head -30
+        cp -r build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Distortion.vst3 artifact/Windows/
 
     - name: Upload Windows VST3
       uses: actions/upload-artifact@v4
@@ -112,7 +105,7 @@ jobs:
 
     - name: Build Plugin
       run: |
-        cmake --build build --config ${{ env.BUILD_TYPE }} --target Distortion -j$(nproc)
+        cmake --build build --config ${{ env.BUILD_TYPE }} --target Distortion_VST3 -j$(nproc)
 
     - name: Fix moduleinfo.json
       run: |
