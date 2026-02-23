@@ -253,6 +253,7 @@ private:
 
     juce::AudioBuffer<float> lowBandBuffer;   // For clean low frequencies
     juce::AudioBuffer<float> highBandBuffer;  // For distorted high frequencies
+    juce::AudioBuffer<float> dryBuffer;       // For global wet/dry mix
 
     juce::SmoothedValue<float> smoothedOutputGain;  // Only output gain uses SmoothedValue (normal rate)
     juce::SmoothedValue<float> bypassRamp;  // Bypass crossfade to prevent clicks (10ms)
@@ -262,6 +263,7 @@ private:
     juce::SmoothedValue<float> smoothedLfoDepth;
     juce::SmoothedValue<float> smoothedDistMix;
     juce::SmoothedValue<float> smoothedToneParam;
+    juce::SmoothedValue<float> smoothedGlobalMix;
 
     // Thread safety for state persistence
     std::atomic<bool> stateNeedsReset{false};
@@ -286,6 +288,7 @@ private:
     std::atomic<float>* compEnabledParam = nullptr;
     std::atomic<float>* autoGainEnabledParam = nullptr;
     std::atomic<float>* extremeEnabledParam = nullptr;
+    std::atomic<float>* globalMixParam = nullptr;
 
     std::atomic<float>* distMixParam = nullptr;         // Distortion wet/dry mix (0-100)
     std::atomic<float>* toneParam = nullptr;            // Post-distortion tone (2000-20000Hz)

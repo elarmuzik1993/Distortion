@@ -47,6 +47,7 @@ PluginProcessor::PluginProcessor()
     compEnabledParam = parameters.getRawParameterValue("compEnabled");
     autoGainEnabledParam = parameters.getRawParameterValue("autoGainEnabled");
     extremeEnabledParam = parameters.getRawParameterValue("extremeEnabled");
+    globalMixParam = parameters.getRawParameterValue("globalMix");
     distMixParam = parameters.getRawParameterValue("distMix");
     toneParam = parameters.getRawParameterValue("tone");
     waveshaperCleanParam = parameters.getRawParameterValue("waveshaperClean");
@@ -55,7 +56,7 @@ PluginProcessor::PluginProcessor()
         && highPassFreqParam && subGuardFreqParam && clipTypeParam
         && lfoRateParam && lfoDepthParam && lfoWaveformParam && lfoEnabledParam && lfoDestinationParam && waveshaperMixParam
         && compPeakReductionParam && compMakeupGainParam && compRatioParam && compEnabledParam
-        && autoGainEnabledParam && extremeEnabledParam
+        && autoGainEnabledParam && extremeEnabledParam && globalMixParam
         && distMixParam && toneParam && waveshaperCleanParam);
 
     // Initialize SmoothedValues with default sample rate to prevent assertions
@@ -71,6 +72,8 @@ PluginProcessor::PluginProcessor()
     smoothedDistMix.setCurrentAndTargetValue(1.0f);
     smoothedToneParam.reset(defaultSampleRate, 0.02);
     smoothedToneParam.setCurrentAndTargetValue(20000.0f);
+    smoothedGlobalMix.reset(defaultSampleRate, 0.02);
+    smoothedGlobalMix.setCurrentAndTargetValue(1.0f);
     smoothedGainReduction.reset(defaultSampleRate, DSPConstants::COMP_GR_SMOOTH_TIME_S);
     smoothedGainReduction.setCurrentAndTargetValue(1.0f);
     smoothedSubGuardFreq.reset(defaultSampleRate, DSPConstants::SUBGUARD_FREQ_SMOOTH_TIME_S);
@@ -449,6 +452,8 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     smoothedDistMix.setCurrentAndTargetValue(distMixParam ? distMixParam->load() / 100.0f : 1.0f);
     smoothedToneParam.reset(sampleRate, 0.02);
     smoothedToneParam.setCurrentAndTargetValue(toneParam ? toneParam->load() : 20000.0f);
+    smoothedGlobalMix.reset(sampleRate, 0.02);
+    smoothedGlobalMix.setCurrentAndTargetValue(globalMixParam ? globalMixParam->load() / 100.0f : 1.0f);
 
     compEnvelopeState = 0.0f;
     compRmsHistory = 0.0f;
@@ -635,6 +640,7 @@ if (!oversampling || currentNumChannels != numChannels) {
     const int oversampledBlockSize = static_cast<int>((expectedOversampledSize + oversamplingLatencySamples) * 2 + 128);
     lowBandBuffer.setSize(numChannels, oversampledBlockSize, false, false, true);
     highBandBuffer.setSize(numChannels, oversampledBlockSize, false, false, true);
+    dryBuffer.setSize(numChannels, samplesPerBlock + 64, false, false, true);
 }
 
 
@@ -859,6 +865,10 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         smoothedToneParam.reset(currentSR, 0.02);
         smoothedToneParam.setCurrentAndTargetValue(tempToneParam);
 
+        auto tempGlobalMix = smoothedGlobalMix.getCurrentValue();
+        smoothedGlobalMix.reset(currentSR, 0.02);
+        smoothedGlobalMix.setCurrentAndTargetValue(tempGlobalMix);
+
         // Force update of all dynamic filters on next use
         lastHighPassFreq = -1.0f;  // Force hi-pass filter update
         lastOversampledSampleRate = 0.0;  // Force distortion filter update
@@ -889,6 +899,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const bool autoGainEnabled = autoGainEnabledParam->load() > 0.5f;
     const bool extremeEnabled = extremeEnabledParam->load() > 0.5f;
     auto distMix = distMixParam->load();
+    auto globalMix = globalMixParam->load();
 
     // SAFETY: Validate all parameter values to prevent NaN propagation
     if (std::isnan(highPassFreq)) highPassFreq = DSPConstants::DEFAULT_HIPASS_FREQ;
@@ -897,9 +908,11 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     if (std::isnan(compPeakReduction)) compPeakReduction = 0.0f;
     if (std::isnan(compMakeupGain)) compMakeupGain = 50.0f;
     if (std::isnan(distMix)) distMix = 100.0f;
+    if (std::isnan(globalMix)) globalMix = 100.0f;
 
     // Set targets for smoothed parameters (prevent zipper noise from automation)
     smoothedLfoDepth.setTargetValue(lfoDepth);
+    smoothedGlobalMix.setTargetValue(globalMix / 100.0f);
 
     // LFO modulation for dynamic distortion effects
     // Calculate LFO value using selected waveform (output -1 to +1)
@@ -1013,6 +1026,17 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Set target value for output gain (consumed at normal rate)
     smoothedOutputGain.setTargetValue(outGain);
 
+    // ========== SAVE DRY BUFFER FOR GLOBAL MIX ==========
+    const float globalMixAmount = smoothedGlobalMix.getCurrentValue();
+    const bool needsGlobalMix = globalMixAmount < 0.999f;
+    if (needsGlobalMix)
+    {
+        if (dryBuffer.getNumSamples() < buffer.getNumSamples())
+            dryBuffer.setSize(buffer.getNumChannels(), buffer.getNumSamples() + 64, false, false, true);
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            dryBuffer.copyFrom(ch, 0, buffer, ch, 0, buffer.getNumSamples());
+    }
+
     // Bypass state detection with crossfade (prevent clicks)
     const bool bypassed = (modulatedDistortionParam < 0.5f && !compEnabled);
     if (bypassed && !wasBypassed)
@@ -1097,6 +1121,27 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                     channelData[sample] *= outputLimiterEnvelope;
                 }
             }
+        }
+
+        // ========== GLOBAL MIX (Bypass path) ==========
+        if (needsGlobalMix)
+        {
+            for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+            {
+                const float currentMix = smoothedGlobalMix.getNextValue();
+                for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+                {
+                    auto* channelData = buffer.getWritePointer(channel);
+                    const float drySample = dryBuffer.getSample(channel, sample);
+                    channelData[sample] = drySample * (1.0f - currentMix) + channelData[sample] * currentMix;
+                }
+            }
+        }
+        else
+        {
+            // Consume smoothed values to keep state in sync
+            for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+                smoothedGlobalMix.getNextValue();
         }
 
         // Update oscilloscope even in bypass mode
@@ -1845,6 +1890,27 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         }
     }
 
+    // ========== GLOBAL MIX (Active path) ==========
+    if (needsGlobalMix)
+    {
+        for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+        {
+            const float currentMix = smoothedGlobalMix.getNextValue();
+            for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+            {
+                auto* channelData = buffer.getWritePointer(channel);
+                const float drySample = dryBuffer.getSample(channel, sample);
+                channelData[sample] = drySample * (1.0f - currentMix) + channelData[sample] * currentMix;
+            }
+        }
+    }
+    else
+    {
+        // Consume smoothed values to keep state in sync
+        for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+            smoothedGlobalMix.getNextValue();
+    }
+
     // Calculate phase correlation for UI meter
     {
         float sumLR = 0.0f, sumLL = 0.0f, sumRR = 0.0f;
@@ -2241,6 +2307,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         juce::ParameterID{ "extremeEnabled", 1 },
         "Extreme",
         false));  // Default OFF
+
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "globalMix", 1 },
+        "Global Mix",
+        juce::NormalisableRange<float>(0.0f, 100.0f, 0.1f),
+        100.0f));  // Default 100% wet
 
     return { params.begin(), params.end() };
 }

@@ -325,6 +325,21 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     // Load presets
     refreshPresetList();
 
+    // Setup global mix slider (plugin wet/dry)
+    addAndMakeVisible(globalMixSlider);
+    globalMixSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    globalMixSlider.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
+    globalMixSlider.setColour(juce::Slider::trackColourId, juce::Colour(0xFFFF0044));
+    globalMixSlider.setColour(juce::Slider::thumbColourId, juce::Colours::white);
+    globalMixSlider.setColour(juce::Slider::backgroundColourId, juce::Colour(0xFF333333));
+    globalMixAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.parameters, "globalMix", globalMixSlider);
+
+    addAndMakeVisible(globalMixLabel);
+    globalMixLabel.setText("MIX", juce::dontSendNotification);
+    globalMixLabel.setJustificationType(juce::Justification::centredRight);
+    globalMixLabel.setColour(juce::Label::textColourId, juce::Colour(0xFFAAAAAA));
+
     // Setup randomize button
     addAndMakeVisible(randomizeButton);
     randomizeButton.setButtonText("Randomize");
@@ -414,6 +429,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     parameterLocks["compEnabled"] = false;
     parameterLocks["autoGainEnabled"] = false;
     parameterLocks["extremeEnabled"] = false;
+    parameterLocks["globalMix"] = false;
 
     // Add lock icons
     addAndMakeVisible(inputGainLock);
@@ -595,6 +611,15 @@ void PluginEditor::resized()
     const int settingsBtnSize = S(24);
     settingsButton.setBounds(randomizeX + randomizeButtonWidth + presetSpacing,
                              presetY, settingsBtnSize, settingsBtnSize);
+
+    // Global Mix slider - below preset selector
+    const int mixLabelWidth = S(28);
+    const int mixSliderY = presetY + presetHeight + S(2);
+    const int mixSliderHeight = S(14);
+    globalMixLabel.setBounds(presetX, mixSliderY, mixLabelWidth, mixSliderHeight);
+    globalMixLabel.setFont(juce::Font(9.0f * s, juce::Font::bold));
+    globalMixSlider.setBounds(presetX + mixLabelWidth + S(2), mixSliderY,
+                              presetSelectorWidth - mixLabelWidth - S(2), mixSliderHeight);
 
     // ========== LFO & COMPRESSION TABS (TOP-RIGHT) ==========
     const int tabHeaderHeight = S(25);
@@ -1025,6 +1050,7 @@ void PluginEditor::randomizeAllParameters()
     randomizeBoolParam("compEnabled");
     randomizeBoolParam("autoGainEnabled");
     randomizeBoolParam("extremeEnabled");
+    randomizeFloatParam("globalMix", 50.0f, 100.0f);
 }
 
 juce::File PluginEditor::getPresetDirectory()

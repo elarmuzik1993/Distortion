@@ -1381,6 +1381,11 @@ private:
 
     RandomizeButton randomizeButton;
 
+    // Global mix slider (plugin wet/dry)
+    juce::Slider globalMixSlider;
+    juce::Label globalMixLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> globalMixAttachment;
+
     // Preset selector components
     juce::ComboBox presetSelector;
     juce::Label presetLabel;
