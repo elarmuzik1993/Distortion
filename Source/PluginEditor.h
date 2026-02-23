@@ -737,6 +737,13 @@ public:
             settingsState.oversamplingMode = oversamplingCombo.getSelectedId() - 1;
         };
 
+        // Auto Gain toggle
+        addAndMakeVisible(autoGainToggle);
+        autoGainToggle.setButtonText("");
+        autoGainToggle.setLookAndFeel(&pillLnf);
+        autoGainAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+            apvts, "autoGainEnabled", autoGainToggle);
+
         // Window Scale combo
         addAndMakeVisible(windowScaleCombo);
         windowScaleCombo.addItem("70%", 70);
@@ -787,6 +794,7 @@ public:
     ~SettingsOverlay() override
     {
         antiAliasToggle.setLookAndFeel(nullptr);
+        autoGainToggle.setLookAndFeel(nullptr);
         tooltipsToggle.setLookAndFeel(nullptr);
         oscilloscopeToggle.setLookAndFeel(nullptr);
         scopeStereoToggle.setLookAndFeel(nullptr);
@@ -847,6 +855,12 @@ public:
         // Oversampling row label
         auto osRow = inner.removeFromTop(24.0f);
         g.drawText("Oversampling", osRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
+
+        inner.removeFromTop(6.0f);
+
+        // Auto Gain row label
+        auto agRow = inner.removeFromTop(24.0f);
+        g.drawText("Auto Gain", agRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
 
         inner.removeFromTop(16.0f);
 
@@ -912,6 +926,13 @@ public:
         auto osRow = inner.removeFromTop(24.0f);
         osRow.removeFromLeft(140.0f);
         oversamplingCombo.setBounds(osRow.removeFromLeft(70).reduced(0, 2).toNearestInt());
+
+        inner.removeFromTop(6.0f);
+
+        // Auto Gain row
+        auto agRow = inner.removeFromTop(24.0f);
+        agRow.removeFromLeft(140.0f);
+        autoGainToggle.setBounds(agRow.removeFromLeft(50).reduced(0, 2).toNearestInt());
 
         inner.removeFromTop(16.0f);
 
@@ -991,6 +1012,7 @@ private:
     } comboLnf;
 
     juce::ToggleButton antiAliasToggle;
+    juce::ToggleButton autoGainToggle;
     juce::ComboBox oversamplingCombo;
     juce::ComboBox windowScaleCombo;
     juce::ToggleButton tooltipsToggle;
@@ -998,11 +1020,12 @@ private:
     juce::ToggleButton scopeStereoToggle;
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> cleanModeAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> autoGainAttachment;
 
     juce::Rectangle<float> getPanelBounds() const
     {
         const float panelW = 320.0f;
-        const float panelH = 370.0f;
+        const float panelH = 400.0f;
         return juce::Rectangle<float>(panelW, panelH)
             .withCentre(getLocalBounds().getCentre().toFloat());
     }

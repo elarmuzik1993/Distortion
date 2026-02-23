@@ -402,6 +402,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     parameterLocks["compMakeupGain"] = false;
     parameterLocks["compRatio"] = false;
     parameterLocks["compEnabled"] = false;
+    parameterLocks["autoGainEnabled"] = false;
 
     // Add lock icons
     addAndMakeVisible(inputGainLock);
@@ -1006,6 +1007,7 @@ void PluginEditor::randomizeAllParameters()
     randomizeFloatParam("compMakeupGain", 0.0f, 100.0f);
     randomizeChoiceParam("compRatio", 2);
     randomizeBoolParam("compEnabled");
+    randomizeBoolParam("autoGainEnabled");
 }
 
 juce::File PluginEditor::getPresetDirectory()

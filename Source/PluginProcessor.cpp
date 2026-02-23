@@ -45,6 +45,7 @@ PluginProcessor::PluginProcessor()
     compMakeupGainParam = parameters.getRawParameterValue("compMakeupGain");
     compRatioParam = parameters.getRawParameterValue("compRatio");
     compEnabledParam = parameters.getRawParameterValue("compEnabled");
+    autoGainEnabledParam = parameters.getRawParameterValue("autoGainEnabled");
     distMixParam = parameters.getRawParameterValue("distMix");
     toneParam = parameters.getRawParameterValue("tone");
     waveshaperCleanParam = parameters.getRawParameterValue("waveshaperClean");
@@ -53,6 +54,7 @@ PluginProcessor::PluginProcessor()
         && highPassFreqParam && subGuardFreqParam && clipTypeParam
         && lfoRateParam && lfoDepthParam && lfoWaveformParam && lfoEnabledParam && lfoDestinationParam && waveshaperMixParam
         && compPeakReductionParam && compMakeupGainParam && compRatioParam && compEnabledParam
+        && autoGainEnabledParam
         && distMixParam && toneParam && waveshaperCleanParam);
 
     // Initialize SmoothedValues with default sample rate to prevent assertions
@@ -883,6 +885,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     auto compMakeupGain = compMakeupGainParam->load();
     const int compRatioMode = static_cast<int>(compRatioParam->load());
     const bool compEnabled = compEnabledParam->load() > 0.5f;
+    const bool autoGainEnabled = autoGainEnabledParam->load() > 0.5f;
     auto distMix = distMixParam->load();
 
     // SAFETY: Validate all parameter values to prevent NaN propagation
@@ -1215,21 +1218,24 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     }
 
     // ========== AUTO-GAIN COMPENSATION: Measure input RMS ==========
-    // Calculate input RMS for auto-gain compensation (before distortion)
-    float inputSumSquares = 0.0f;
-    for (size_t ch = 0; ch < numChannels; ++ch)
+    if (autoGainEnabled)
     {
-        const float* data = oversampledBlock.getChannelPointer(ch);
-        for (size_t i = 0; i < numSamples; ++i)
-            inputSumSquares += data[i] * data[i];
-    }
-    const float inputRms = std::sqrt(inputSumSquares / (numSamples * numChannels));
+        // Calculate input RMS for auto-gain compensation (before distortion)
+        float inputSumSquares = 0.0f;
+        for (size_t ch = 0; ch < numChannels; ++ch)
+        {
+            const float* data = oversampledBlock.getChannelPointer(ch);
+            for (size_t i = 0; i < numSamples; ++i)
+                inputSumSquares += data[i] * data[i];
+        }
+        const float inputRms = std::sqrt(inputSumSquares / (numSamples * numChannels));
 
-    // Update input envelope (one-pole filter with asymmetric attack/release)
-    if (inputRms > autoGainInputEnvelope)
-        autoGainInputEnvelope = autoGainAttackCoeff * autoGainInputEnvelope + (1.0f - autoGainAttackCoeff) * inputRms;
-    else
-        autoGainInputEnvelope = autoGainReleaseCoeff * autoGainInputEnvelope + (1.0f - autoGainReleaseCoeff) * inputRms;
+        // Update input envelope (one-pole filter with asymmetric attack/release)
+        if (inputRms > autoGainInputEnvelope)
+            autoGainInputEnvelope = autoGainAttackCoeff * autoGainInputEnvelope + (1.0f - autoGainAttackCoeff) * inputRms;
+        else
+            autoGainInputEnvelope = autoGainReleaseCoeff * autoGainInputEnvelope + (1.0f - autoGainReleaseCoeff) * inputRms;
+    }
 
     // Sub Guard variable-slope crossover processing
     // Check if Sub Guard is OFF (value <= 1.0 Hz to account for smoothing)
@@ -1415,39 +1421,47 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     }  // end else (Sub Guard active)
 
     // ========== AUTO-GAIN COMPENSATION: Measure output RMS and apply compensation ==========
-    // Calculate output RMS for auto-gain compensation (after distortion)
-    float outputSumSquares = 0.0f;
-    for (size_t ch = 0; ch < numChannels; ++ch)
+    if (autoGainEnabled)
     {
-        const float* data = oversampledBlock.getChannelPointer(ch);
-        for (size_t i = 0; i < numSamples; ++i)
-            outputSumSquares += data[i] * data[i];
-    }
-    const float outputRms = std::sqrt(outputSumSquares / (numSamples * numChannels));
+        // Calculate output RMS for auto-gain compensation (after distortion)
+        float outputSumSquares = 0.0f;
+        for (size_t ch = 0; ch < numChannels; ++ch)
+        {
+            const float* data = oversampledBlock.getChannelPointer(ch);
+            for (size_t i = 0; i < numSamples; ++i)
+                outputSumSquares += data[i] * data[i];
+        }
+        const float outputRms = std::sqrt(outputSumSquares / (numSamples * numChannels));
 
-    // Update output envelope (one-pole filter with asymmetric attack/release)
-    if (outputRms > autoGainOutputEnvelope)
-        autoGainOutputEnvelope = autoGainAttackCoeff * autoGainOutputEnvelope + (1.0f - autoGainAttackCoeff) * outputRms;
+        // Update output envelope (one-pole filter with asymmetric attack/release)
+        if (outputRms > autoGainOutputEnvelope)
+            autoGainOutputEnvelope = autoGainAttackCoeff * autoGainOutputEnvelope + (1.0f - autoGainAttackCoeff) * outputRms;
+        else
+            autoGainOutputEnvelope = autoGainReleaseCoeff * autoGainOutputEnvelope + (1.0f - autoGainReleaseCoeff) * outputRms;
+
+        // Calculate compensation gain (input/output ratio with safety limits)
+        if (autoGainOutputEnvelope > 0.0001f)  // Avoid division by near-zero
+        {
+            const float rawCompensation = autoGainInputEnvelope / autoGainOutputEnvelope;
+            autoGainCompensation = juce::jlimit(DSPConstants::AUTO_GAIN_MIN, DSPConstants::AUTO_GAIN_MAX, rawCompensation);
+        }
+        else
+        {
+            autoGainCompensation = 1.0f;  // No signal = no compensation
+        }
+
+        // Apply auto-gain compensation to oversampled block
+        for (size_t ch = 0; ch < numChannels; ++ch)
+        {
+            float* data = oversampledBlock.getChannelPointer(ch);
+            for (size_t i = 0; i < numSamples; ++i)
+                data[i] *= autoGainCompensation;
+        }
+    }
     else
-        autoGainOutputEnvelope = autoGainReleaseCoeff * autoGainOutputEnvelope + (1.0f - autoGainReleaseCoeff) * outputRms;
-
-    // Calculate compensation gain (input/output ratio with safety limits)
-    if (autoGainOutputEnvelope > 0.0001f)  // Avoid division by near-zero
     {
-        const float rawCompensation = autoGainInputEnvelope / autoGainOutputEnvelope;
-        autoGainCompensation = juce::jlimit(DSPConstants::AUTO_GAIN_MIN, DSPConstants::AUTO_GAIN_MAX, rawCompensation);
-    }
-    else
-    {
-        autoGainCompensation = 1.0f;  // No signal = no compensation
-    }
-
-    // Apply auto-gain compensation to oversampled block
-    for (size_t ch = 0; ch < numChannels; ++ch)
-    {
-        float* data = oversampledBlock.getChannelPointer(ch);
-        for (size_t i = 0; i < numSamples; ++i)
-            data[i] *= autoGainCompensation;
+        // Reset state so re-enabling doesn't cause jumps
+        autoGainCompensation = 1.0f;
     }
 
     // Store final parameter values for next block's interpolation
@@ -2210,6 +2224,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         juce::ParameterID{ "waveshaperClean", 1 },
         "Clean Mode",
         false));  // Default false = Gritty mode (tone→waveshaper, current behavior)
+
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{ "autoGainEnabled", 1 },
+        "Auto Gain",
+        true));  // Default ON for backward compatibility
 
     return { params.begin(), params.end() };
 }

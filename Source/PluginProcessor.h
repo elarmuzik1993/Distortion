@@ -284,6 +284,7 @@ private:
     std::atomic<float>* compMakeupGainParam = nullptr;
     std::atomic<float>* compRatioParam = nullptr;  
     std::atomic<float>* compEnabledParam = nullptr;
+    std::atomic<float>* autoGainEnabledParam = nullptr;
 
     std::atomic<float>* distMixParam = nullptr;         // Distortion wet/dry mix (0-100)
     std::atomic<float>* toneParam = nullptr;            // Post-distortion tone (2000-20000Hz)
