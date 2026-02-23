@@ -39,8 +39,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     versionLabel.setColour(juce::Label::textColourId, juce::Colour(0x88, 0x88, 0x88));  // Gray text
     versionLabel.setJustificationType(juce::Justification::left);
 
-    // Set window size (70% of 960x564 base design)
-    setSize(672, 395);
+    // Note: setSize moved to end of constructor so all components exist when resized() fires
     setResizable(false, false);
 
     // Load background image from Resources folder
@@ -475,6 +474,9 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     loadSettings();
     applyOscilloscopeEnabled(settingsState.oscilloscopeEnabled);
     oscilloscope.setStereoMode(settingsState.oscilloscopeStereo);
+
+    // Set window size AFTER all components are added so resized() can position them all
+    setSize(672, 395);
     applyWindowScale(settingsState.windowScalePercent);
 
     // Start timer for LFO modulation visual feedback (30Hz)
@@ -612,14 +614,14 @@ void PluginEditor::resized()
     settingsButton.setBounds(randomizeX + randomizeButtonWidth + presetSpacing,
                              presetY, settingsBtnSize, settingsBtnSize);
 
-    // Global Mix slider - below preset selector
+    // Global Mix slider - directly below preset selector
     const int mixLabelWidth = S(28);
     const int mixSliderY = presetY + presetHeight + S(2);
-    const int mixSliderHeight = S(14);
+    const int mixSliderHeight = S(16);
     globalMixLabel.setBounds(presetX, mixSliderY, mixLabelWidth, mixSliderHeight);
     globalMixLabel.setFont(juce::Font(9.0f * s, juce::Font::bold));
-    globalMixSlider.setBounds(presetX + mixLabelWidth + S(2), mixSliderY,
-                              presetSelectorWidth - mixLabelWidth - S(2), mixSliderHeight);
+    globalMixSlider.setBounds(presetX + mixLabelWidth, mixSliderY,
+                              presetSelectorWidth - mixLabelWidth, mixSliderHeight);
 
     // ========== LFO & COMPRESSION TABS (TOP-RIGHT) ==========
     const int tabHeaderHeight = S(25);
