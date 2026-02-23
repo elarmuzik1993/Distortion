@@ -213,6 +213,16 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     clipTypeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.parameters, "clipType", clipTypeComboBox);
 
+    addAndMakeVisible(extremeButton);
+    extremeButton.setButtonText("EXTREME");
+    extremeButton.setClickingTogglesState(true);
+    extremeButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF1A1A1A));
+    extremeButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xFFFF0044));
+    extremeButton.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFFFF0044));
+    extremeButton.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+    extremeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        audioProcessor.parameters, "extremeEnabled", extremeButton);
+
     // Setup preset selector
     // Note: presetLabel removed - no "Preset:" text shown
     presetLabel.setText("", juce::dontSendNotification);
@@ -403,6 +413,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     parameterLocks["compRatio"] = false;
     parameterLocks["compEnabled"] = false;
     parameterLocks["autoGainEnabled"] = false;
+    parameterLocks["extremeEnabled"] = false;
 
     // Add lock icons
     addAndMakeVisible(inputGainLock);
@@ -739,6 +750,11 @@ void PluginEditor::resized()
     clipTypeComboBox.setBounds(currentX + comboXOffset, comboY, comboWidth, comboHeight);
     clipTypeLabel.setBounds(currentX, rowY + knobSize + lockInset, clipTypeColumnWidth, labelHeight);
     clipTypeLock.setBounds(currentX + comboXOffset + comboWidth - S(12) - S(2), comboY, S(12), S(12));
+    extremeButton.setBounds(
+        currentX + comboXOffset,
+        comboY + comboHeight + S(2),
+        comboWidth,
+        S(14));
     currentX += clipTypeColumnWidth + controlSpacing;
 
     // Tone
@@ -1008,6 +1024,7 @@ void PluginEditor::randomizeAllParameters()
     randomizeChoiceParam("compRatio", 2);
     randomizeBoolParam("compEnabled");
     randomizeBoolParam("autoGainEnabled");
+    randomizeBoolParam("extremeEnabled");
 }
 
 juce::File PluginEditor::getPresetDirectory()

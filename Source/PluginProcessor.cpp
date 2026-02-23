@@ -46,6 +46,7 @@ PluginProcessor::PluginProcessor()
     compRatioParam = parameters.getRawParameterValue("compRatio");
     compEnabledParam = parameters.getRawParameterValue("compEnabled");
     autoGainEnabledParam = parameters.getRawParameterValue("autoGainEnabled");
+    extremeEnabledParam = parameters.getRawParameterValue("extremeEnabled");
     distMixParam = parameters.getRawParameterValue("distMix");
     toneParam = parameters.getRawParameterValue("tone");
     waveshaperCleanParam = parameters.getRawParameterValue("waveshaperClean");
@@ -54,7 +55,7 @@ PluginProcessor::PluginProcessor()
         && highPassFreqParam && subGuardFreqParam && clipTypeParam
         && lfoRateParam && lfoDepthParam && lfoWaveformParam && lfoEnabledParam && lfoDestinationParam && waveshaperMixParam
         && compPeakReductionParam && compMakeupGainParam && compRatioParam && compEnabledParam
-        && autoGainEnabledParam
+        && autoGainEnabledParam && extremeEnabledParam
         && distMixParam && toneParam && waveshaperCleanParam);
 
     // Initialize SmoothedValues with default sample rate to prevent assertions
@@ -886,6 +887,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const int compRatioMode = static_cast<int>(compRatioParam->load());
     const bool compEnabled = compEnabledParam->load() > 0.5f;
     const bool autoGainEnabled = autoGainEnabledParam->load() > 0.5f;
+    const bool extremeEnabled = extremeEnabledParam->load() > 0.5f;
     auto distMix = distMixParam->load();
 
     // SAFETY: Validate all parameter values to prevent NaN propagation
@@ -996,6 +998,9 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Validate distortion drive
     if (std::isnan(distortionDrive) || std::isinf(distortionDrive) || distortionDrive < 1.0f)
         distortionDrive = 1.0f;
+
+    if (extremeEnabled)
+        distortionDrive *= 4.0f;
 
     // Convert modulated gain parameters to processing values
     const float inputGain = std::pow(inGainParam / 50.0f, 1.5f);
@@ -1176,7 +1181,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
     // ========== PRE-DISTORTION TRANSIENT TAMER ==========
     // Light compression to even out dynamics before distortion
-    if (modulatedDistortionParam >= 0.5f)
+    if (modulatedDistortionParam >= 0.5f && !extremeEnabled)
     {
         const float thresholdLinear = juce::Decibels::decibelsToGain(DSPConstants::PRE_COMP_THRESHOLD_DB);
         const float ratio = DSPConstants::PRE_COMP_RATIO;
@@ -1276,7 +1281,8 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                                                             1.0f / (1.0f + std::sqrt(clampedEnv)));
 
                     // Apply studio distortion with sub-linear harmonic scaling
-                    float distorted = applyStudioDistortion(inputSample, currentInputGain, currentDrive, clipType, harmonicScale);
+                    float distorted = applyStudioDistortion(inputSample, currentInputGain, currentDrive, clipType,
+                        extremeEnabled ? 1.0f : harmonicScale);
 
                     // Wet/Dry mix
                     channelData[sample] = inputSample * (1.0f - mixAmount) + distorted * mixAmount;
@@ -1394,7 +1400,8 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                                                             1.0f / (1.0f + std::sqrt(clampedEnv)));
 
                     // Apply studio distortion with sub-linear harmonic scaling
-                    float distorted = applyStudioDistortion(inputSample, currentInputGain, currentDrive, clipType, harmonicScale);
+                    float distorted = applyStudioDistortion(inputSample, currentInputGain, currentDrive, clipType,
+                        extremeEnabled ? 1.0f : harmonicScale);
 
                     // Wet/Dry mix (DC blocking handled by manual DC blocker after downsampling)
                     highBandData[sample] = inputSample * (1.0f - mixAmount) + distorted * mixAmount;
@@ -2229,6 +2236,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         juce::ParameterID{ "autoGainEnabled", 1 },
         "Auto Gain",
         true));  // Default ON for backward compatibility
+
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{ "extremeEnabled", 1 },
+        "Extreme",
+        false));  // Default OFF
 
     return { params.begin(), params.end() };
 }

@@ -1361,6 +1361,9 @@ private:
     juce::ComboBox clipTypeComboBox;
     juce::Label clipTypeLabel;
 
+    juce::TextButton extremeButton;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> extremeAttachment;
+
     // Custom button class for randomize with right-click menu
     class RandomizeButton : public juce::TextButton
     {
