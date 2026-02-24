@@ -536,7 +536,9 @@ void PluginEditor::setupSlider(CustomKnob& slider,
     label.setJustificationType(juce::Justification::centred);
     label.setColour(juce::Label::textColourId, juce::Colours::white);  // White text
     label.setColour(juce::Label::backgroundColourId, juce::Colours::transparentWhite);
-    label.setFont(juce::Font(12.0f * (getWidth() / 960.0f), juce::Font::bold));
+    // Use base scale factor (fonts get repositioned in resized() anyway)
+    const float fontScale = std::max(getWidth() / 960.0f, 672.0f / 960.0f);
+    label.setFont(juce::Font(12.0f * fontScale, juce::Font::bold));
 
     addAndMakeVisible(label);
 }
