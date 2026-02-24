@@ -77,7 +77,7 @@ PluginProcessor::PluginProcessor()
     smoothedGainReduction.reset(defaultSampleRate, DSPConstants::COMP_GR_SMOOTH_TIME_S);
     smoothedGainReduction.setCurrentAndTargetValue(1.0f);
     smoothedSubGuardFreq.reset(defaultSampleRate, DSPConstants::SUBGUARD_FREQ_SMOOTH_TIME_S);
-    smoothedSubGuardFreq.setCurrentAndTargetValue(0.0f);
+    smoothedSubGuardFreq.setCurrentAndTargetValue(DSPConstants::SUBGUARD_FREQ_DEFAULT);
 }
 
 PluginProcessor::~PluginProcessor()
@@ -558,22 +558,23 @@ if (!oversampling || currentNumChannels != numChannels) {
     *highPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq);
     highPassFilter2.reset();
 
-    // LR12 filters (2nd order = single stage) - AGGRESSIVE mode
+    // LR12 filters (2nd order = single stage, Q=0.5 for true Linkwitz-Riley 2) - AGGRESSIVE mode
+    constexpr float lr2Q = 0.5f;
     subGuardLP12.prepare(spec);
-    *subGuardLP12.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq);
+    *subGuardLP12.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr2Q);
     subGuardLP12.reset();
 
     subGuardHP12.prepare(spec);
-    *subGuardHP12.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq);
+    *subGuardHP12.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
     subGuardHP12.reset();
 
-    // LR18 filters (1st + 2nd order = 3rd order approximation) - CONTROL mode
+    // LR18 filters (1st + 2nd order = 3rd order approximation, Q=0.5 on 2nd-order) - CONTROL mode
     subGuardLP18_1.prepare(spec);
     *subGuardLP18_1.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderLowPass(spec.sampleRate, filterInitFreq);
     subGuardLP18_1.reset();
 
     subGuardLP18_2.prepare(spec);
-    *subGuardLP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq);
+    *subGuardLP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr2Q);
     subGuardLP18_2.reset();
 
     subGuardHP18_1.prepare(spec);
@@ -581,7 +582,7 @@ if (!oversampling || currentNumChannels != numChannels) {
     subGuardHP18_1.reset();
 
     subGuardHP18_2.prepare(spec);
-    *subGuardHP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq);
+    *subGuardHP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
     subGuardHP18_2.reset();
 
     // Initialize Sub Guard smoothing (use actual parameter value, not filterInitFreq)
@@ -1472,6 +1473,25 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         }
     }  // end else (Sub Guard active)
 
+    // ========== SUB GUARD: Remove clean low band before post-distortion processing ==========
+    // When Sub Guard is active, subtract the clean low band from oversampledBlock
+    // so that waveshaper, tone filter, and compressor only process the high band.
+    // The clean low band is added back after all nonlinear processing is complete.
+    const bool subGuardActive = (subGuardFreq > 1.0f);
+    if (subGuardActive)
+    {
+        for (size_t channel = 0; channel < numChannels; ++channel)
+        {
+            auto* outputData = oversampledBlock.getChannelPointer(channel);
+            const auto* lowData = lowBandBuffer.getReadPointer(static_cast<int>(channel));
+
+            for (size_t sample = 0; sample < numSamples; ++sample)
+            {
+                outputData[sample] -= lowData[sample];
+            }
+        }
+    }
+
     // ========== AUTO-GAIN COMPENSATION: Measure output RMS and apply compensation ==========
     if (autoGainEnabled)
     {
@@ -1778,6 +1798,22 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         }
     }
 
+    // ========== SUB GUARD: Add clean low band back after all nonlinear processing ==========
+    // The clean sub bypasses: auto-gain, tone filter, waveshaper, compressor, and soft clipper
+    if (subGuardActive)
+    {
+        for (size_t channel = 0; channel < numChannels; ++channel)
+        {
+            auto* outputData = oversampledBlock.getChannelPointer(channel);
+            const auto* lowData = lowBandBuffer.getReadPointer(static_cast<int>(channel));
+
+            for (size_t sample = 0; sample < numSamples; ++sample)
+            {
+                outputData[sample] += lowData[sample];
+            }
+        }
+    }
+
     // Downsample back into original buffer
     oversampling->processSamplesDown(inputBlock);
 
@@ -1785,8 +1821,9 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // This eliminates aliasing from harmonic generation
 
     // Manual DC blocker - simple one-pole filter that's extremely stable
-    // y[n] = x[n] - x[n-1] + R * y[n-1], where R ≈ 0.995 for ~35Hz cutoff at 44.1kHz
-    constexpr float R = 0.995f;  // Higher = lower cutoff, more stable
+    // y[n] = x[n] - x[n-1] + R * y[n-1], where R ≈ 0.9995 for ~3.5Hz cutoff at 44.1kHz
+    // Previous value 0.995 (~35Hz) was stealing 2.5dB at 40Hz and 1.2dB at 60Hz
+    constexpr float R = 0.9995f;  // ~3.5Hz cutoff: removes DC without touching sub
     // CRITICAL: Clamp to 2 channels max to prevent array out-of-bounds access
     // (manualDCBlockerPrevInput/Output arrays are fixed size [2])
     const int dcBlockerChannels = juce::jmin(buffer.getNumChannels(), 2);
@@ -2142,21 +2179,23 @@ void PluginProcessor::updateSubGuardCoefficients(float freq, double sampleRate)
     if (highPassFilter2.state)
         *highPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(sampleRate, freq);
 
-    // LR12 filters (single 2nd-order stage)
+    // LR12 filters (single 2nd-order stage with Q=0.5 for true Linkwitz-Riley 2)
+    // Default Butterworth Q=0.707 causes +3dB boost at crossover; LR2 Q=0.5 sums flat
+    constexpr float lr2Q = 0.5f;
     if (subGuardLP12.state)
-        *subGuardLP12.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(sampleRate, freq);
+        *subGuardLP12.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(sampleRate, freq, lr2Q);
     if (subGuardHP12.state)
-        *subGuardHP12.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(sampleRate, freq);
+        *subGuardHP12.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(sampleRate, freq, lr2Q);
 
-    // LR18 filters (1st + 2nd order cascaded)
+    // LR18 filters (1st + 2nd order cascaded, Q=0.5 on 2nd-order stage for flat sum)
     if (subGuardLP18_1.state)
         *subGuardLP18_1.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderLowPass(sampleRate, freq);
     if (subGuardLP18_2.state)
-        *subGuardLP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(sampleRate, freq);
+        *subGuardLP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(sampleRate, freq, lr2Q);
     if (subGuardHP18_1.state)
         *subGuardHP18_1.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(sampleRate, freq);
     if (subGuardHP18_2.state)
-        *subGuardHP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(sampleRate, freq);
+        *subGuardHP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(sampleRate, freq, lr2Q);
 }
 
 //Add Parameter Definition Here
@@ -2199,7 +2238,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
             0.1f,  // 0.1 Hz step
             0.5f   // Logarithmic skew for better low-end control
         ),
-        DSPConstants::SUBGUARD_FREQ_DEFAULT));  // Default 0 Hz (OFF)
+        DSPConstants::SUBGUARD_FREQ_DEFAULT));  // Default 60 Hz (LR24 sub-preserving)
 
     params.push_back(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID{ "clipType", 1 },

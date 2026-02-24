@@ -25,7 +25,7 @@ namespace DSPConstants
     constexpr float SUBGUARD_FREQ_OFF = 0.0f;                 // OFF sentinel value (no band-split)
     constexpr float SUBGUARD_FREQ_MIN = 50.0f;                // Minimum crossover frequency
     constexpr float SUBGUARD_FREQ_MAX = 200.0f;               // Maximum crossover frequency
-    constexpr float SUBGUARD_FREQ_DEFAULT = 0.0f;             // Default to OFF (full-range distortion)
+    constexpr float SUBGUARD_FREQ_DEFAULT = 60.0f;            // Default to 60Hz LR24 (sub-preserving, Saturn 2 style)
     constexpr float SUBGUARD_SNAP_TOLERANCE = 8.0f;           // ±8 Hz snap zone
     constexpr float SUBGUARD_SNAP_PRESERVE = 60.0f;           // LR24 - steepest slope
     constexpr float SUBGUARD_SNAP_CONTROL = 100.0f;           // LR18 - balanced
@@ -212,7 +212,7 @@ private:
     juce::dsp::IIR::Coefficients<float>> preHighPassFilter;
 
     // Manual DC blocker state (simple one-pole, extremely stable)
-    // y[n] = x[n] - x[n-1] + R * y[n-1], where R ≈ 0.995 for ~35Hz cutoff at 44.1kHz
+    // y[n] = x[n] - x[n-1] + R * y[n-1], where R ≈ 0.9995 for ~3.5Hz cutoff at 44.1kHz
     float manualDCBlockerPrevInput[2] = { 0.0f, 0.0f };
     float manualDCBlockerPrevOutput[2] = { 0.0f, 0.0f };
 
