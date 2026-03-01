@@ -477,6 +477,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     audioProcessor.oversamplingNeedsRecreate.store(true);
     applyOscilloscopeEnabled(settingsState.oscilloscopeEnabled);
     oscilloscope.setStereoMode(settingsState.oscilloscopeStereo);
+    oscilloscope.setScopeLength(settingsState.scopeLength);
 
     // Set window size AFTER all components are added so resized() can position them all
     setSize(672, 395);
@@ -1311,6 +1312,9 @@ void PluginEditor::showSettingsOverlay()
     };
     settingsOverlay->onWindowScaleChanged = [this](int scalePercent) {
         applyWindowScale(scalePercent);
+    };
+    settingsOverlay->onScopeLengthChanged = [this](int length) {
+        oscilloscope.setScopeLength(length);
     };
 }
 

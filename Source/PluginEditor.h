@@ -36,6 +36,14 @@ public:
         repaint();
     }
 
+    void setScopeLength(int samples)
+    {
+        samples = juce::jlimit(64, 1024, samples);
+        const juce::ScopedLock sl(bufferLock);
+        cachedBuffer.setSize(2, samples);
+        cachedBuffer.clear();
+    }
+
     void resized() override
     {
         // Stop timer during resize to prevent concurrent buffer access
@@ -650,6 +658,7 @@ struct SettingsState
     bool tooltipsEnabled = false;
     int windowScalePercent = 70;
     int oversamplingMode = 2; // 0=Off, 1=2x, 2=4x
+    int scopeLength = 512;
 
     void saveToFile(const juce::File& file) const
     {
@@ -659,6 +668,7 @@ struct SettingsState
         xml.setAttribute("tooltips", tooltipsEnabled);
         xml.setAttribute("windowScale", windowScalePercent);
         xml.setAttribute("oversampling", oversamplingMode);
+        xml.setAttribute("scopeLength", scopeLength);
         xml.writeTo(file);
     }
 
@@ -672,6 +682,7 @@ struct SettingsState
         tooltipsEnabled = xml->getBoolAttribute("tooltips", false);
         windowScalePercent = xml->getIntAttribute("windowScale", 100);
         oversamplingMode = xml->getIntAttribute("oversampling", 2);
+        scopeLength = xml->getIntAttribute("scopeLength", 512);
     }
 };
 
@@ -792,6 +803,22 @@ public:
             if (onScopeChannelModeChanged)
                 onScopeChannelModeChanged(scopeStereoToggle.getToggleState());
         };
+
+        // Scope Length slider
+        addAndMakeVisible(scopeLengthSlider);
+        scopeLengthSlider.setRange(64.0, 1024.0, 1.0);
+        scopeLengthSlider.setValue(state.scopeLength, juce::dontSendNotification);
+        scopeLengthSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+        scopeLengthSlider.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
+        scopeLengthSlider.setColour(juce::Slider::trackColourId, juce::Colour(0xFFFF2244));
+        scopeLengthSlider.setColour(juce::Slider::thumbColourId, juce::Colour(0xFFFF2244));
+        scopeLengthSlider.setColour(juce::Slider::backgroundColourId, juce::Colour(0xFF333333));
+        scopeLengthSlider.onValueChange = [this]() {
+            int val = static_cast<int>(scopeLengthSlider.getValue());
+            settingsState.scopeLength = val;
+            if (onScopeLengthChanged)
+                onScopeLengthChanged(val);
+        };
     }
 
     ~SettingsOverlay() override
@@ -902,6 +929,12 @@ public:
         // Stereo row label
         auto stRow = inner.removeFromTop(24.0f);
         g.drawText("Stereo", stRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
+
+        inner.removeFromTop(6.0f);
+
+        // Scope Length row label
+        auto slRow = inner.removeFromTop(24.0f);
+        g.drawText("Scope Length", slRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
     }
 
     void resized() override
@@ -970,6 +1003,13 @@ public:
         auto stRow = inner.removeFromTop(24.0f);
         stRow.removeFromLeft(140.0f);
         scopeStereoToggle.setBounds(stRow.removeFromLeft(50).reduced(0, 2).toNearestInt());
+
+        inner.removeFromTop(6.0f);
+
+        // Scope Length row
+        auto slRow = inner.removeFromTop(24.0f);
+        slRow.removeFromLeft(140.0f);
+        scopeLengthSlider.setBounds(slRow.removeFromLeft(130).reduced(0, 4).toNearestInt());
     }
 
     void mouseDown(const juce::MouseEvent& e) override
@@ -993,6 +1033,7 @@ public:
     std::function<void(bool)> onOscilloscopeToggled;
     std::function<void(bool)> onScopeChannelModeChanged;
     std::function<void(int)> onWindowScaleChanged;
+    std::function<void(int)> onScopeLengthChanged;
 
 private:
     SettingsState& settingsState;
@@ -1022,6 +1063,7 @@ private:
     juce::ToggleButton tooltipsToggle;
     juce::ToggleButton oscilloscopeToggle;
     juce::ToggleButton scopeStereoToggle;
+    juce::Slider scopeLengthSlider;
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> cleanModeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> autoGainAttachment;
@@ -1029,7 +1071,7 @@ private:
     juce::Rectangle<float> getPanelBounds() const
     {
         const float panelW = 320.0f;
-        const float panelH = 400.0f;
+        const float panelH = 430.0f;
         return juce::Rectangle<float>(panelW, panelH)
             .withCentre(getLocalBounds().getCentre().toFloat());
     }
