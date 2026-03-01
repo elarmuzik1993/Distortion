@@ -88,7 +88,7 @@ PluginProcessor::~PluginProcessor()
 // Studio Distortion DSP Helper Methods
 //==============================================================================
 
-float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, int clipType, float harmonicScale)
+float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, int clipType, float harmonicScale, int channel)
 {
     x = x * gain;
     float y = 0.0f;
@@ -120,11 +120,26 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
         // Tube-style asymmetric clipping (positive clips harder)
         y = x * drive * 1.4f;
 
+        // Stateful cathode bias envelope: sustained signal shifts positive clip threshold down
+        // Simulates cathode capacitor charging under sustained signal
+        const int tubeCh = (channel >= 0 && channel < 2) ? channel : 0;
+        const float tubeInputLevel = std::abs(y);
+        if (tubeInputLevel > tubeBiasEnvelope[tubeCh])
+            tubeBiasEnvelope[tubeCh] = tubeBiasAttackCoeff * tubeBiasEnvelope[tubeCh]
+                                     + (1.0f - tubeBiasAttackCoeff) * tubeInputLevel;
+        else
+            tubeBiasEnvelope[tubeCh] = tubeBiasReleaseCoeff * tubeBiasEnvelope[tubeCh]
+                                     + (1.0f - tubeBiasReleaseCoeff) * tubeInputLevel;
+
+        // Modulate positive clipping threshold: 0.85 (cold) → 0.70 (hot)
+        const float biasShift = juce::jlimit(0.0f, 1.0f, tubeBiasEnvelope[tubeCh]) * DSPConstants::TUBE_BIAS_MOD_DEPTH;
+        const float posClipThreshold = 0.85f - biasShift;
+
         // Asymmetric waveshaping (vintage tube behavior)
         if (y > 0.0f)
         {
-            // Positive: harder clipping with even harmonics
-            y = std::tanh(y * 1.6f) * 0.85f;
+            // Positive: harder clipping with even harmonics (threshold modulated by bias)
+            y = std::tanh(y * 1.6f) * posClipThreshold;
             y += (0.15f * harmonicScale) * y * y;  // 2nd harmonic (sub-linear scaled)
         }
         else
@@ -141,8 +156,7 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
     case 2:  // BIT CRUSHER - Digital destruction with sample rate reduction
     {
         // Extreme bit reduction for digital grit
-        const float bits = 6.0f;  // Brutal bit depth
-        const float maxValue = std::pow(2.0f, bits - 1.0f);
+        constexpr float maxValue = 32.0f;  // 2^5 = 32 (6-bit depth, avoiding runtime pow)
 
         y = x * drive * 1.6f;
 
@@ -161,16 +175,32 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
         // Tape-style soft saturation with magnetic hysteresis simulation
         y = x * drive * 1.25f;
 
-        // Tape compression curve (progressive)
+        // Stateful magnetic hysteresis envelope: sustained signal stiffens compression
+        // Simulates magnetic particle saturation under sustained signal
+        const int tapeCh = (channel >= 0 && channel < 2) ? channel : 0;
+        const float tapeInputLevel = std::abs(y);
+        if (tapeInputLevel > tapeSaturationEnvelope[tapeCh])
+            tapeSaturationEnvelope[tapeCh] = tapeHysteresisAttackCoeff * tapeSaturationEnvelope[tapeCh]
+                                           + (1.0f - tapeHysteresisAttackCoeff) * tapeInputLevel;
+        else
+            tapeSaturationEnvelope[tapeCh] = tapeHysteresisReleaseCoeff * tapeSaturationEnvelope[tapeCh]
+                                           + (1.0f - tapeHysteresisReleaseCoeff) * tapeInputLevel;
+
+        // Modulate compression knee: 0.7 (cold/loose) → 0.5 (hot/stiff)
+        const float hysteresisShift = juce::jlimit(0.0f, 1.0f, tapeSaturationEnvelope[tapeCh]) * DSPConstants::TAPE_HYSTERESIS_MOD_DEPTH;
+        const float tapeKnee = 0.7f - hysteresisShift;  // Lower knee = earlier compression onset
+
+        // Tape compression curve (progressive, with modulated knee)
         const float abs_y = std::abs(y);
         const float sign = (y > 0.0f) ? 1.0f : -1.0f;
 
-        if (abs_y < 0.4f)
+        if (abs_y < tapeKnee * 0.57f)  // Scale quiet region proportionally
             y = y * 1.05f;  // Slight boost in quiet regions
         else if (abs_y < 1.0f)
-            y = sign * (0.42f + (abs_y - 0.4f) * 0.7f);
+            y = sign * (tapeKnee * 0.57f * 1.05f + (abs_y - tapeKnee * 0.57f) * tapeKnee);
         else
-            y = sign * (0.84f + std::tanh((abs_y - 1.0f) * 2.0f) * 0.15f);
+            y = sign * (tapeKnee * 0.57f * 1.05f + (1.0f - tapeKnee * 0.57f) * tapeKnee
+                + std::tanh((abs_y - 1.0f) * 2.0f) * 0.15f);
 
         // Add tape warmth (subtle even harmonics, sub-linear scaled)
         y += (0.12f * harmonicScale) * y * y * sign;
@@ -233,9 +263,9 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
         const float foldback = 4.0f;
         y = std::fmod(y + 2.0f, 2.0f * foldback) - foldback;
 
-        // Hard clip with fold-back
-        while (y > 1.0f) y = 2.0f - y;
-        while (y < -1.0f) y = -2.0f - y;
+        // Hard clip with fold-back (clamped to 16 iterations to prevent infinite loops)
+        for (int i = 0; i < 16 && y > 1.0f; ++i) y = 2.0f - y;
+        for (int i = 0; i < 16 && y < -1.0f; ++i) y = -2.0f - y;
 
         // Add harmonic distortion
         y = std::tanh(y * 2.8f);
@@ -248,6 +278,19 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
         y = std::tanh(x * drive) * 0.95f;
         break;
     }
+
+    // Normalize output levels across clip types (prevents volume jumps when switching)
+    constexpr float normGains[] = {
+        DSPConstants::CLIP_NORM_BRUTAL_FUZZ,       // 0
+        DSPConstants::CLIP_NORM_TUBE_OVERDRIVE,    // 1
+        DSPConstants::CLIP_NORM_BIT_CRUSHER,       // 2
+        DSPConstants::CLIP_NORM_TAPE_SATURATION,   // 3
+        DSPConstants::CLIP_NORM_TRANSFORMER,       // 4
+        DSPConstants::CLIP_NORM_DIODE_CLIPPER,     // 5
+        DSPConstants::CLIP_NORM_DECIMATOR          // 6
+    };
+    if (clipType >= 0 && clipType < 7)
+        y *= normGains[clipType];
 
     return y;
 }
@@ -471,6 +514,7 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     const auto distParam = distortionAmountParam ? distortionAmountParam->load() : 0.0f;
     lastInputGain = std::pow(inGainParam / 50.0f, 1.5f);  // Match processBlock calculation
     lastDistortionDrive = 1.0f + (distParam / 100.0f) * 3.0f;  // Match processBlock calculation (reduced range)
+    lastDistMix = distMixParam ? distMixParam->load() / 100.0f : 1.0f;  // Match processBlock calculation
 
     // Update all sample-rate-dependent coefficients (DC blocking, compression, etc.)
     updateSampleRateDependentCoefficients(sampleRate);
@@ -613,6 +657,16 @@ if (!oversampling || currentNumChannels != numChannels) {
     harmonicDensityEnvelope[0] = 0.0f;
     harmonicDensityEnvelope[1] = 0.0f;
 
+    // Stateful distortion envelope coefficients (oversampled rate)
+    tubeBiasAttackCoeff = std::exp(-1.0f / (DSPConstants::TUBE_BIAS_ATTACK_TIME_S * oversampledRate));
+    tubeBiasReleaseCoeff = std::exp(-1.0f / (DSPConstants::TUBE_BIAS_RELEASE_TIME_S * oversampledRate));
+    tapeHysteresisAttackCoeff = std::exp(-1.0f / (DSPConstants::TAPE_HYSTERESIS_ATTACK_TIME_S * oversampledRate));
+    tapeHysteresisReleaseCoeff = std::exp(-1.0f / (DSPConstants::TAPE_HYSTERESIS_RELEASE_TIME_S * oversampledRate));
+    tubeBiasEnvelope[0] = 0.0f;
+    tubeBiasEnvelope[1] = 0.0f;
+    tapeSaturationEnvelope[0] = 0.0f;
+    tapeSaturationEnvelope[1] = 0.0f;
+
     // Auto-gain compensation coefficients (calculated at oversampled rate)
     autoGainAttackCoeff = std::exp(-1.0f / (DSPConstants::AUTO_GAIN_ATTACK_TIME_S * oversampledRate));
     autoGainReleaseCoeff = std::exp(-1.0f / (DSPConstants::AUTO_GAIN_RELEASE_TIME_S * oversampledRate));
@@ -666,6 +720,12 @@ void PluginProcessor::releaseResources()
     // Reset harmonic density envelope state
     harmonicDensityEnvelope[0] = 0.0f;
     harmonicDensityEnvelope[1] = 0.0f;
+
+    // Reset stateful distortion envelopes
+    tubeBiasEnvelope[0] = 0.0f;
+    tubeBiasEnvelope[1] = 0.0f;
+    tapeSaturationEnvelope[0] = 0.0f;
+    tapeSaturationEnvelope[1] = 0.0f;
 }
 
 #ifndef JucePlugin_PreferredChannelConfigurations
@@ -796,8 +856,17 @@ void PluginProcessor::applyLA2ACompression(juce::AudioBuffer<float>& buffer,
             // Apply makeup gain
             sampleValue *= makeupGainLinear;
 
-            // Soft clip output (prevent overs from makeup gain)
-            sampleValue = std::tanh(sampleValue * 0.9f) * 1.1f;
+            // Conditional soft clip (transparent below -1dBFS, prevents overs above)
+            {
+                const float absSample = std::abs(sampleValue);
+                if (absSample > DSPConstants::COMP_SOFT_CLIP_THRESHOLD)
+                {
+                    const float sign = (sampleValue > 0.0f) ? 1.0f : -1.0f;
+                    const float excess = absSample - DSPConstants::COMP_SOFT_CLIP_THRESHOLD;
+                    sampleValue = sign * (DSPConstants::COMP_SOFT_CLIP_THRESHOLD
+                                + std::tanh(excess * 4.0f) * DSPConstants::COMP_SOFT_CLIP_HEADROOM);
+                }
+            }
 
             buffer.setSample(channel, sample, sampleValue);
         }
@@ -916,58 +985,51 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     smoothedGlobalMix.setTargetValue(globalMix / 100.0f);
 
     // LFO modulation for dynamic distortion effects
-    // Calculate LFO value using selected waveform (output -1 to +1)
-    float lfoValue = 0.0f;
     const bool lfoEnabled = lfoEnabledParam->load() > 0.5f;
-    if (lfoEnabled && lfoRate > 0.0f && currentSampleRate > 0.0f)  // Only compute LFO if enabled AND rate > 0 AND sample rate is valid
-    {
-        // Generate waveform based on selected type
-        lfoValue = generateLFOWaveform(lfoPhase, lfoWaveform);
+    const int lfoDestination = static_cast<int>(lfoDestinationParam->load());
 
-        // SAFETY: Validate LFO output
+    // Determine if this destination needs per-sample LFO (0=dist, 3=mix, 4=gain)
+    // or block-level LFO (1=tone, 2=hipass - filter coefficients can't change per-sample)
+    const bool perSampleLFO = (lfoDestination == 0 || lfoDestination == 3 || lfoDestination == 4);
+    const float lfoPhaseIncrement = (lfoEnabled && lfoRate > 0.0f && currentSampleRate > 0.0f)
+                                   ? (lfoRate / currentSampleRate) : 0.0f;
+
+    // For block-level destinations (1,2): compute LFO once and advance phase
+    float lfoValue = 0.0f;
+    if (lfoEnabled && lfoRate > 0.0f && currentSampleRate > 0.0f && !perSampleLFO)
+    {
+        lfoValue = generateLFOWaveform(lfoPhase, lfoWaveform);
         if (std::isnan(lfoValue) || std::isinf(lfoValue))
             lfoValue = 0.0f;
 
-        // Update phase for next block (sample-rate and block-size independent)
-        // Phase increment per sample = frequency / sampleRate
-        const float phaseIncrementPerSample = lfoRate / currentSampleRate;
-        const float totalPhaseIncrement = phaseIncrementPerSample * buffer.getNumSamples();
-        lfoPhase += totalPhaseIncrement;
-
-        // Keep phase in 0-1 range (handle multiple wraps for safety)
-        if (lfoPhase >= 0.0f)  // Only fmod if phase is valid
+        // Advance phase for the entire block
+        lfoPhase += lfoPhaseIncrement * buffer.getNumSamples();
+        if (lfoPhase >= 0.0f)
             lfoPhase = std::fmod(lfoPhase, 1.0f);
         else
             lfoPhase = 0.0f;
 
-        // Expose phase to UI for arc animation
         lfoPhaseForUI.store(lfoPhase, std::memory_order_relaxed);
     }
+    // For per-sample destinations (0,3,4): phase is advanced in the sample loops below
 
-    // LFO Routing: Apply modulation to selected destination
-    const int lfoDestination = static_cast<int>(lfoDestinationParam->load());
-    const float lfoModulation = (lfoValue * lfoDepth / 100.0f);  // -1 to +1 scaled by depth
+    const float lfoModulation = (lfoValue * lfoDepth / 100.0f);  // Block-level only (for dest 1,2)
 
     // Load tone parameter (not loaded earlier in processBlock)
     const float toneParamValue = toneParam ? toneParam->load() : 20000.0f;
 
-    // Initialize modulated parameter copies
+    // Initialize modulated parameter copies (block-level defaults)
     float modulatedDistortionParam = distortionParam;
     float modulatedToneFreq = toneParamValue;
     float modulatedHighPassFreq = highPassFreq;
     float modulatedDistMix = distMix;
     float modulatedOutputGain = outGainParam;
 
-    // Apply modulation based on destination (bipolar ±range)
+    // Apply block-level modulation for filter destinations only
     if (!std::isnan(lfoModulation) && !std::isinf(lfoModulation))
     {
         switch (lfoDestination)
         {
-        case 0:  // Distortion Amount (0-100%)
-            modulatedDistortionParam = juce::jlimit(0.0f, 100.0f,
-                distortionParam + lfoModulation * 50.0f);  // ±50% swing
-            break;
-
         case 1:  // Tone Filter (2000-20000 Hz) - Logarithmic for musical sweep
             {
                 const float centerFreqLog = std::log2(juce::jmax(2000.0f, toneParamValue));
@@ -986,25 +1048,13 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             }
             break;
 
-        case 3:  // Dist Mix (0-100%)
-            modulatedDistMix = juce::jlimit(0.0f, 100.0f,
-                distMix + lfoModulation * 50.0f);  // ±50% swing
-            break;
-
-        case 4:  // Output Gain (0-100, maps to ±9dB)
-            modulatedOutputGain = juce::jlimit(0.0f, 100.0f,
-                outGainParam + lfoModulation * 25.0f);  // ±25% swing (±4.5dB)
-            break;
-
-        default:  // Fallback to distortion
-            modulatedDistortionParam = juce::jlimit(0.0f, 100.0f,
-                distortionParam + lfoModulation * 50.0f);
-            break;
+        default:
+            break;  // Per-sample destinations handled in sample loops
         }
     }
 
-    // Update dist mix smoothed value to use modulated parameter
-    smoothedDistMix.setTargetValue(modulatedDistMix);
+    // Update dist mix smoothed value (for state tracking, not consumed per-sample)
+    smoothedDistMix.setTargetValue(distMix / 100.0f);
 
     // Calculate distortion drive from modulated parameter
     float distortionDrive = 1.0f + (modulatedDistortionParam / 100.0f) * 3.0f;
@@ -1020,9 +1070,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const float inputGain = std::pow(inGainParam / 50.0f, 1.5f);
     const auto modulatedOutGainDB = (modulatedOutputGain - 50.0f) * 0.18f;
     const auto outGain = juce::Decibels::decibelsToGain(modulatedOutGainDB);
-
-    // Mix amount for wet/dry blend
-    const float mixAmount = distMix / 100.0f;  // 0.0 to 1.0
 
     // Set target value for output gain (consumed at normal rate)
     smoothedOutputGain.setTargetValue(outGain);
@@ -1198,10 +1245,13 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Calculate step size from LAST block's final value to THIS block's target value
     const float gainDelta = (inputGain - lastInputGain) / static_cast<float>(actualOversampledSamples);
     const float driveDelta = (distortionDrive - lastDistortionDrive) / static_cast<float>(actualOversampledSamples);
+    const float targetMixAmount = modulatedDistMix / 100.0f;  // 0.0 to 1.0
+    const float mixDelta = (targetMixAmount - lastDistMix) / static_cast<float>(actualOversampledSamples);
 
     // Start from last block's values
     float currentInputGain = lastInputGain;
     float currentDrive = lastDistortionDrive;
+    float currentMixAmount = lastDistMix;
 
     if (actualOversampledSamples > static_cast<size_t>(lowBandBuffer.getNumSamples()))
     {
@@ -1295,8 +1345,44 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         // === SUB GUARD OFF: Full-range distortion (no band-split) ===
 
         // Apply distortion to entire oversampledBlock (all frequencies)
+        // Per-sample LFO phase increment (oversampled rate: divide by oversamplingFactor)
+        const float lfoOversampledPhaseInc = lfoPhaseIncrement / static_cast<float>(oversamplingFactor);
+
         for (size_t sample = 0; sample < numSamples; ++sample)
         {
+            // Per-sample LFO for destinations 0 (distortion) and 3 (dist mix)
+            float sampleDrive = currentDrive;
+            float sampleMixAmount = currentMixAmount;
+            float sampleDistortionParam = modulatedDistortionParam;
+
+            if (perSampleLFO && lfoEnabled && lfoPhaseIncrement > 0.0f)
+            {
+                float sampleLfoValue = generateLFOWaveform(lfoPhase, lfoWaveform);
+                if (std::isnan(sampleLfoValue) || std::isinf(sampleLfoValue))
+                    sampleLfoValue = 0.0f;
+                const float sampleLfoMod = sampleLfoValue * lfoDepth / 100.0f;
+
+                if (lfoDestination == 0)  // Distortion Amount
+                {
+                    sampleDistortionParam = juce::jlimit(0.0f, 100.0f,
+                        distortionParam + sampleLfoMod * 50.0f);
+                    sampleDrive = 1.0f + (sampleDistortionParam / 100.0f) * 3.0f;
+                    if (extremeEnabled) sampleDrive *= 4.0f;
+                }
+                else if (lfoDestination == 3)  // Dist Mix
+                {
+                    const float modMix = juce::jlimit(0.0f, 100.0f,
+                        distMix + sampleLfoMod * 50.0f);
+                    sampleMixAmount = modMix / 100.0f;
+                }
+                // Destination 4 (output gain) handled in the output gain loop below
+
+                // Advance LFO phase per oversampled sample
+                lfoPhase += lfoOversampledPhaseInc;
+                if (lfoPhase >= 1.0f)
+                    lfoPhase -= 1.0f;
+            }
+
             for (size_t channel = 0; channel < numChannels; ++channel)
             {
                 auto* channelData = oversampledBlock.getChannelPointer(channel);
@@ -1306,7 +1392,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                 float inputSample = channelData[sample];
 
                 // Bypass distortion if amount is negligible (< 0.5%)
-                if (modulatedDistortionParam < 0.5f)
+                if (sampleDistortionParam < 0.5f)
                 {
                     channelData[sample] = inputSample;  // Pure bypass
                 }
@@ -1327,17 +1413,18 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                                                             1.0f / (1.0f + std::sqrt(clampedEnv)));
 
                     // Apply studio distortion with sub-linear harmonic scaling
-                    float distorted = applyStudioDistortion(inputSample, currentInputGain, currentDrive, clipType,
-                        extremeEnabled ? 1.0f : harmonicScale);
+                    float distorted = applyStudioDistortion(inputSample, currentInputGain, sampleDrive, clipType,
+                        extremeEnabled ? 1.0f : harmonicScale, ch);
 
-                    // Wet/Dry mix
-                    channelData[sample] = inputSample * (1.0f - mixAmount) + distorted * mixAmount;
+                    // Wet/Dry mix (per-sample interpolated to prevent zipper noise)
+                    channelData[sample] = inputSample * (1.0f - sampleMixAmount) + distorted * sampleMixAmount;
                 }
             }
 
             // Manually step the smoothed parameters AFTER processing all channels
             currentInputGain += gainDelta;
             currentDrive += driveDelta;
+            currentMixAmount += mixDelta;
         }
     }
     else
@@ -1413,8 +1500,43 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         }
 
         // Apply studio distortion ONLY to the high band (with pre/post LP + DC block)
+        // Per-sample LFO phase increment (oversampled rate)
+        const float lfoOversampledPhaseIncSG = lfoPhaseIncrement / static_cast<float>(oversamplingFactor);
+
         for (size_t sample = 0; sample < numSamples; ++sample)
         {
+            // Per-sample LFO for destinations 0 (distortion) and 3 (dist mix)
+            float sampleDrive = currentDrive;
+            float sampleMixAmount = currentMixAmount;
+            float sampleDistortionParam = modulatedDistortionParam;
+
+            if (perSampleLFO && lfoEnabled && lfoPhaseIncrement > 0.0f)
+            {
+                float sampleLfoValue = generateLFOWaveform(lfoPhase, lfoWaveform);
+                if (std::isnan(sampleLfoValue) || std::isinf(sampleLfoValue))
+                    sampleLfoValue = 0.0f;
+                const float sampleLfoMod = sampleLfoValue * lfoDepth / 100.0f;
+
+                if (lfoDestination == 0)  // Distortion Amount
+                {
+                    sampleDistortionParam = juce::jlimit(0.0f, 100.0f,
+                        distortionParam + sampleLfoMod * 50.0f);
+                    sampleDrive = 1.0f + (sampleDistortionParam / 100.0f) * 3.0f;
+                    if (extremeEnabled) sampleDrive *= 4.0f;
+                }
+                else if (lfoDestination == 3)  // Dist Mix
+                {
+                    const float modMix = juce::jlimit(0.0f, 100.0f,
+                        distMix + sampleLfoMod * 50.0f);
+                    sampleMixAmount = modMix / 100.0f;
+                }
+
+                // Advance LFO phase per oversampled sample
+                lfoPhase += lfoOversampledPhaseIncSG;
+                if (lfoPhase >= 1.0f)
+                    lfoPhase -= 1.0f;
+            }
+
             for (size_t channel = 0; channel < numChannels; ++channel)
             {
                 auto* highBandData = highBandBuffer.getWritePointer(static_cast<int>(channel));
@@ -1424,7 +1546,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                 float inputSample = highBandData[sample];
 
                 // Bypass distortion if amount is negligible (< 0.5%)
-                if (modulatedDistortionParam < 0.5f)
+                if (sampleDistortionParam < 0.5f)
                 {
                     highBandData[sample] = inputSample;  // Pure bypass
                 }
@@ -1440,23 +1562,23 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                                                     + (1.0f - harmonicDensityReleaseCoeff) * inputLevel;
 
                     // Calculate inverse harmonic scale: high input → fewer harmonics (prevents harshness)
-                    // Using 1/(1+sqrt(envelope)) gives smooth reduction at high levels
                     const float clampedEnv = std::max(0.0f, harmonicDensityEnvelope[ch]);
                     const float harmonicScale = juce::jlimit(DSPConstants::HARMONIC_DENSITY_MIN_SCALE, 1.0f,
                                                             1.0f / (1.0f + std::sqrt(clampedEnv)));
 
                     // Apply studio distortion with sub-linear harmonic scaling
-                    float distorted = applyStudioDistortion(inputSample, currentInputGain, currentDrive, clipType,
-                        extremeEnabled ? 1.0f : harmonicScale);
+                    float distorted = applyStudioDistortion(inputSample, currentInputGain, sampleDrive, clipType,
+                        extremeEnabled ? 1.0f : harmonicScale, ch);
 
-                    // Wet/Dry mix (DC blocking handled by manual DC blocker after downsampling)
-                    highBandData[sample] = inputSample * (1.0f - mixAmount) + distorted * mixAmount;
+                    // Wet/Dry mix (per-sample interpolated to prevent zipper noise)
+                    highBandData[sample] = inputSample * (1.0f - sampleMixAmount) + distorted * sampleMixAmount;
                 }
             }
 
             // Manually step the smoothed parameters AFTER processing all channels
             currentInputGain += gainDelta;
             currentDrive += driveDelta;
+            currentMixAmount += mixDelta;
         }
 
         // Recombine: Clean low + Distorted high
@@ -1539,6 +1661,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Store final parameter values for next block's interpolation
     lastInputGain = currentInputGain;
     lastDistortionDrive = currentDrive;
+    lastDistMix = currentMixAmount;
 
     // DEBUG: Check for corruption AFTER our processing, BEFORE downsampling
     bool hasNaN = false;
@@ -1762,7 +1885,18 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                              tubeSaturation * DSPConstants::COMP_TUBE_BLEND;
 
                 sampleValue *= makeupGainLinear;
-                sampleValue = std::tanh(sampleValue * 0.9f) * 1.1f;
+
+                // Conditional soft clip (transparent below -1dBFS, prevents overs above)
+                {
+                    const float absSample = std::abs(sampleValue);
+                    if (absSample > DSPConstants::COMP_SOFT_CLIP_THRESHOLD)
+                    {
+                        const float sign = (sampleValue > 0.0f) ? 1.0f : -1.0f;
+                        const float excess = absSample - DSPConstants::COMP_SOFT_CLIP_THRESHOLD;
+                        sampleValue = sign * (DSPConstants::COMP_SOFT_CLIP_THRESHOLD
+                                    + std::tanh(excess * 4.0f) * DSPConstants::COMP_SOFT_CLIP_HEADROOM);
+                    }
+                }
 
                 channelData[sampleIdx] = sampleValue;
             }
@@ -1851,15 +1985,41 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     }
 
     // Apply output gain to the final downsampled result
+    // Per-sample LFO for destination 4 (output gain / tremolo) at base sample rate
     for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
     {
-        const float currentOutputGain = smoothedOutputGain.getNextValue();
+        float currentOutputGain = smoothedOutputGain.getNextValue();
+
+        // Per-sample LFO modulation of output gain (destination 4)
+        if (perSampleLFO && lfoEnabled && lfoPhaseIncrement > 0.0f && lfoDestination == 4)
+        {
+            float sampleLfoValue = generateLFOWaveform(lfoPhase, lfoWaveform);
+            if (std::isnan(sampleLfoValue) || std::isinf(sampleLfoValue))
+                sampleLfoValue = 0.0f;
+            const float sampleLfoMod = sampleLfoValue * lfoDepth / 100.0f;
+
+            // Modulate output gain: ±25% swing (±4.5dB tremolo)
+            const float modOutGainParam = juce::jlimit(0.0f, 100.0f,
+                outGainParam + sampleLfoMod * 25.0f);
+            const float modOutGainDB = (modOutGainParam - 50.0f) * 0.18f;
+            currentOutputGain = juce::Decibels::decibelsToGain(modOutGainDB);
+
+            // Advance LFO phase at base sample rate
+            lfoPhase += lfoPhaseIncrement;
+            if (lfoPhase >= 1.0f)
+                lfoPhase -= 1.0f;
+        }
+
         for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
         {
             auto* channelData = buffer.getWritePointer(channel);
             channelData[sample] *= currentOutputGain;
         }
     }
+
+    // Update LFO phase for UI display (per-sample destinations update phase in loops above)
+    if (perSampleLFO && lfoEnabled)
+        lfoPhaseForUI.store(lfoPhase, std::memory_order_relaxed);
 
     // ========== OUTPUT LIMITER (Final Safety) ==========
     // Stereo-linked soft limiter at -0.5dBFS to prevent clipping
@@ -2113,6 +2273,10 @@ void PluginProcessor::resetDSPState()
     preCompEnvelope[1] = 1.0f;
     harmonicDensityEnvelope[0] = 0.0f;
     harmonicDensityEnvelope[1] = 0.0f;
+    tubeBiasEnvelope[0] = 0.0f;
+    tubeBiasEnvelope[1] = 0.0f;
+    tapeSaturationEnvelope[0] = 0.0f;
+    tapeSaturationEnvelope[1] = 0.0f;
     compEnvelopeState = 0.0f;
     compRmsHistory = 0.0f;
     tubeWarmth = 0.0f;

@@ -1876,6 +1876,158 @@ void GoldenAudioTests::test808BandSplit()
            "808-safe mode killed too much low frequency energy");
 }
 
+//==============================================================================
+// NormalizationTests Implementation
+//==============================================================================
+
+void NormalizationTests::runTest()
+{
+    beginTest("Clip Type Level Matching");
+    testClipTypeLevelMatching();
+}
+
+void NormalizationTests::testClipTypeLevelMatching()
+{
+    PluginProcessor processor;
+    processor.prepareToPlay(44100.0, 512);
+
+    const float gain = 1.0f;
+    const float drive = 3.0f;
+    const int numSamples = 1000;
+
+    float rmsPerClipType[7] = {};
+
+    for (int clipType = 0; clipType < 7; ++clipType)
+    {
+        float sumSquares = 0.0f;
+        for (int i = 0; i < numSamples; ++i)
+        {
+            float phase = static_cast<float>(i) / static_cast<float>(numSamples);
+            float input = 0.5f * std::sin(phase * juce::MathConstants<float>::twoPi);
+
+            float output = processor.applyStudioDistortion(input, gain, drive, clipType, 1.0f, 0);
+            sumSquares += output * output;
+        }
+        rmsPerClipType[clipType] = std::sqrt(sumSquares / numSamples);
+    }
+
+    // Find min and max RMS across all clip types
+    float minRMS = rmsPerClipType[0];
+    float maxRMS = rmsPerClipType[0];
+    for (int i = 1; i < 7; ++i)
+    {
+        minRMS = std::min(minRMS, rmsPerClipType[i]);
+        maxRMS = std::max(maxRMS, rmsPerClipType[i]);
+    }
+
+    // Calculate dB spread
+    const float spreadDB = juce::Decibels::gainToDecibels(maxRMS / (minRMS + 1e-10f));
+
+    // All clip types should be within 6dB of each other (generous tolerance)
+    expect(spreadDB < 6.0f,
+        "Clip type RMS spread is " + juce::String(spreadDB, 2) + " dB (max 6dB allowed). "
+        "Min RMS: " + juce::String(minRMS, 4) + " Max RMS: " + juce::String(maxRMS, 4));
+
+    // Verify each clip type produces output
+    for (int i = 0; i < 7; ++i)
+    {
+        expect(rmsPerClipType[i] > 0.01f,
+            "Clip type " + juce::String(i) + " RMS too low: " + juce::String(rmsPerClipType[i], 4));
+    }
+}
+
+//==============================================================================
+// StatefulDistortionTests Implementation
+//==============================================================================
+
+void StatefulDistortionTests::runTest()
+{
+    beginTest("Tube Bias Shift Under Sustained Signal");
+    testTubeBiasShift();
+
+    beginTest("Tape Hysteresis Under Sustained Signal");
+    testTapeHysteresis();
+}
+
+void StatefulDistortionTests::testTubeBiasShift()
+{
+    // Tube overdrive (clip type 1) should produce different output based on signal history
+    // Cold start (no prior signal) vs hot (after sustained loud signal)
+    PluginProcessor processor;
+    processor.prepareToPlay(44100.0, 512);
+
+    const float gain = 1.0f;
+    const float drive = 3.0f;
+    const float testInput = 0.5f;
+
+    // Cold start: process a single sample
+    processor.tubeBiasEnvelope[0] = 0.0f;  // Ensure cold start
+    float coldOutput = processor.applyStudioDistortion(testInput, gain, drive, 1, 1.0f, 0);
+
+    // Warm up: process many loud samples to charge the envelope
+    for (int i = 0; i < 500; ++i)
+    {
+        processor.applyStudioDistortion(0.8f, gain, drive, 1, 1.0f, 0);
+    }
+
+    // Hot state: process the same test input
+    float hotOutput = processor.applyStudioDistortion(testInput, gain, drive, 1, 1.0f, 0);
+
+    // Outputs should differ (tube bias shifts the clipping threshold)
+    expect(!std::isnan(coldOutput) && !std::isnan(hotOutput),
+        "Tube bias test produced NaN");
+
+    float difference = std::abs(coldOutput - hotOutput);
+    expect(difference > 0.001f,
+        "Tube output should differ based on signal history. Cold: " +
+        juce::String(coldOutput, 4) + " Hot: " + juce::String(hotOutput, 4) +
+        " Diff: " + juce::String(difference, 6));
+
+    // Reset should clear the envelope
+    processor.resetDSPState();
+    expect(processor.tubeBiasEnvelope[0] == 0.0f,
+        "Tube bias envelope not cleared by resetDSPState");
+}
+
+void StatefulDistortionTests::testTapeHysteresis()
+{
+    // Tape saturation (clip type 3) should produce different output based on signal history
+    PluginProcessor processor;
+    processor.prepareToPlay(44100.0, 512);
+
+    const float gain = 1.0f;
+    const float drive = 3.0f;
+    const float testInput = 0.5f;
+
+    // Cold start
+    processor.tapeSaturationEnvelope[0] = 0.0f;
+    float coldOutput = processor.applyStudioDistortion(testInput, gain, drive, 3, 1.0f, 0);
+
+    // Warm up with loud sustained signal
+    for (int i = 0; i < 500; ++i)
+    {
+        processor.applyStudioDistortion(0.8f, gain, drive, 3, 1.0f, 0);
+    }
+
+    // Hot state
+    float hotOutput = processor.applyStudioDistortion(testInput, gain, drive, 3, 1.0f, 0);
+
+    // Outputs should differ (tape hysteresis modulates compression knee)
+    expect(!std::isnan(coldOutput) && !std::isnan(hotOutput),
+        "Tape hysteresis test produced NaN");
+
+    float difference = std::abs(coldOutput - hotOutput);
+    expect(difference > 0.001f,
+        "Tape output should differ based on signal history. Cold: " +
+        juce::String(coldOutput, 4) + " Hot: " + juce::String(hotOutput, 4) +
+        " Diff: " + juce::String(difference, 6));
+
+    // Reset should clear the envelope
+    processor.resetDSPState();
+    expect(processor.tapeSaturationEnvelope[0] == 0.0f,
+        "Tape hysteresis envelope not cleared by resetDSPState");
+}
+
 // Static test registration moved to registerAllTests() in DistortionTests.h
 // to ensure tests are registered before they're run
 

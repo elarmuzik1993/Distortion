@@ -55,6 +55,10 @@ namespace DSPConstants
     constexpr float COMP_TUBE_BLEND = 0.15f;                  // 15% tube harmonic blend
     constexpr float COMP_TUBE_DRIVE = 1.5f;                   // Tube saturation drive amount
 
+    // Compressor output soft clip (replaces blanket tanh)
+    constexpr float COMP_SOFT_CLIP_THRESHOLD = 0.891f;        // -1dBFS threshold (transparent below)
+    constexpr float COMP_SOFT_CLIP_HEADROOM = 0.109f;         // Remaining headroom to 1.0
+
     // Default parameter values
     constexpr float DEFAULT_HIPASS_FREQ = 20.0f;              // Default hi-pass filter frequency (subsonic only)
 
@@ -98,6 +102,26 @@ namespace DSPConstants
     constexpr float AUTO_GAIN_MIN = 0.1f;                      // -20dB minimum compensation
     constexpr float AUTO_GAIN_MAX = 4.0f;                      // +12dB maximum compensation
 
+    // Tube bias envelope (simulates cathode bias shift under sustained signal)
+    constexpr float TUBE_BIAS_ATTACK_TIME_S = 0.003f;         // 3ms attack
+    constexpr float TUBE_BIAS_RELEASE_TIME_S = 0.080f;        // 80ms release
+    constexpr float TUBE_BIAS_MOD_DEPTH = 0.15f;              // Modulates clip threshold 0.85→0.70
+
+    // Tape hysteresis envelope (simulates magnetic saturation stiffening)
+    constexpr float TAPE_HYSTERESIS_ATTACK_TIME_S = 0.005f;   // 5ms attack
+    constexpr float TAPE_HYSTERESIS_RELEASE_TIME_S = 0.100f;  // 100ms release
+    constexpr float TAPE_HYSTERESIS_MOD_DEPTH = 0.2f;         // Modulates compression knee 0.7→0.5
+
+    // Clip type output normalization (calibrated for equal RMS at drive=3.0, input=0.5)
+    // These values compensate for level differences between algorithms
+    constexpr float CLIP_NORM_BRUTAL_FUZZ = 0.82f;        // Type 0: loudest, needs attenuation
+    constexpr float CLIP_NORM_TUBE_OVERDRIVE = 1.05f;     // Type 1: slightly quiet
+    constexpr float CLIP_NORM_BIT_CRUSHER = 0.90f;        // Type 2: moderate
+    constexpr float CLIP_NORM_TAPE_SATURATION = 1.00f;    // Type 3: reference level
+    constexpr float CLIP_NORM_TRANSFORMER = 0.88f;        // Type 4: slightly hot
+    constexpr float CLIP_NORM_DIODE_CLIPPER = 1.30f;      // Type 5: quietest, needs boost
+    constexpr float CLIP_NORM_DECIMATOR = 0.95f;          // Type 6: close to reference
+
     // Output limiter (final safety, always-on, stereo-linked)
     constexpr float OUTPUT_LIMITER_THRESHOLD_DB = -0.5f;       // -0.5 dBFS ceiling (safe headroom)
     constexpr float OUTPUT_LIMITER_ATTACK_TIME_S = 0.0005f;    // 0.5ms attack (catch transients)
@@ -118,6 +142,8 @@ class StateIOTests;
 class GoldenAudioTests;
 class HarmonicDensityTests;
 class OutputLimiterTests;
+class NormalizationTests;
+class StatefulDistortionTests;
 #endif
 
 class PluginProcessor : public juce::AudioProcessor
@@ -135,6 +161,8 @@ class PluginProcessor : public juce::AudioProcessor
     friend class GoldenAudioTests;
     friend class HarmonicDensityTests;
     friend class OutputLimiterTests;
+    friend class NormalizationTests;
+    friend class StatefulDistortionTests;
 #endif
 
 public:
@@ -355,6 +383,14 @@ private:
     float outputLimiterAttackCoeff = 0.0f; // Attack coefficient
     float outputLimiterReleaseCoeff = 0.0f; // Release coefficient
 
+    // Stateful distortion envelopes (per-channel for stereo imaging)
+    float tubeBiasEnvelope[2] = { 0.0f, 0.0f };           // Tube cathode bias shift
+    float tapeSaturationEnvelope[2] = { 0.0f, 0.0f };     // Tape magnetic hysteresis
+    float tubeBiasAttackCoeff = 0.0f;
+    float tubeBiasReleaseCoeff = 0.0f;
+    float tapeHysteresisAttackCoeff = 0.0f;
+    float tapeHysteresisReleaseCoeff = 0.0f;
+
     // Cached filter parameters to avoid unnecessary coefficient updates
     float lastHighPassFreq = -1.0f;
     float lastToneFreq = -1.0f;
@@ -364,13 +400,14 @@ private:
     // Manual parameter smoothing for oversampled domain (to avoid SmoothedValue issues)
     float lastInputGain = 1.0f;
     float lastDistortionDrive = 1.0f;
+    float lastDistMix = 1.0f;  // Per-sample interpolation for distortion wet/dry mix
 
     juce::AudioBuffer<float> scopeBuffer;
     juce::AbstractFifo scopeFifo;
     mutable juce::SpinLock scopeLock;
 
     // Helper methods for studio distortion DSP
-    float applyStudioDistortion(float x, float gain, float drive, int clipType, float harmonicScale);
+    float applyStudioDistortion(float x, float gain, float drive, int clipType, float harmonicScale, int channel = 0);
     void updateSampleRateDependentCoefficients(double sampleRate);
     float generateLFOWaveform(float phase, int waveformType);  // Generate LFO waveforms
     void resetDSPState();  // Thread-safe DSP state reset (called from audio thread)

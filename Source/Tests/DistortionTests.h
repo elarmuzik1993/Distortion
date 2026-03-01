@@ -226,6 +226,37 @@ private:
 };
 
 //==============================================================================
+// Normalization Tests (clip type level matching)
+//==============================================================================
+
+/** Tests that all clip types produce similar RMS output levels */
+class NormalizationTests : public juce::UnitTest
+{
+public:
+    NormalizationTests() : UnitTest("Clip Type Normalization", TestCategories::DSP) {}
+    void runTest() override;
+
+private:
+    void testClipTypeLevelMatching();
+};
+
+//==============================================================================
+// Stateful Distortion Tests (Tube/Tape memory)
+//==============================================================================
+
+/** Tests that Tube and Tape algorithms have signal-history-dependent output */
+class StatefulDistortionTests : public juce::UnitTest
+{
+public:
+    StatefulDistortionTests() : UnitTest("Stateful Distortion", TestCategories::DSP) {}
+    void runTest() override;
+
+private:
+    void testTubeBiasShift();
+    void testTapeHysteresis();
+};
+
+//==============================================================================
 // Test Runner Function
 //==============================================================================
 
@@ -315,6 +346,8 @@ inline void registerAllTests()
     static ThreadSafetyTests threadSafetyTests;
     static StateIOTests stateIOTests;
     static GoldenAudioTests goldenAudioTests;
+    static NormalizationTests normalizationTests;
+    static StatefulDistortionTests statefulDistortionTests;
 }
 
 #endif // JUCE_DEBUG
