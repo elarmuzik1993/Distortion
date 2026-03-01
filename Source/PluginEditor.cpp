@@ -34,7 +34,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 
     // Setup version label (bottom left corner)
     addAndMakeVisible(versionLabel);
-    versionLabel.setText("v1.8 LFO Routing", juce::dontSendNotification);
+    versionLabel.setText("v1.9 Scope Length", juce::dontSendNotification);
     versionLabel.setFont(juce::Font(10.0f * fs));
     versionLabel.setColour(juce::Label::textColourId, juce::Colour(0x88, 0x88, 0x88));  // Gray text
     versionLabel.setJustificationType(juce::Justification::left);

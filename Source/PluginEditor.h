@@ -1071,7 +1071,7 @@ private:
     juce::Rectangle<float> getPanelBounds() const
     {
         const float panelW = 320.0f;
-        const float panelH = 430.0f;
+        const float panelH = juce::jmin(430.0f, static_cast<float>(getHeight()) - 10.0f);
         return juce::Rectangle<float>(panelW, panelH)
             .withCentre(getLocalBounds().getCentre().toFloat());
     }
