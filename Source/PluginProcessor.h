@@ -296,6 +296,15 @@ private:
     // Thread safety for state persistence
     std::atomic<bool> stateNeedsReset{false};
 
+public:
+    // Oversampling runtime control (set by editor, read by audio thread)
+    std::atomic<int> requestedOversamplingStages{2};     // 0=Off, 1=2x, 2=4x
+    std::atomic<bool> oversamplingNeedsRecreate{false};  // Trigger flag
+
+private:
+    int currentOversamplingStages = 2;  // Track current stages for comparison
+    void reinitializeOversampling();    // Called from audio thread when oversampling changes
+
     std::atomic<float>* inputGainParam = nullptr;
     std::atomic<float>* outputGainParam = nullptr;
     std::atomic<float>* distortionAmountParam = nullptr;

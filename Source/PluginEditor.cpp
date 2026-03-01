@@ -472,6 +472,9 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 
     // Load UI settings
     loadSettings();
+    // Sync oversampling setting to processor (in case it was saved as non-default)
+    audioProcessor.requestedOversamplingStages.store(settingsState.oversamplingMode);
+    audioProcessor.oversamplingNeedsRecreate.store(true);
     applyOscilloscopeEnabled(settingsState.oscilloscopeEnabled);
     oscilloscope.setStereoMode(settingsState.oscilloscopeStereo);
 
@@ -1295,7 +1298,7 @@ void PluginEditor::showSettingsOverlay()
 {
     if (settingsOverlay) return;
 
-    settingsOverlay = std::make_unique<SettingsOverlay>(audioProcessor.parameters, settingsState);
+    settingsOverlay = std::make_unique<SettingsOverlay>(audioProcessor.parameters, settingsState, audioProcessor);
     addAndMakeVisible(*settingsOverlay);
     settingsOverlay->setBounds(getLocalBounds());
 

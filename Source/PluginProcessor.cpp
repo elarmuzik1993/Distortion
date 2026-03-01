@@ -530,21 +530,27 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 
 
 
-    // Oversampling
-if (!oversampling || currentNumChannels != numChannels) {
-    oversampling = std::make_unique<juce::dsp::Oversampling<float>>(
-        numChannels, DSPConstants::OVERSAMPLING_STAGES,
-        juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR,
-        false, false
-    );
-    currentNumChannels = numChannels;
-}
-    
-    // Initialize oversampling processing block size
-    oversampling->initProcessing(static_cast<size_t>(samplesPerBlock));
+    // Oversampling — use requestedOversamplingStages atomic (0=Off, 1=2x, 2=4x)
+    const int stages = requestedOversamplingStages.load();
+    currentOversamplingStages = stages;
 
-    // Cache the oversampling factor
-    oversamplingFactor = oversampling->getOversamplingFactor();
+    if (stages == 0) {
+        // No oversampling — null out the object, factor = 1
+        oversampling.reset();
+        oversamplingFactor = 1;
+    } else {
+        if (!oversampling || currentNumChannels != numChannels
+            || static_cast<int>(oversampling->getOversamplingFactor()) != (1 << stages)) {
+            oversampling = std::make_unique<juce::dsp::Oversampling<float>>(
+                numChannels, stages,
+                juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR,
+                false, false
+            );
+        }
+        oversampling->initProcessing(static_cast<size_t>(samplesPerBlock));
+        oversamplingFactor = oversampling->getOversamplingFactor();
+    }
+    currentNumChannels = numChannels;
 
     // Prepare DSP filters with oversampled sample rate & block size
     juce::dsp::ProcessSpec spec;
@@ -686,7 +692,8 @@ if (!oversampling || currentNumChannels != numChannels) {
     // 3. Block size alignment requirements
     // SOLUTION: Allocate 2x the expected size to handle all edge cases safely
     const size_t expectedOversampledSize = static_cast<size_t>(samplesPerBlock) * oversamplingFactor;
-    const size_t oversamplingLatencySamples = static_cast<size_t>(oversampling->getLatencyInSamples());
+    const size_t oversamplingLatencySamples = oversampling
+        ? static_cast<size_t>(oversampling->getLatencyInSamples()) : 0;
 
     // Report latency to host for proper delay compensation
     setLatencySamples(static_cast<int>(oversamplingLatencySamples));
@@ -876,6 +883,114 @@ void PluginProcessor::applyLA2ACompression(juce::AudioBuffer<float>& buffer,
     currentGainReductionDB.store(maxGainReductionDB, std::memory_order_relaxed);
 }
 
+void PluginProcessor::reinitializeOversampling()
+{
+    const int stages = requestedOversamplingStages.load();
+    if (stages == currentOversamplingStages)
+        return;
+
+    currentOversamplingStages = stages;
+    const int numChannels = std::max(1, getTotalNumInputChannels());
+    const double sr = getSampleRate();
+    const int currentBlockSize = getBlockSize();
+
+    if (stages == 0)
+    {
+        oversampling.reset();
+        oversamplingFactor = 1;
+    }
+    else
+    {
+        oversampling = std::make_unique<juce::dsp::Oversampling<float>>(
+            numChannels, stages,
+            juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR,
+            false, false
+        );
+        oversampling->initProcessing(static_cast<size_t>(currentBlockSize));
+        oversamplingFactor = oversampling->getOversamplingFactor();
+    }
+    currentNumChannels = numChannels;
+
+    // Recalculate oversampled-rate-dependent coefficients
+    const float oversampledRate = static_cast<float>(sr * oversamplingFactor);
+    preCompAttackCoeff = std::exp(-1.0f / (DSPConstants::PRE_COMP_ATTACK_TIME_S * oversampledRate));
+    preCompReleaseCoeff = std::exp(-1.0f / (DSPConstants::PRE_COMP_RELEASE_TIME_S * oversampledRate));
+    harmonicDensityAttackCoeff = std::exp(-1.0f / (DSPConstants::HARMONIC_DENSITY_ATTACK_TIME_S * oversampledRate));
+    harmonicDensityReleaseCoeff = std::exp(-1.0f / (DSPConstants::HARMONIC_DENSITY_RELEASE_TIME_S * oversampledRate));
+    tubeBiasAttackCoeff = std::exp(-1.0f / (DSPConstants::TUBE_BIAS_ATTACK_TIME_S * oversampledRate));
+    tubeBiasReleaseCoeff = std::exp(-1.0f / (DSPConstants::TUBE_BIAS_RELEASE_TIME_S * oversampledRate));
+    tapeHysteresisAttackCoeff = std::exp(-1.0f / (DSPConstants::TAPE_HYSTERESIS_ATTACK_TIME_S * oversampledRate));
+    tapeHysteresisReleaseCoeff = std::exp(-1.0f / (DSPConstants::TAPE_HYSTERESIS_RELEASE_TIME_S * oversampledRate));
+    autoGainAttackCoeff = std::exp(-1.0f / (DSPConstants::AUTO_GAIN_ATTACK_TIME_S * oversampledRate));
+    autoGainReleaseCoeff = std::exp(-1.0f / (DSPConstants::AUTO_GAIN_RELEASE_TIME_S * oversampledRate));
+    compAttackCoeffOversampled = std::exp(-1.0f / (DSPConstants::COMP_ATTACK_TIME_S * oversampledRate));
+    compReleaseCoeffOversampled = std::exp(-1.0f / (DSPConstants::COMP_RELEASE_TIME_S * oversampledRate));
+    compRmsHistoryCoeffOversampled = std::exp(-1.0f / (DSPConstants::COMP_RMS_HISTORY_TIME_S * oversampledRate));
+
+    // Re-prepare filters at new oversampled spec
+    juce::dsp::ProcessSpec spec;
+    spec.sampleRate = sr * oversamplingFactor;
+    spec.maximumBlockSize = static_cast<juce::uint32>(currentBlockSize * oversamplingFactor);
+    spec.numChannels = static_cast<juce::uint32>(numChannels);
+
+    const float toneFreq = toneParam ? toneParam->load() : 20000.0f;
+    toneFilter.prepare(spec);
+    *toneFilter.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, toneFreq);
+    toneFilter.reset();
+    lastToneFreq = toneFreq;
+
+    // Re-prepare sub guard filters
+    const float sgFreq = subGuardFreqParam ? subGuardFreqParam->load() : DSPConstants::SUBGUARD_FREQ_DEFAULT;
+    const float filterInitFreq = (sgFreq <= 1.0f) ? 60.0f : sgFreq;
+    constexpr float lr2Q = 0.5f;
+
+    lowPassFilter1.prepare(spec);
+    *lowPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq);
+    lowPassFilter1.reset();
+    lowPassFilter2.prepare(spec);
+    *lowPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq);
+    lowPassFilter2.reset();
+    highPassFilter1.prepare(spec);
+    *highPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq);
+    highPassFilter1.reset();
+    highPassFilter2.prepare(spec);
+    *highPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq);
+    highPassFilter2.reset();
+    subGuardLP12.prepare(spec);
+    *subGuardLP12.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr2Q);
+    subGuardLP12.reset();
+    subGuardHP12.prepare(spec);
+    *subGuardHP12.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
+    subGuardHP12.reset();
+    subGuardLP18_1.prepare(spec);
+    *subGuardLP18_1.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderLowPass(spec.sampleRate, filterInitFreq);
+    subGuardLP18_1.reset();
+    subGuardLP18_2.prepare(spec);
+    *subGuardLP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr2Q);
+    subGuardLP18_2.reset();
+    subGuardHP18_1.prepare(spec);
+    *subGuardHP18_1.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(spec.sampleRate, filterInitFreq);
+    subGuardHP18_1.reset();
+    subGuardHP18_2.prepare(spec);
+    *subGuardHP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
+    subGuardHP18_2.reset();
+
+    lastOversampledSampleRate = spec.sampleRate;
+
+    // Reallocate band-split buffers at new oversampled block size
+    const size_t expectedOversampledSize = static_cast<size_t>(currentBlockSize) * oversamplingFactor;
+    const size_t latSamples = oversampling
+        ? static_cast<size_t>(oversampling->getLatencyInSamples()) : 0;
+    const int oversampledBlockSize = static_cast<int>((expectedOversampledSize + latSamples) * 2 + 128);
+    lowBandBuffer.setSize(numChannels, oversampledBlockSize, false, false, true);
+    highBandBuffer.setSize(numChannels, oversampledBlockSize, false, false, true);
+
+    // Report updated latency
+    setLatencySamples(static_cast<int>(latSamples));
+
+    // Reset all DSP state
+    resetDSPState();
+}
 
 void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
@@ -889,14 +1004,16 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     if (buffer.getNumSamples() == 0 || buffer.getNumChannels() == 0)
         return;
 
-    // Ensure oversampling exists
-    if (!oversampling)
-        return;
-
     // Thread-safe state reset (triggered by setStateInformation on GUI thread)
     if (stateNeedsReset.exchange(false, std::memory_order_acquire))
     {
         resetDSPState();
+    }
+
+    // Runtime oversampling reconfiguration (triggered by settings overlay)
+    if (oversamplingNeedsRecreate.exchange(false, std::memory_order_acquire))
+    {
+        reinitializeOversampling();
     }
 
     // CRITICAL: Detect sample rate changes and update coefficients
@@ -1230,7 +1347,10 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     if (preHighPassFilter.state)
         preHighPassFilter.process(juce::dsp::ProcessContextReplacing<float>(inputBlock));
 
-    auto oversampledBlock = oversampling->processSamplesUp(inputBlock);
+    // Upsample (or use input directly when oversampling is off)
+    auto oversampledBlock = oversampling
+        ? oversampling->processSamplesUp(inputBlock)
+        : inputBlock;
 
     // Check actual oversampled size and validate buffer allocation (always enabled)
     const size_t actualOversampledSamples = oversampledBlock.getNumSamples();
@@ -1948,8 +2068,9 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         }
     }
 
-    // Downsample back into original buffer
-    oversampling->processSamplesDown(inputBlock);
+    // Downsample back into original buffer (skip when oversampling is off)
+    if (oversampling)
+        oversampling->processSamplesDown(inputBlock);
 
     // NOTE: Waveshaper and LA-2A compression are now in the oversampled domain (before downsampling)
     // This eliminates aliasing from harmonic generation

@@ -714,8 +714,8 @@ public:
 class SettingsOverlay : public juce::Component
 {
 public:
-    SettingsOverlay(juce::AudioProcessorValueTreeState& apvts, SettingsState& state)
-        : settingsState(state)
+    SettingsOverlay(juce::AudioProcessorValueTreeState& apvts, SettingsState& state, PluginProcessor& proc)
+        : settingsState(state), processor(proc)
     {
         setInterceptsMouseClicks(true, true);
 
@@ -734,7 +734,10 @@ public:
         oversamplingCombo.setSelectedId(state.oversamplingMode + 1, juce::dontSendNotification);
         oversamplingCombo.setLookAndFeel(&comboLnf);
         oversamplingCombo.onChange = [this]() {
-            settingsState.oversamplingMode = oversamplingCombo.getSelectedId() - 1;
+            int mode = oversamplingCombo.getSelectedId() - 1; // 0=Off, 1=2x, 2=4x
+            settingsState.oversamplingMode = mode;
+            processor.requestedOversamplingStages.store(mode);
+            processor.oversamplingNeedsRecreate.store(true);
         };
 
         // Auto Gain toggle
@@ -993,6 +996,7 @@ public:
 
 private:
     SettingsState& settingsState;
+    PluginProcessor& processor;
     PillToggleLookAndFeel pillLnf;
 
     // Combo styling
