@@ -8,6 +8,7 @@
 
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
+#include "GitVersion.h"
 
 //Setup Slider in Constructor Here
 
@@ -34,7 +35,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 
     // Setup version label (bottom left corner)
     addAndMakeVisible(versionLabel);
-    versionLabel.setText("v1.9 Scope Length", juce::dontSendNotification);
+    versionLabel.setText(GIT_VERSION_STRING, juce::dontSendNotification);
     versionLabel.setFont(juce::Font(10.0f * fs));
     versionLabel.setColour(juce::Label::textColourId, juce::Colour(0x88, 0x88, 0x88));  // Gray text
     versionLabel.setJustificationType(juce::Justification::left);

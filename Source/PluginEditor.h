@@ -200,14 +200,14 @@ private:
         {
             // Draw glow effect (outer shadow)
             g.setColour(colour.withAlpha(0.15f));
-            g.strokePath(waveformPath, juce::PathStrokeType(6.0f));
+            g.strokePath(waveformPath, juce::PathStrokeType(3.0f));
 
             g.setColour(colour.withAlpha(0.3f));
-            g.strokePath(waveformPath, juce::PathStrokeType(4.0f));
+            g.strokePath(waveformPath, juce::PathStrokeType(2.0f));
 
             // Draw main waveform
             g.setColour(colour.withAlpha(channel == 0 ? 0.9f : 0.6f));
-            g.strokePath(waveformPath, juce::PathStrokeType(2.0f));
+            g.strokePath(waveformPath, juce::PathStrokeType(1.0f));
         }
     }
 
@@ -292,13 +292,13 @@ private:
         if (pathStarted)
         {
             g.setColour(colour.withAlpha(0.15f));
-            g.strokePath(waveformPath, juce::PathStrokeType(6.0f));
+            g.strokePath(waveformPath, juce::PathStrokeType(3.0f));
 
             g.setColour(colour.withAlpha(0.3f));
-            g.strokePath(waveformPath, juce::PathStrokeType(4.0f));
+            g.strokePath(waveformPath, juce::PathStrokeType(2.0f));
 
             g.setColour(colour.withAlpha(0.9f));
-            g.strokePath(waveformPath, juce::PathStrokeType(2.0f));
+            g.strokePath(waveformPath, juce::PathStrokeType(1.0f));
         }
     }
 };

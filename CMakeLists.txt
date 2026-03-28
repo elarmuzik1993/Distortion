@@ -27,6 +27,24 @@ else()
     FetchContent_MakeAvailable(JUCE)
 endif()
 
+# ============================================================================
+# Auto-generate version header from git at build time
+# ============================================================================
+find_package(Git QUIET)
+if(GIT_FOUND)
+    add_custom_target(GitVersion ALL
+        COMMAND ${CMAKE_COMMAND}
+            -DGIT_EXECUTABLE=${GIT_EXECUTABLE}
+            -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -DOUTPUT_FILE=${CMAKE_SOURCE_DIR}/Source/GitVersion.h
+            -P ${CMAKE_SOURCE_DIR}/cmake/GitVersion.cmake
+        COMMENT "Generating GitVersion.h from git..."
+    )
+else()
+    file(WRITE ${CMAKE_SOURCE_DIR}/Source/GitVersion.h
+        "#pragma once\n#define GIT_VERSION_STRING \"v2.0\"\n")
+endif()
+
 # Plugin sources (shared between plugin and tests)
 set(PLUGIN_SOURCES
     Source/PluginProcessor.cpp
@@ -64,6 +82,9 @@ juce_add_plugin(Distortion
 )
 
 target_sources(Distortion PRIVATE ${PLUGIN_SOURCES})
+if(TARGET GitVersion)
+    add_dependencies(Distortion GitVersion)
+endif()
 
 # Generate JuceHeader.h for Projucer-style compatibility
 juce_generate_juce_header(Distortion)

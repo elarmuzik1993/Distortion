@@ -42,15 +42,20 @@ cmake .. -DCMAKE_BUILD_TYPE=Debug
 
 **Build Commands:**
 ```bash
-# Build plugin (VST3 + Standalone)
-cmake --build . --target Distortion -j$(nproc)
+# Build plugin (VST3 + Standalone) — build BOTH targets to get fresh binaries
+cmake --build . --target Distortion_Standalone --target Distortion_VST3 -j$(nproc)
 
 # Build test runner
 cmake --build . --target DistortionTests -j$(nproc)
 
 # Run tests
 ./DistortionTests_artefacts/Debug/DistortionTests
+
+# Launch standalone
+./Distortion_artefacts/Debug/Standalone/Distortion
 ```
+
+**IMPORTANT:** Do NOT use `--target Distortion` — that only builds the shared library and will NOT relink the standalone executable. Always use `--target Distortion_Standalone` to ensure the latest code is in the binary.
 
 **Notes:**
 - CMake will automatically fetch JUCE 7.0.12 from GitHub if not found locally
