@@ -24,9 +24,8 @@ public:
     Oscilloscope(PluginProcessor& p) : processor(p)
     {
         setOpaque(true);
-        setBufferedToImage(true);
         startTimerHz(DSPConstants::SCOPE_REFRESH_RATE_HZ);
-        cachedBuffer.setSize(2, DSPConstants::SCOPE_DISPLAY_POINTS);
+        cachedBuffer.setSize(2, DSPConstants::SCOPE_DISPLAY_POINTS + DSPConstants::SCOPE_TRIGGER_MARGIN);
         cachedBuffer.clear();
     }
 
@@ -39,22 +38,8 @@ public:
     void setScopeLength(int samples)
     {
         samples = juce::jlimit(64, 1024, samples);
-        const juce::ScopedLock sl(bufferLock);
-        cachedBuffer.setSize(2, samples);
+        cachedBuffer.setSize(2, samples + DSPConstants::SCOPE_TRIGGER_MARGIN);
         cachedBuffer.clear();
-    }
-
-    void resized() override
-    {
-        // Stop timer during resize to prevent concurrent buffer access
-        stopTimer();
-
-        // Restart after a short delay to let resize settle
-        juce::Timer::callAfterDelay(50, [this]()
-            {
-                if (!isTimerRunning())
-                    startTimerHz(DSPConstants::SCOPE_REFRESH_RATE_HZ);
-            });
     }
 
     void paint(juce::Graphics& g) override
@@ -97,9 +82,6 @@ public:
         g.setColour(juce::Colours::grey.withAlpha(0.4f));
         g.drawLine(0, bounds.getHeight() / 2, bounds.getWidth(), bounds.getHeight() / 2, 1.5f);
 
-        // Lock buffer while drawing
-        const juce::ScopedLock sl(bufferLock);
-
         // Draw waveforms with neon red glow effect
         if (stereoMode)
         {
@@ -124,8 +106,27 @@ public:
     {
         if (getWidth() > 0 && getHeight() > 0)
         {
-            const juce::ScopedLock sl(bufferLock);
             processor.fillScopeBuffer(cachedBuffer);
+
+            // Rising zero-crossing trigger on left channel
+            triggerOffset = 0;
+            const int totalSamples = cachedBuffer.getNumSamples();
+            const int displayPoints = totalSamples - DSPConstants::SCOPE_TRIGGER_MARGIN;
+            const int searchEnd = juce::jmin(DSPConstants::SCOPE_TRIGGER_MARGIN,
+                                              totalSamples - displayPoints);
+            if (searchEnd > 1 && displayPoints > 0)
+            {
+                const float* ch0 = cachedBuffer.getReadPointer(0);
+                for (int i = 1; i < searchEnd; ++i)
+                {
+                    if (ch0[i - 1] <= 0.0f && ch0[i] > 0.0f)
+                    {
+                        triggerOffset = i;
+                        break;
+                    }
+                }
+            }
+
             repaint();
         }
     }
@@ -133,22 +134,20 @@ public:
 private:
     PluginProcessor& processor;
     juce::AudioBuffer<float> cachedBuffer;   // Use this for drawing
-    juce::CriticalSection bufferLock;
     bool stereoMode = true;
+    int triggerOffset = 0;
 
-    void drawChannelWithGlow(juce::Graphics& g, int channel, juce::Colour colour)
+    // Build a waveform path from an arbitrary sample reader.
+    // readSample(index) returns the float sample at the given (trigger-relative) index.
+    juce::Path buildWaveformPath(int numSamples, std::function<float(int)> readSample)
     {
         auto bounds = getLocalBounds().toFloat();
         const float height = bounds.getHeight();
         const float width = bounds.getWidth();
-        const int numSamples = cachedBuffer.getNumSamples();
 
-        if (numSamples < 2 || width < 2 || height < 2) return;
-        if (channel >= cachedBuffer.getNumChannels()) return;
-
-        juce::Path waveformPath;
+        juce::Path path;
         const int numPoints = juce::jmin(DSPConstants::SCOPE_DISPLAY_POINTS, numSamples);
-        if (numPoints < 2) return;
+        if (numPoints < 2 || width < 2 || height < 2) return path;
 
         bool pathStarted = false;
 
@@ -160,23 +159,16 @@ private:
 
             float sample;
             if (bufferIndex < numSamples - 1 && fraction > 0.0f)
-            {
-                const float sample1 = cachedBuffer.getSample(channel, bufferIndex);
-                const float sample2 = cachedBuffer.getSample(channel, bufferIndex + 1);
-                sample = sample1 + fraction * (sample2 - sample1);
-            }
+                sample = readSample(bufferIndex) + fraction * (readSample(bufferIndex + 1) - readSample(bufferIndex));
             else
-            {
-                sample = cachedBuffer.getSample(channel, bufferIndex);
-            }
+                sample = readSample(bufferIndex);
 
             if (!std::isfinite(sample))
                 continue;
 
             sample = juce::jlimit(-1.0f, 1.0f, sample);
 
-            const float xPos = (float)i / (float)(numPoints - 1);
-            const float x = bounds.getX() + xPos * width;
+            const float x = bounds.getX() + ((float)i / (float)(numPoints - 1)) * width;
             const float y = bounds.getY() + (0.5f - sample * 0.45f) * height;
 
             if (!std::isfinite(x) || !std::isfinite(y))
@@ -187,119 +179,57 @@ private:
 
             if (!pathStarted)
             {
-                waveformPath.startNewSubPath(clampedX, clampedY);
+                path.startNewSubPath(clampedX, clampedY);
                 pathStarted = true;
             }
             else
             {
-                waveformPath.lineTo(clampedX, clampedY);
+                path.lineTo(clampedX, clampedY);
             }
         }
 
-        if (pathStarted)
-        {
-            // Draw glow effect (outer shadow)
-            g.setColour(colour.withAlpha(0.15f));
-            g.strokePath(waveformPath, juce::PathStrokeType(3.0f));
+        return path;
+    }
 
-            g.setColour(colour.withAlpha(0.3f));
-            g.strokePath(waveformPath, juce::PathStrokeType(2.0f));
+    void strokeWithGlow(juce::Graphics& g, const juce::Path& path, juce::Colour colour, float mainAlpha)
+    {
+        if (path.isEmpty()) return;
+        g.setColour(colour.withAlpha(0.25f));
+        g.strokePath(path, juce::PathStrokeType(3.0f));
+        g.setColour(colour.withAlpha(mainAlpha));
+        g.strokePath(path, juce::PathStrokeType(1.0f));
+    }
 
-            // Draw main waveform
-            g.setColour(colour.withAlpha(channel == 0 ? 0.9f : 0.6f));
-            g.strokePath(waveformPath, juce::PathStrokeType(1.0f));
-        }
+    void drawChannelWithGlow(juce::Graphics& g, int channel, juce::Colour colour)
+    {
+        const int numSamples = cachedBuffer.getNumSamples() - triggerOffset;
+        if (numSamples < 2 || channel >= cachedBuffer.getNumChannels()) return;
+
+        auto readSample = [&](int idx) {
+            return cachedBuffer.getSample(channel, triggerOffset + idx);
+        };
+        strokeWithGlow(g, buildWaveformPath(numSamples, readSample), colour,
+                       channel == 0 ? 0.9f : 0.6f);
     }
 
     void drawMonoWithGlow(juce::Graphics& g, juce::Colour colour)
     {
-        auto bounds = getLocalBounds().toFloat();
-        const float height = bounds.getHeight();
-        const float width = bounds.getWidth();
-        const int numSamples = cachedBuffer.getNumSamples();
+        const int numSamples = cachedBuffer.getNumSamples() - triggerOffset;
         const int numChannels = cachedBuffer.getNumChannels();
+        if (numSamples < 2 || numChannels < 1) return;
 
-        if (numSamples < 2 || width < 2 || height < 2 || numChannels < 1) return;
+        std::function<float(int)> readSample;
+        if (numChannels >= 2)
+            readSample = [&](int idx) {
+                return (cachedBuffer.getSample(0, triggerOffset + idx) +
+                        cachedBuffer.getSample(1, triggerOffset + idx)) * 0.5f;
+            };
+        else
+            readSample = [&](int idx) {
+                return cachedBuffer.getSample(0, triggerOffset + idx);
+            };
 
-        juce::Path waveformPath;
-        const int numPoints = juce::jmin(DSPConstants::SCOPE_DISPLAY_POINTS, numSamples);
-        if (numPoints < 2) return;
-
-        bool pathStarted = false;
-
-        for (int i = 0; i < numPoints; ++i)
-        {
-            const float bufferPos = (float)i * (float)(numSamples - 1) / (float)(numPoints - 1);
-            const int bufferIndex = juce::jlimit(0, numSamples - 1, (int)bufferPos);
-            const float fraction = bufferPos - bufferIndex;
-
-            float sample;
-            if (numChannels >= 2)
-            {
-                float s0, s1;
-                if (bufferIndex < numSamples - 1 && fraction > 0.0f)
-                {
-                    s0 = cachedBuffer.getSample(0, bufferIndex) + fraction * (cachedBuffer.getSample(0, bufferIndex + 1) - cachedBuffer.getSample(0, bufferIndex));
-                    s1 = cachedBuffer.getSample(1, bufferIndex) + fraction * (cachedBuffer.getSample(1, bufferIndex + 1) - cachedBuffer.getSample(1, bufferIndex));
-                }
-                else
-                {
-                    s0 = cachedBuffer.getSample(0, bufferIndex);
-                    s1 = cachedBuffer.getSample(1, bufferIndex);
-                }
-                sample = (s0 + s1) * 0.5f;
-            }
-            else
-            {
-                if (bufferIndex < numSamples - 1 && fraction > 0.0f)
-                {
-                    const float sample1 = cachedBuffer.getSample(0, bufferIndex);
-                    const float sample2 = cachedBuffer.getSample(0, bufferIndex + 1);
-                    sample = sample1 + fraction * (sample2 - sample1);
-                }
-                else
-                {
-                    sample = cachedBuffer.getSample(0, bufferIndex);
-                }
-            }
-
-            if (!std::isfinite(sample))
-                continue;
-
-            sample = juce::jlimit(-1.0f, 1.0f, sample);
-
-            const float xPos = (float)i / (float)(numPoints - 1);
-            const float x = bounds.getX() + xPos * width;
-            const float y = bounds.getY() + (0.5f - sample * 0.45f) * height;
-
-            if (!std::isfinite(x) || !std::isfinite(y))
-                continue;
-
-            const float clampedX = juce::jlimit(bounds.getX(), bounds.getRight(), x);
-            const float clampedY = juce::jlimit(bounds.getY(), bounds.getBottom(), y);
-
-            if (!pathStarted)
-            {
-                waveformPath.startNewSubPath(clampedX, clampedY);
-                pathStarted = true;
-            }
-            else
-            {
-                waveformPath.lineTo(clampedX, clampedY);
-            }
-        }
-
-        if (pathStarted)
-        {
-            g.setColour(colour.withAlpha(0.15f));
-            g.strokePath(waveformPath, juce::PathStrokeType(3.0f));
-
-            g.setColour(colour.withAlpha(0.3f));
-            g.strokePath(waveformPath, juce::PathStrokeType(2.0f));
-
-            g.setColour(colour.withAlpha(0.9f));
-            g.strokePath(waveformPath, juce::PathStrokeType(1.0f));
-        }
+        strokeWithGlow(g, buildWaveformPath(numSamples, readSample), colour, 0.9f);
     }
 };
 

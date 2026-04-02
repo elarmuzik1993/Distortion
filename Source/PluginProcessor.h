@@ -66,6 +66,7 @@ namespace DSPConstants
     constexpr int SCOPE_BUFFER_SIZE = 2048;                   // Circular buffer size for waveform display
     constexpr int SCOPE_UPDATE_DECIMATION = 2;                // Update every 2 samples to reduce CPU
     constexpr int SCOPE_DISPLAY_POINTS = 512;                 // Number of points to draw
+    constexpr int SCOPE_TRIGGER_MARGIN = 256;                 // Extra samples for trigger search
     constexpr int SCOPE_REFRESH_RATE_HZ = 30;                 // UI refresh rate
 
     // Gain reduction meter
@@ -413,7 +414,6 @@ private:
 
     juce::AudioBuffer<float> scopeBuffer;
     juce::AbstractFifo scopeFifo;
-    mutable juce::SpinLock scopeLock;
 
     // Helper methods for studio distortion DSP
     float applyStudioDistortion(float x, float gain, float drive, int clipType, float harmonicScale, int channel = 0);

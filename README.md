@@ -1,11 +1,11 @@
-# Distortion v1.8 - Audio Plugin
+# Distortion v1.9 - Audio Plugin
 
 A professional JUCE audio plugin featuring multi-stage distortion, LA2A-style compression, LFO modulation routing, and advanced signal processing.
 
 ## Project Overview
 
 **Distortion** - A JUCE audio plugin by Elar Music Audio
-- **Version**: 1.8 LFO Routing
+- **Version**: 1.9 Oscilloscope Quality
 - **Type**: Audio Plugin (VST3, VST2, Standalone)
 - **Framework**: JUCE 7.0.12
 - **Platforms**: Windows, Linux, macOS
@@ -19,6 +19,12 @@ A professional JUCE audio plugin featuring multi-stage distortion, LA2A-style co
 - **Sub Guard**: Variable-slope crossover (50-200Hz) protects sub-bass from distortion
 - **True Bypass**: Zero processing when distortion < 0.5%
 - **Dist Mix**: Parallel distortion blending (0-100%)
+
+### Oscilloscope (v1.9)
+- **Zero-crossing trigger**: Waveform locked to rising edge — no horizontal drift
+- **Anti-alias decimation**: 2-point averaging filter before scope downsampling
+- **Real-time display**: Always shows the most recent audio (FIFO drain on every frame)
+- **Lock-free pipeline**: SpinLock removed — pure `AbstractFifo` SPSC, no audio-thread contention
 
 ### LFO Modulation System (v1.8)
 - **5 Waveforms**: Sine, Triangle, Square, Saw, Random S&H

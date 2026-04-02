@@ -1314,9 +1314,10 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         {
             if (scopeFifo.getFreeSpace() > 0)
             {
-                const float leftSample = buffer.getSample(0, sample);
+                const int next = juce::jmin(sample + 1, buffer.getNumSamples() - 1);
+                const float leftSample = (buffer.getSample(0, sample) + buffer.getSample(0, next)) * 0.5f;
                 const float rightSample = buffer.getNumChannels() > 1 ?
-                    buffer.getSample(1, sample) : leftSample;
+                    (buffer.getSample(1, sample) + buffer.getSample(1, next)) * 0.5f : leftSample;
                 pushSampleToScope(leftSample, rightSample);
             }
         }
@@ -2252,9 +2253,10 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         // Check if there's space in the FIFO before writing
         if (scopeFifo.getFreeSpace() > 0)
         {
-            const float leftSample = buffer.getSample(0, sample);
+            const int next = juce::jmin(sample + 1, buffer.getNumSamples() - 1);
+            const float leftSample = (buffer.getSample(0, sample) + buffer.getSample(0, next)) * 0.5f;
             const float rightSample = buffer.getNumChannels() > 1 ?
-                buffer.getSample(1, sample) : leftSample;
+                (buffer.getSample(1, sample) + buffer.getSample(1, next)) * 0.5f : leftSample;
             pushSampleToScope(leftSample, rightSample);
         }
     }
@@ -2262,7 +2264,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
 void PluginProcessor::pushSampleToScope(float left, float right)
 {
-    const juce::SpinLock::ScopedLockType lock(scopeLock);
     int start1, size1, start2, size2;
     scopeFifo.prepareToWrite(1, start1, size1, start2, size2);
 
@@ -2279,48 +2280,46 @@ void PluginProcessor::pushSampleToScope(float left, float right)
 }
 void PluginProcessor::fillScopeBuffer(juce::AudioBuffer<float>& destBuffer)
 {
-    const juce::SpinLock::ScopedLockType lock(scopeLock);
     const int numSamples = destBuffer.getNumSamples();
     const int availableSamples = scopeFifo.getNumReady();
 
-    // Only read what's available
-    const int samplesToRead = juce::jmin(numSamples, availableSamples);
-
-    if (samplesToRead == 0)
-    {
-        // No new data available
+    if (availableSamples == 0)
         return;
+
+    // Drain excess so we always display the most recent audio
+    const int excess = availableSamples - numSamples;
+    if (excess > 0)
+    {
+        int start1, size1, start2, size2;
+        scopeFifo.prepareToRead(excess, start1, size1, start2, size2);
+        scopeFifo.finishedRead(size1 + size2);
     }
+
+    // Read the latest samples
+    const int samplesToRead = juce::jmin(numSamples, scopeFifo.getNumReady());
+    if (samplesToRead == 0)
+        return;
 
     int start1, size1, start2, size2;
     scopeFifo.prepareToRead(samplesToRead, start1, size1, start2, size2);
 
-    // Copy first section
     if (size1 > 0)
     {
-        for (int channel = 0; channel < destBuffer.getNumChannels(); ++channel)
-        {
-            destBuffer.copyFrom(channel, 0, scopeBuffer, channel, start1, size1);
-        }
+        for (int ch = 0; ch < destBuffer.getNumChannels(); ++ch)
+            destBuffer.copyFrom(ch, 0, scopeBuffer, ch, start1, size1);
     }
 
-    // Copy second section (wrap-around)
     if (size2 > 0)
     {
-        for (int channel = 0; channel < destBuffer.getNumChannels(); ++channel)
-        {
-            destBuffer.copyFrom(channel, size1, scopeBuffer, channel, start2, size2);
-        }
+        for (int ch = 0; ch < destBuffer.getNumChannels(); ++ch)
+            destBuffer.copyFrom(ch, size1, scopeBuffer, ch, start2, size2);
     }
 
-    // If we read less than requested, clear the remainder
     if (samplesToRead < numSamples)
     {
         const int remaining = numSamples - samplesToRead;
-        for (int channel = 0; channel < destBuffer.getNumChannels(); ++channel)
-        {
-            destBuffer.clear(channel, samplesToRead, remaining);
-        }
+        for (int ch = 0; ch < destBuffer.getNumChannels(); ++ch)
+            destBuffer.clear(ch, samplesToRead, remaining);
     }
 
     scopeFifo.finishedRead(samplesToRead);

@@ -367,7 +367,20 @@ for (size_t channel = 0; channel < numChannels; ++channel)
 
 ## Recent Architectural Changes
 
-**Current Session Changes (LFO Destination Routing)**:
+**Current Session Changes (Oscilloscope Quality Audit — v1.9)**:
+- **Removed SpinLock from scope pipeline**: `juce::AbstractFifo` is lock-free SPSC by design. The `scopeLock` SpinLock and `bufferLock` CriticalSection were redundant and risked audio-thread stalls. Both removed entirely.
+- **Fixed FIFO drain logic in `fillScopeBuffer()`**: Previously read oldest 512 samples from a nearly-full 2048-sample FIFO, causing ~64ms display latency. Now drains excess samples first so the display always shows the most recent audio.
+- **Zero-crossing trigger**: `Oscilloscope::timerCallback()` scans the first `SCOPE_TRIGGER_MARGIN` (256) samples of the buffer for a rising zero-crossing on channel 0, stores `triggerOffset`, and both draw functions offset all reads by it. Waveform is now phase-stable across frames.
+- **Anti-alias decimation filter**: Both `pushSampleToScope` call sites now average `sample[n]` and `sample[n+1]` before pushing (2-point box filter). Prevents visual aliasing from naive 2x downsampling.
+- **Removed `setBufferedToImage(true)`**: Backing bitmap was invalidated every 30Hz frame anyway — pure memory overhead with no benefit.
+- **Removed `resized()` timer workaround**: The stop/restart-timer-after-50ms lambda (with unsafe `this` capture) existed only to avoid a race condition that never existed on the single JUCE message thread.
+- **Refactored draw functions**: `drawChannelWithGlow` and `drawMonoWithGlow` shared ~130 lines of identical path-building code. Extracted into `buildWaveformPath(numSamples, readSample)` (takes a lambda) and `strokeWithGlow(g, path, colour, mainAlpha)`.
+- **Reduced glow stroke passes**: 3 strokes per channel (3px + 2px + 1px) merged into 2 (3px glow + 1px main). Stereo: 6→4 strokes per frame.
+- **`SCOPE_TRIGGER_MARGIN = 256`** constant added to `DSPConstants` in `PluginProcessor.h`.
+- **Tests**: All 2033 assertions pass. New `testScopeDrainExcess` test added to `ThreadSafetyTests`.
+- **Version**: Updated to v1.9 Oscilloscope Quality
+
+**Previous Session Changes (LFO Destination Routing)**:
 - **LFO Destination Parameter**: Added `"lfoDestination"` AudioParameterChoice with 5 destinations
   - 0: Distortion Amount (default, backward compatible)
   - 1: Tone Filter (logarithmic ±2 octave sweep, 2000-20000 Hz)

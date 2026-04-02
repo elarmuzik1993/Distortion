@@ -165,6 +165,7 @@ public:
 
 private:
     void testScopeBufferAccess();
+    void testScopeDrainExcess();
     void testAtomicGainReduction();
     void testMultiInstanceIndependence();
     void testPerInstanceRandomGenerators();

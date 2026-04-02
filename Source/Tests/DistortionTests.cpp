@@ -1554,6 +1554,9 @@ void ThreadSafetyTests::runTest()
     beginTest("Scope Buffer Access");
     testScopeBufferAccess();
 
+    beginTest("Scope FIFO Drain");
+    testScopeDrainExcess();
+
     beginTest("Atomic Gain Reduction");
     testAtomicGainReduction();
 
@@ -1580,6 +1583,34 @@ void ThreadSafetyTests::testScopeBufferAccess()
 
     // Should not crash and produce valid data
     expect(!containsInvalidSamples(displayBuffer), "Scope buffer contains invalid samples");
+}
+
+void ThreadSafetyTests::testScopeDrainExcess()
+{
+    PluginProcessor processor;
+    processor.prepareToPlay(48000.0, 512);
+
+    // Overfill the FIFO with multiple blocks
+    juce::MidiBuffer midi;
+    for (int i = 0; i < 10; ++i)
+    {
+        auto buffer = generateSineWave(1000.0, 48000.0, 512, 0.7f);
+        processor.processBlock(buffer, midi);
+    }
+
+    // Read into display-sized buffer — should drain excess and return valid data
+    juce::AudioBuffer<float> displayBuffer(2, DSPConstants::SCOPE_DISPLAY_POINTS);
+    processor.fillScopeBuffer(displayBuffer);
+    expect(!containsInvalidSamples(displayBuffer),
+           "Display buffer invalid after draining excess");
+
+    // FIFO should be nearly empty after drain+read
+    // Process one more block — fresh data should be readable immediately
+    auto buffer2 = generateSineWave(1000.0, 48000.0, 512, 0.7f);
+    processor.processBlock(buffer2, midi);
+    processor.fillScopeBuffer(displayBuffer);
+    expect(!containsInvalidSamples(displayBuffer),
+           "Display buffer invalid after second read");
 }
 
 void ThreadSafetyTests::testAtomicGainReduction()
