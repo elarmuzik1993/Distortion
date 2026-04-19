@@ -2528,13 +2528,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         juce::ParameterID{ "clipType", 1 },
         "Clip Type",
         juce::StringArray{
-            "Studio Tanh",           // 0: Enhanced Tanh with asymmetric bias
-            "Soft Knee",             // 1: Soft knee with compression
-            "Dynamic Compress",      // 2: Dynamic ratio compression
-            "Multi-Stage",           // 3: Multi-stage hard clipping
-            "Harmonic",              // 4: Tanh with 2nd harmonic boost
-            "Asymmetric",            // 5: Asymmetric clipping
-            "Hard Limit"             // 6: Hard limiting
+            "Brutal Fuzz",            // 0: Aggressive hard clipping with analog noise
+            "Tube Overdrive",         // 1: Asymmetric tube saturation with harmonics
+            "Bit Crusher",            // 2: Digital destruction with sample rate reduction
+            "Tape Saturation",        // 3: Analog tape with hysteresis
+            "Transformer Saturation", // 4: Heavy harmonic distortion
+            "Diode Clipper",          // 5: Asymmetric diode clipping with grit
+            "Decimator"               // 6: Extreme digital destruction
         },
         0));
 

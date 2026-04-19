@@ -10,7 +10,7 @@ execute_process(
     RESULT_VARIABLE TAG_RESULT
 )
 if(NOT TAG_RESULT EQUAL 0 OR GIT_TAG STREQUAL "")
-    set(GIT_TAG "v2.0")
+    set(GIT_TAG "v2.1")
 endif()
 
 # Count commits since that tag

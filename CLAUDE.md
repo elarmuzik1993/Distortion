@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Distortion** is a professional JUCE audio plugin by Elar Music Audio featuring multi-stage distortion processing, LA2A-style optical compression, and advanced signal processing. The plugin supports VST3, VST2, and Standalone formats.
+**Monolit Distortion** is a professional JUCE audio plugin by Boris Miscenco (Monolit Beats) featuring multi-stage distortion processing, LA2A-style optical compression, and advanced signal processing. The plugin supports VST3, VST2, and Standalone formats.
 
 ## Build System
 
@@ -367,7 +367,7 @@ for (size_t channel = 0; channel < numChannels; ++channel)
 
 ## Recent Architectural Changes
 
-**Current Session Changes (Oscilloscope Quality Audit — v1.9)**:
+**Current Session Changes (Oscilloscope Quality Audit — v2.1)**:
 - **Removed SpinLock from scope pipeline**: `juce::AbstractFifo` is lock-free SPSC by design. The `scopeLock` SpinLock and `bufferLock` CriticalSection were redundant and risked audio-thread stalls. Both removed entirely.
 - **Fixed FIFO drain logic in `fillScopeBuffer()`**: Previously read oldest 512 samples from a nearly-full 2048-sample FIFO, causing ~64ms display latency. Now drains excess samples first so the display always shows the most recent audio.
 - **Zero-crossing trigger**: `Oscilloscope::timerCallback()` scans the first `SCOPE_TRIGGER_MARGIN` (256) samples of the buffer for a rising zero-crossing on channel 0, stores `triggerOffset`, and both draw functions offset all reads by it. Waveform is now phase-stable across frames.
@@ -378,7 +378,7 @@ for (size_t channel = 0; channel < numChannels; ++channel)
 - **Reduced glow stroke passes**: 3 strokes per channel (3px + 2px + 1px) merged into 2 (3px glow + 1px main). Stereo: 6→4 strokes per frame.
 - **`SCOPE_TRIGGER_MARGIN = 256`** constant added to `DSPConstants` in `PluginProcessor.h`.
 - **Tests**: All 2033 assertions pass. New `testScopeDrainExcess` test added to `ThreadSafetyTests`.
-- **Version**: Updated to v1.9 Oscilloscope Quality
+- **Version**: Updated to v2.1 (Oscilloscope Quality Audit)
 
 **Previous Session Changes (LFO Destination Routing)**:
 - **LFO Destination Parameter**: Added `"lfoDestination"` AudioParameterChoice with 5 destinations

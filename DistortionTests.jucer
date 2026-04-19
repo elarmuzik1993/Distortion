@@ -2,7 +2,7 @@
 
 <JUCERPROJECT id="TestRnr1" name="DistortionTests" projectType="consoleapp"
               useAppConfig="0" addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1"
-              companyName="Elar Music Audio" defines="JUCE_DEBUG=1&#10;JucePlugin_Name=&quot;Distortion&quot;&#10;JucePlugin_IsSynth=0&#10;JucePlugin_WantsMidiInput=0&#10;JucePlugin_ProducesMidiOutput=0&#10;JucePlugin_IsMidiEffect=0">
+              companyName="Boris Miscenco" defines="JUCE_DEBUG=1&#10;JucePlugin_Name=&quot;Distortion&quot;&#10;JucePlugin_IsSynth=0&#10;JucePlugin_WantsMidiInput=0&#10;JucePlugin_ProducesMidiOutput=0&#10;JucePlugin_IsMidiEffect=0">
   <MAINGROUP id="TestMain" name="DistortionTests">
     <GROUP id="{TESTGROUP1}" name="Source">
       <FILE id="TestRun1" name="TestRunner.cpp" compile="1" resource="0"

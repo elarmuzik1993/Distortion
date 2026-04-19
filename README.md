@@ -1,15 +1,25 @@
-# Distortion v1.9 - Audio Plugin
+# Monolit Distortion v2.1 - Audio Plugin
 
 A professional JUCE audio plugin featuring multi-stage distortion, LA2A-style compression, LFO modulation routing, and advanced signal processing.
 
 ## Project Overview
 
-**Distortion** - A JUCE audio plugin by Elar Music Audio
-- **Version**: 1.9 Oscilloscope Quality
+**Monolit Distortion** - A JUCE audio plugin by Boris Miscenco (Monolit Beats)
+- **Version**: 2.1
 - **Type**: Audio Plugin (VST3, VST2, Standalone)
 - **Framework**: JUCE 7.0.12
-- **Platforms**: Windows, Linux, macOS
+- **Platforms**: Windows, Linux
 - **Build Systems**: CMake (cross-platform), Visual Studio 2022
+
+## What's New in v2.1
+
+- **EXTREME toggle** — over-the-top saturation switch
+- **Global wet/dry mix** — full-plugin parallel blending slider
+- **Oscilloscope overhaul** — zero-crossing trigger, anti-alias decimation, lock-free pipeline, adjustable scope length, stereo/mono toggle
+- **Settings overlay** — runtime oversampling dropdown, auto-gain enable/disable
+- **Proportional window scaling** with 70% default size
+- **Sub-frequency energy preservation** through the full signal chain
+- **Fixes:** settings panel clipping, bottom-row label rendering, component visibility on load, preset Save/Delete moved into the dropdown menu
 
 ## Features
 
@@ -20,13 +30,13 @@ A professional JUCE audio plugin featuring multi-stage distortion, LA2A-style co
 - **True Bypass**: Zero processing when distortion < 0.5%
 - **Dist Mix**: Parallel distortion blending (0-100%)
 
-### Oscilloscope (v1.9)
+### Oscilloscope
 - **Zero-crossing trigger**: Waveform locked to rising edge — no horizontal drift
 - **Anti-alias decimation**: 2-point averaging filter before scope downsampling
 - **Real-time display**: Always shows the most recent audio (FIFO drain on every frame)
 - **Lock-free pipeline**: SpinLock removed — pure `AbstractFifo` SPSC, no audio-thread contention
 
-### LFO Modulation System (v1.8)
+### LFO Modulation System
 - **5 Waveforms**: Sine, Triangle, Square, Saw, Random S&H
 - **5 Modulation Destinations**: Distortion Amount, Tone Filter, Hi-Pass, Dist Mix, Output Gain
 - **Rate**: 0.1-50Hz
@@ -90,9 +100,8 @@ Distortion/
 
 ## Installation
 
-- **Linux**: `~/.vst3/`
-- **macOS**: `~/Library/Audio/Plug-Ins/VST3/`
 - **Windows**: `%CommonProgramFiles%\VST3\`
+- **Linux**: `~/.vst3/`
 
 ## Requirements
 
@@ -103,4 +112,8 @@ Distortion/
 
 ## License
 
-Elar Music Audio
+This project is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE). You may view, fork, and modify the source for **non-commercial** purposes (research, personal study, hobby projects, educational use).
+
+**Commercial use requires a paid license.** For commercial licensing inquiries, contact **elar.muzik@gmail.com**.
+
+Copyright © 2026 Boris Miscenco. All rights reserved.

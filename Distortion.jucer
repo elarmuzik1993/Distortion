@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
 <JUCERPROJECT id="Uw5gjH" name="Distortion" projectType="audioplug" useAppConfig="0"
-              addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1" companyName="Elar Music Audio"
-              pluginFormats="buildStandalone,buildVST3">
+              addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1" companyName="Boris Miscenco"
+              version="2.1.0" pluginFormats="buildStandalone,buildVST3">
   <MAINGROUP id="bzn6tE" name="Distortion">
     <GROUP id="{994D41FE-0A16-52D3-EDD9-D7E500BF9C7E}" name="Source">
       <FILE id="TUFi5E" name="PluginProcessor.cpp" compile="1" resource="0"
