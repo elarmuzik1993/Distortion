@@ -202,7 +202,8 @@ private:
 
     void drawChannelWithGlow(juce::Graphics& g, int channel, juce::Colour colour)
     {
-        const int numSamples = cachedBuffer.getNumSamples() - triggerOffset;
+        const int numSamples = juce::jmin(DSPConstants::SCOPE_DISPLAY_POINTS,
+                                           cachedBuffer.getNumSamples() - triggerOffset);
         if (numSamples < 2 || channel >= cachedBuffer.getNumChannels()) return;
 
         auto readSample = [&](int idx) {
@@ -214,7 +215,8 @@ private:
 
     void drawMonoWithGlow(juce::Graphics& g, juce::Colour colour)
     {
-        const int numSamples = cachedBuffer.getNumSamples() - triggerOffset;
+        const int numSamples = juce::jmin(DSPConstants::SCOPE_DISPLAY_POINTS,
+                                           cachedBuffer.getNumSamples() - triggerOffset);
         const int numChannels = cachedBuffer.getNumChannels();
         if (numSamples < 2 || numChannels < 1) return;
 

@@ -2280,49 +2280,62 @@ void PluginProcessor::pushSampleToScope(float left, float right)
 }
 void PluginProcessor::fillScopeBuffer(juce::AudioBuffer<float>& destBuffer)
 {
-    const int numSamples = destBuffer.getNumSamples();
-    const int availableSamples = scopeFifo.getNumReady();
+    // Sliding-window scope: destBuffer is a persistent rolling buffer owned
+    // by the Oscilloscope. Each frame we shift existing samples left and
+    // append newly-arrived FIFO samples on the right. This guarantees the
+    // buffer always holds a contiguous stream of the most recent audio at
+    // any sample rate / block size / oversampling combo, with no seams or
+    // padding artifacts on the right edge.
 
-    if (availableSamples == 0)
+    const int bufferSize = destBuffer.getNumSamples();
+    const int numChannels = destBuffer.getNumChannels();
+    const int available = scopeFifo.getNumReady();
+
+    if (available <= 0 || bufferSize <= 0)
         return;
 
-    // Drain excess so we always display the most recent audio
-    const int excess = availableSamples - numSamples;
-    if (excess > 0)
+    // Drain any samples beyond what we can display in one frame so the
+    // FIFO doesn't lag behind real time.
+    if (available > bufferSize)
     {
-        int start1, size1, start2, size2;
-        scopeFifo.prepareToRead(excess, start1, size1, start2, size2);
-        scopeFifo.finishedRead(size1 + size2);
+        const int excess = available - bufferSize;
+        int s1, sz1, s2, sz2;
+        scopeFifo.prepareToRead(excess, s1, sz1, s2, sz2);
+        scopeFifo.finishedRead(sz1 + sz2);
     }
 
-    // Read the latest samples
-    const int samplesToRead = juce::jmin(numSamples, scopeFifo.getNumReady());
-    if (samplesToRead == 0)
+    const int toRead = juce::jmin(bufferSize, scopeFifo.getNumReady());
+    if (toRead <= 0)
         return;
+
+    // Shift existing samples left by `toRead` so new samples land flush
+    // against the right edge.
+    const int keep = bufferSize - toRead;
+    if (keep > 0)
+    {
+        for (int ch = 0; ch < numChannels; ++ch)
+        {
+            float* data = destBuffer.getWritePointer(ch);
+            std::memmove(data, data + toRead, (size_t) keep * sizeof(float));
+        }
+    }
 
     int start1, size1, start2, size2;
-    scopeFifo.prepareToRead(samplesToRead, start1, size1, start2, size2);
+    scopeFifo.prepareToRead(toRead, start1, size1, start2, size2);
 
+    const int writeOffset = keep;
     if (size1 > 0)
     {
-        for (int ch = 0; ch < destBuffer.getNumChannels(); ++ch)
-            destBuffer.copyFrom(ch, 0, scopeBuffer, ch, start1, size1);
+        for (int ch = 0; ch < numChannels; ++ch)
+            destBuffer.copyFrom(ch, writeOffset, scopeBuffer, ch, start1, size1);
     }
-
     if (size2 > 0)
     {
-        for (int ch = 0; ch < destBuffer.getNumChannels(); ++ch)
-            destBuffer.copyFrom(ch, size1, scopeBuffer, ch, start2, size2);
+        for (int ch = 0; ch < numChannels; ++ch)
+            destBuffer.copyFrom(ch, writeOffset + size1, scopeBuffer, ch, start2, size2);
     }
 
-    if (samplesToRead < numSamples)
-    {
-        const int remaining = numSamples - samplesToRead;
-        for (int ch = 0; ch < destBuffer.getNumChannels(); ++ch)
-            destBuffer.clear(ch, samplesToRead, remaining);
-    }
-
-    scopeFifo.finishedRead(samplesToRead);
+    scopeFifo.finishedRead(toRead);
 }
 //==============================================================================
 bool PluginProcessor::hasEditor() const
