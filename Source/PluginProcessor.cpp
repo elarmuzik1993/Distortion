@@ -221,7 +221,7 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
         const float fundamental = y;
         const float harmonic2 = (0.25f * harmonicScale) * fundamental * fundamental * (fundamental > 0.0f ? 1.0f : -1.0f);
         const float harmonic3 = (0.15f * harmonicScale) * fundamental * fundamental * fundamental;
-        const float harmonic5 = (0.08f * harmonicScale) * std::pow(std::abs(fundamental), 5.0f) * (fundamental > 0.0f ? 1.0f : -1.0f);
+        const float harmonic5 = (0.08f * harmonicScale) * fundamental * fundamental * fundamental * fundamental * fundamental;
 
         y = fundamental + harmonic2 + harmonic3 + harmonic5;
 
