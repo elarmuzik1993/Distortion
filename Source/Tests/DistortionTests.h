@@ -126,6 +126,20 @@ private:
     void testOutputGain();
 };
 
+/** Tests for dry/wet alignment across the oversampling boundary */
+class DryWetAlignmentTests : public juce::UnitTest
+{
+public:
+    DryWetAlignmentTests() : UnitTest("Dry/Wet Alignment", TestCategories::ProcessBlock) {}
+    void runTest() override;
+
+private:
+    void testDryOnlyLatency();
+    void testNoCombFiltering();
+    void testFullyWetPathUnaffected();
+    void testOversamplingReinit();
+};
+
 /** Tests for all parameters - ranges and smoothing */
 class ParameterTests : public juce::UnitTest
 {
@@ -334,6 +348,7 @@ inline void registerAllTests()
     static MinimalProcessorTest minimalProcessorTest;
 
     // Working tests
+    static DryWetAlignmentTests dryWetAlignmentTests;
     static DistortionDSPTests distortionDSPTests;
     static CompressionDSPTests compressionDSPTests;
     static PreCompressionTests preCompressionTests;

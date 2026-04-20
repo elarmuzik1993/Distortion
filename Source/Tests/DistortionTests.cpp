@@ -1385,6 +1385,298 @@ void ProcessBlockTests::testOutputGain()
 }
 
 //==============================================================================
+// DryWetAlignmentTests Implementation
+//==============================================================================
+
+namespace
+{
+    // Configure a processor so the oversampled wet path is engaged but the
+    // signal passes through near-linearly. Disables auto-gain, compression,
+    // extreme mode, and limits distortion to just above the bypass threshold.
+    inline void configureForAlignmentTest(PluginProcessor& processor, float globalMixPct)
+    {
+        setParameter(processor.parameters, "distortionAmount", 0.5f);   // min above bypass
+        setParameter(processor.parameters, "clipType", 1.0f);            // Tube (smooth)
+        setParameter(processor.parameters, "compEnabled", 0.0f);
+        setParameter(processor.parameters, "autoGainEnabled", 0.0f);
+        setParameter(processor.parameters, "extremeEnabled", 0.0f);
+        setParameter(processor.parameters, "subGuardFreq", 0.0f);        // off
+        setParameter(processor.parameters, "distMix", 100.0f);           // dist stage wet
+        setParameter(processor.parameters, "inputGain", 50.0f);          // unity
+        setParameter(processor.parameters, "outputGain", 50.0f);         // unity
+        setParameter(processor.parameters, "lfoEnabled", 0.0f);
+        setParameter(processor.parameters, "globalMix", globalMixPct);
+    }
+
+    // Run blocks of a continuous sine wave through the processor so smoothing
+    // settles. The generator keeps phase across blocks so the signal is truly
+    // continuous (no discontinuities at block boundaries that would smear RMS).
+    inline void warmUp(PluginProcessor& processor, double sampleRate, int blockSize,
+                       double frequency, int numBlocks, double& phaseInOut)
+    {
+        juce::MidiBuffer midi;
+        const double phaseInc = juce::MathConstants<double>::twoPi * frequency / sampleRate;
+
+        for (int b = 0; b < numBlocks; ++b)
+        {
+            juce::AudioBuffer<float> buffer(2, blockSize);
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                auto* data = buffer.getWritePointer(ch);
+                double phase = phaseInOut;
+                for (int s = 0; s < blockSize; ++s)
+                {
+                    data[s] = 0.3f * static_cast<float>(std::sin(phase));
+                    phase += phaseInc;
+                }
+            }
+            phaseInOut += phaseInc * blockSize;
+            phaseInOut = std::fmod(phaseInOut, juce::MathConstants<double>::twoPi);
+            processor.processBlock(buffer, midi);
+        }
+    }
+}
+
+void DryWetAlignmentTests::runTest()
+{
+    beginTest("Dry-only path latency matches reported latency");
+    testDryOnlyLatency();
+
+    beginTest("No comb filtering at 50% mix");
+    testNoCombFiltering();
+
+    beginTest("Fully wet path unaffected by new code");
+    testFullyWetPathUnaffected();
+
+    beginTest("State valid across oversampling reinit");
+    testOversamplingReinit();
+}
+
+void DryWetAlignmentTests::testDryOnlyLatency()
+{
+    // At 0% global mix the output should be a delayed copy of the input. With
+    // the fractional-delay fix, that delay equals the oversampler's reported
+    // latency. We verify by measuring cross-correlation against input at the
+    // reported lag.
+    PluginProcessor processor;
+    const double sr = 44100.0;
+    const int blockSize = 512;
+    processor.prepareToPlay(sr, blockSize);
+    configureForAlignmentTest(processor, 0.0f);
+
+    const int latency = processor.getLatencySamples();
+    expect(latency > 0, "Oversampler should report non-zero latency at default settings");
+
+    const double testFreq = 1000.0;
+    double phase = 0.0;
+    warmUp(processor, sr, blockSize, testFreq, 8, phase);
+
+    // Capture a long continuous segment of input and output
+    const int numBlocks = 8;
+    const int totalSamples = blockSize * numBlocks;
+    juce::AudioBuffer<float> inputCapture(2, totalSamples);
+    juce::AudioBuffer<float> outputCapture(2, totalSamples);
+    juce::MidiBuffer midi;
+
+    const double phaseInc = juce::MathConstants<double>::twoPi * testFreq / sr;
+    for (int b = 0; b < numBlocks; ++b)
+    {
+        juce::AudioBuffer<float> block(2, blockSize);
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            auto* data = block.getWritePointer(ch);
+            double p = phase;
+            for (int s = 0; s < blockSize; ++s)
+            {
+                data[s] = 0.3f * static_cast<float>(std::sin(p));
+                p += phaseInc;
+            }
+        }
+
+        // Copy input before processing
+        for (int ch = 0; ch < 2; ++ch)
+            inputCapture.copyFrom(ch, b * blockSize, block, ch, 0, blockSize);
+
+        processor.processBlock(block, midi);
+
+        for (int ch = 0; ch < 2; ++ch)
+            outputCapture.copyFrom(ch, b * blockSize, block, ch, 0, blockSize);
+
+        phase += phaseInc * blockSize;
+        phase = std::fmod(phase, juce::MathConstants<double>::twoPi);
+    }
+
+    expect(!containsInvalidSamples(outputCapture), "Output must not contain NaN/Inf");
+
+    // Compute aligned correlation: output[n] vs input[n - latency] for n >= latency
+    const int alignedLen = totalSamples - latency;
+    juce::AudioBuffer<float> inAligned(1, alignedLen);
+    juce::AudioBuffer<float> outAligned(1, alignedLen);
+    for (int n = 0; n < alignedLen; ++n)
+    {
+        inAligned.setSample(0, n, inputCapture.getSample(0, n));
+        outAligned.setSample(0, n, outputCapture.getSample(0, n + latency));
+    }
+
+    const float correlation = calculateCorrelation(inAligned, outAligned);
+    expect(correlation > 0.99f,
+           "Dry-only output must correlate strongly with delayed input at reported latency. Got: "
+           + juce::String(correlation));
+
+    // Sanity: output RMS at 100% dry should be close to input RMS (small filter
+    // losses from linear interpolation and the 20Hz hi-pass are tolerable).
+    const float inRms = calculateRMS(inputCapture);
+    const float outRms = calculateRMS(outputCapture);
+    const float rmsRatioDb = juce::Decibels::gainToDecibels(outRms / juce::jmax(inRms, 1.0e-9f));
+    expect(std::abs(rmsRatioDb) < 0.5f,
+           "Dry-only RMS should match input within 0.5dB. Got: " + juce::String(rmsRatioDb) + " dB");
+}
+
+void DryWetAlignmentTests::testNoCombFiltering()
+{
+    // At 50% global mix, both halves are near-identical (distortion near-linear)
+    // so the summed output should preserve the signal at full amplitude. Without
+    // the dry-delay fix, dry + delayed_wet sums would produce comb-filter notches
+    // at f = Fs/(2*latency), roughly 2 kHz for a 4x polyphase IIR at 44.1kHz.
+    PluginProcessor processor;
+    const double sr = 44100.0;
+    const int blockSize = 512;
+    processor.prepareToPlay(sr, blockSize);
+    configureForAlignmentTest(processor, 50.0f);
+
+    const int latency = processor.getLatencySamples();
+    expect(latency > 0, "Test requires non-zero oversampler latency");
+
+    // Probe at the exact notch frequency of an un-aligned 50/50 sum: Fs/(2*D).
+    const double notchFreq = sr / (2.0 * static_cast<double>(latency));
+
+    // Also probe at 1 kHz (safe passband) for a baseline.
+    const double freqs[] = { 1000.0, notchFreq };
+    const char* labels[] = { "1 kHz passband", "un-aligned notch freq" };
+
+    for (int f = 0; f < 2; ++f)
+    {
+        // Fresh warmup per frequency so smoothing and filter state settle
+        double phase = 0.0;
+        warmUp(processor, sr, blockSize, freqs[f], 8, phase);
+
+        const int numBlocks = 8;
+        const int totalSamples = blockSize * numBlocks;
+        juce::AudioBuffer<float> inputCapture(2, totalSamples);
+        juce::AudioBuffer<float> outputCapture(2, totalSamples);
+        juce::MidiBuffer midi;
+
+        const double phaseInc = juce::MathConstants<double>::twoPi * freqs[f] / sr;
+        for (int b = 0; b < numBlocks; ++b)
+        {
+            juce::AudioBuffer<float> block(2, blockSize);
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                auto* data = block.getWritePointer(ch);
+                double p = phase;
+                for (int s = 0; s < blockSize; ++s)
+                {
+                    data[s] = 0.3f * static_cast<float>(std::sin(p));
+                    p += phaseInc;
+                }
+            }
+            for (int ch = 0; ch < 2; ++ch)
+                inputCapture.copyFrom(ch, b * blockSize, block, ch, 0, blockSize);
+
+            processor.processBlock(block, midi);
+
+            for (int ch = 0; ch < 2; ++ch)
+                outputCapture.copyFrom(ch, b * blockSize, block, ch, 0, blockSize);
+
+            phase += phaseInc * blockSize;
+            phase = std::fmod(phase, juce::MathConstants<double>::twoPi);
+        }
+
+        expect(!containsInvalidSamples(outputCapture),
+               juce::String("Output NaN/Inf at ") + labels[f]);
+
+        const float inRms = calculateRMS(inputCapture);
+        const float outRms = calculateRMS(outputCapture);
+        const float ratioDb = juce::Decibels::gainToDecibels(outRms / juce::jmax(inRms, 1.0e-9f));
+
+        // Without the fix, the notch probe would lose ~40-60 dB. With the fix,
+        // both probes should stay within ~1 dB of unity.
+        expect(ratioDb > -2.0f,
+               juce::String("Comb-filter attenuation at ") + labels[f]
+               + " (f=" + juce::String(freqs[f]) + " Hz): " + juce::String(ratioDb) + " dB");
+    }
+}
+
+void DryWetAlignmentTests::testFullyWetPathUnaffected()
+{
+    // 100% wet skips the dry read entirely (fast path via needsGlobalMix = false).
+    // This is a sanity check that the new code doesn't break the common case.
+    PluginProcessor processor;
+    const double sr = 44100.0;
+    const int blockSize = 512;
+    processor.prepareToPlay(sr, blockSize);
+    configureForAlignmentTest(processor, 100.0f);
+
+    double phase = 0.0;
+    warmUp(processor, sr, blockSize, 1000.0, 4, phase);
+
+    auto buffer = generateSineWave(1000.0, sr, blockSize, 0.3f);
+    juce::MidiBuffer midi;
+    processor.processBlock(buffer, midi);
+
+    expect(!containsInvalidSamples(buffer), "100% wet output must not contain NaN/Inf");
+    expect(calculatePeak(buffer) > 0.01f, "100% wet output must not be silent");
+}
+
+void DryWetAlignmentTests::testOversamplingReinit()
+{
+    // Changing oversampling stages triggers reinitializeOversampling, which
+    // must reallocate dryDelayState to the new latency. Process under two
+    // different oversampling factors and confirm no invalid samples.
+    PluginProcessor processor;
+    const double sr = 44100.0;
+    const int blockSize = 512;
+    processor.prepareToPlay(sr, blockSize);
+    configureForAlignmentTest(processor, 40.0f);  // mid mix — forces dry path
+
+    juce::MidiBuffer midi;
+
+    // Run at default (4x) for a while
+    double phase = 0.0;
+    warmUp(processor, sr, blockSize, 1000.0, 4, phase);
+
+    {
+        auto buffer = generateSineWave(1000.0, sr, blockSize, 0.3f);
+        processor.processBlock(buffer, midi);
+        expect(!containsInvalidSamples(buffer), "Output invalid before reinit");
+    }
+
+    // Request a different oversampling factor (2x stages = 1). The processor
+    // applies this change inside processBlock via reinitializeOversampling.
+    processor.requestedOversamplingStages.store(1);
+
+    // Process several blocks to drive the reinit and then settle.
+    warmUp(processor, sr, blockSize, 1000.0, 8, phase);
+
+    {
+        auto buffer = generateSineWave(1000.0, sr, blockSize, 0.3f);
+        processor.processBlock(buffer, midi);
+        expect(!containsInvalidSamples(buffer), "Output invalid after oversampling reinit");
+        expect(calculatePeak(buffer) > 0.01f, "Output must not be silent after reinit");
+    }
+
+    // And flip to off (stages = 0): latency becomes 0 → fast path engaged.
+    processor.requestedOversamplingStages.store(0);
+    warmUp(processor, sr, blockSize, 1000.0, 8, phase);
+
+    {
+        auto buffer = generateSineWave(1000.0, sr, blockSize, 0.3f);
+        processor.processBlock(buffer, midi);
+        expect(!containsInvalidSamples(buffer), "Output invalid with oversampling off");
+    }
+}
+
+//==============================================================================
 // ParameterTests Implementation
 //==============================================================================
 

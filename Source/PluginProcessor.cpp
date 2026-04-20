@@ -698,6 +698,15 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // Report latency to host for proper delay compensation
     setLatencySamples(static_cast<int>(oversamplingLatencySamples));
 
+    // Capture fractional latency for internal dry-path alignment (compensates the
+    // global wet/dry mix; host compensation above remains integer-only).
+    dryDelaySamples = oversampling ? oversampling->getLatencyInSamples() : 0.0f;
+    if (! std::isfinite(dryDelaySamples) || dryDelaySamples < 0.0f)
+        dryDelaySamples = 0.0f;
+    const int dryStateLen = static_cast<int>(std::ceil(dryDelaySamples)) + 2;
+    dryDelayState.setSize(numChannels, dryStateLen, false, false, true);
+    dryDelayState.clear();
+
     // Use 2x multiplier + latency + 128 sample safety margin for absolute safety
     const int oversampledBlockSize = static_cast<int>((expectedOversampledSize + oversamplingLatencySamples) * 2 + 128);
     lowBandBuffer.setSize(numChannels, oversampledBlockSize, false, false, true);
@@ -987,6 +996,14 @@ void PluginProcessor::reinitializeOversampling()
 
     // Report updated latency
     setLatencySamples(static_cast<int>(latSamples));
+
+    // Refresh fractional dry-delay state for the new oversampling factor
+    dryDelaySamples = oversampling ? oversampling->getLatencyInSamples() : 0.0f;
+    if (! std::isfinite(dryDelaySamples) || dryDelaySamples < 0.0f)
+        dryDelaySamples = 0.0f;
+    const int dryStateLen = static_cast<int>(std::ceil(dryDelaySamples)) + 2;
+    dryDelayState.setSize(numChannels, dryStateLen, false, false, true);
+    dryDelayState.clear();
 
     // Reset all DSP state
     resetDSPState();
@@ -2210,16 +2227,77 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     }
 
     // ========== GLOBAL MIX (Active path) ==========
+    // Delay the dry path by the oversampler's (fractional) latency so it aligns
+    // with the wet path at the mix point. Without this, non-zero oversampling
+    // latency causes comb filtering at any mix < 100% wet.
     if (needsGlobalMix)
     {
-        for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+        const float delay = dryDelaySamples;
+        const int numSamp = buffer.getNumSamples();
+        const int numCh = buffer.getNumChannels();
+
+        if (delay < 1.0e-4f)
         {
-            const float currentMix = smoothedGlobalMix.getNextValue();
-            for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+            // No oversampling latency — direct mix, no interpolation needed.
+            for (int sample = 0; sample < numSamp; ++sample)
             {
-                auto* channelData = buffer.getWritePointer(channel);
-                const float drySample = dryBuffer.getSample(channel, sample);
-                channelData[sample] = drySample * (1.0f - currentMix) + channelData[sample] * currentMix;
+                const float currentMix = smoothedGlobalMix.getNextValue();
+                for (int channel = 0; channel < numCh; ++channel)
+                {
+                    auto* channelData = buffer.getWritePointer(channel);
+                    const float drySample = dryBuffer.getSample(channel, sample);
+                    channelData[sample] = drySample * (1.0f - currentMix) + channelData[sample] * currentMix;
+                }
+            }
+        }
+        else
+        {
+            const float intPart = std::floor(delay);
+            const float frac = delay - intPart;
+            const int intDelay = static_cast<int>(intPart);
+            const int stateLen = dryDelayState.getNumSamples();
+
+            // Linear interpolation between the integer-delay sample and the one
+            // before it. Negative positions read from dryDelayState (the tail of
+            // the previous block's dry signal).
+            for (int sample = 0; sample < numSamp; ++sample)
+            {
+                const float currentMix = smoothedGlobalMix.getNextValue();
+                const int readBase = sample - intDelay;
+
+                for (int channel = 0; channel < numCh; ++channel)
+                {
+                    auto* channelData = buffer.getWritePointer(channel);
+
+                    auto readDry = [&] (int pos) -> float
+                    {
+                        if (pos >= 0)
+                            return dryBuffer.getSample(channel, pos);
+                        const int statePos = stateLen + pos;
+                        return (statePos >= 0) ? dryDelayState.getSample(channel, statePos) : 0.0f;
+                    };
+
+                    const float s0 = readDry(readBase);
+                    const float sM1 = readDry(readBase - 1);
+                    const float drySample = s0 * (1.0f - frac) + sM1 * frac;
+
+                    channelData[sample] = drySample * (1.0f - currentMix) + channelData[sample] * currentMix;
+                }
+            }
+
+            // Update dry-delay state with the last `stateLen` samples of the dry
+            // signal so the next block can read across the boundary.
+            const int srcStart = numSamp - stateLen;
+            for (int channel = 0; channel < numCh; ++channel)
+            {
+                for (int i = 0; i < stateLen; ++i)
+                {
+                    const int src = srcStart + i;
+                    const float v = (src >= 0)
+                        ? dryBuffer.getSample(channel, src)
+                        : dryDelayState.getSample(channel, stateLen + src);
+                    dryDelayState.setSample(channel, i, v);
+                }
             }
         }
     }
@@ -2428,6 +2506,10 @@ void PluginProcessor::resetDSPState()
         manualDCBlockerPrevInput[ch] = 0.0f;
         manualDCBlockerPrevOutput[ch] = 0.0f;
     }
+
+    // Clear fractional dry-delay history to avoid replaying stale samples
+    if (dryDelayState.getNumSamples() > 0)
+        dryDelayState.clear();
 
     // Force filter coefficient update on next processBlock by invalidating cache
     lastHighPassFreq = -1.0f;

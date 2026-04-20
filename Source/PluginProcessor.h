@@ -145,6 +145,7 @@ class HarmonicDensityTests;
 class OutputLimiterTests;
 class NormalizationTests;
 class StatefulDistortionTests;
+class DryWetAlignmentTests;
 #endif
 
 class PluginProcessor : public juce::AudioProcessor
@@ -164,6 +165,7 @@ class PluginProcessor : public juce::AudioProcessor
     friend class OutputLimiterTests;
     friend class NormalizationTests;
     friend class StatefulDistortionTests;
+    friend class DryWetAlignmentTests;
 #endif
 
 public:
@@ -283,6 +285,13 @@ private:
     juce::AudioBuffer<float> lowBandBuffer;   // For clean low frequencies
     juce::AudioBuffer<float> highBandBuffer;  // For distorted high frequencies
     juce::AudioBuffer<float> dryBuffer;       // For global wet/dry mix
+
+    // Fractional dry-path delay to compensate for oversampler latency before the
+    // global wet/dry mix. Without this, the dry sums against a delayed wet signal
+    // and produces comb filtering. State holds the tail of the previous block's
+    // dry samples for negative-index reads during interpolation.
+    float dryDelaySamples = 0.0f;
+    juce::AudioBuffer<float> dryDelayState;
 
     juce::SmoothedValue<float> smoothedOutputGain;  // Only output gain uses SmoothedValue (normal rate)
     juce::SmoothedValue<float> bypassRamp;  // Bypass crossfade to prevent clicks (10ms)
