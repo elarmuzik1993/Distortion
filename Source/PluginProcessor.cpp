@@ -160,8 +160,8 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
 
         y = x * drive * 1.6f;
 
-        // Bit crushing
-        y = std::floor(y * maxValue) / maxValue;
+        // Bit crushing (truncate-toward-zero to avoid the DC offset that std::floor introduces)
+        y = (float)(int)(y * maxValue) / maxValue;
 
         // Add aliasing character
         y = std::tanh(y * 2.5f);
