@@ -586,6 +586,11 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     toneFilter.reset();
     lastToneFreq = initialToneFreq;
 
+    // Phase-match mirror of the tone LP for the Sub Guard low branch (same coeffs, own state)
+    toneFilterLow.prepare(spec);
+    *toneFilterLow.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, initialToneFreq);
+    toneFilterLow.reset();
+
     // Sub Guard variable-slope crossover filters (oversampled domain)
     const float sgFreq = subGuardFreqParam ? subGuardFreqParam->load() : DSPConstants::SUBGUARD_FREQ_DEFAULT;
     // Use safe frequency for filter initialization when OFF (prevents divide-by-zero)
@@ -721,6 +726,7 @@ void PluginProcessor::releaseResources()
     oversampling.reset();
     preHighPassFilter.reset();
     toneFilter.reset();
+    toneFilterLow.reset();
 
     // Reset manual DC blocker state
     for (int ch = 0; ch < 2; ++ch)
@@ -947,6 +953,10 @@ void PluginProcessor::reinitializeOversampling()
     *toneFilter.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, toneFreq);
     toneFilter.reset();
     lastToneFreq = toneFreq;
+
+    toneFilterLow.prepare(spec);
+    *toneFilterLow.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, toneFreq);
+    toneFilterLow.reset();
 
     // Re-prepare sub guard filters
     const float sgFreq = subGuardFreqParam ? subGuardFreqParam->load() : DSPConstants::SUBGUARD_FREQ_DEFAULT;
@@ -1842,7 +1852,10 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         const double toneSampleRate = currentSampleRate * oversamplingFactor;
         // Clamp frequency to valid range (well below Nyquist)
         const float clampedToneFreq = juce::jlimit(2000.0f, std::min(20000.0f, (float)(toneSampleRate * 0.45)), toneFreq);
-        *toneFilter.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(toneSampleRate, clampedToneFreq);
+        auto toneCoeffs = juce::dsp::IIR::Coefficients<float>::makeLowPass(toneSampleRate, clampedToneFreq);
+        *toneFilter.state = *toneCoeffs;
+        if (toneFilterLow.state != nullptr)
+            *toneFilterLow.state = *toneCoeffs;
         lastToneFreq = toneFreq;
     }
 
@@ -2070,8 +2083,19 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         }
     }
 
+    // ========== SUB GUARD: Phase-match low branch to the high branch's tone filter ==========
+    // Apply an identical tone LP (with its own state) to the clean low band so both
+    // bands share the same magnitude/phase response at the recombine sum. Gated on the
+    // same bypass condition as the high-branch tone filter.
+    if (subGuardActive && toneFreq < 19500.0f && toneFilterLow.state != nullptr)
+    {
+        auto lowBlockTone = juce::dsp::AudioBlock<float>(lowBandBuffer).getSubBlock(0, numSamples);
+        toneFilterLow.process(juce::dsp::ProcessContextReplacing<float>(lowBlockTone));
+    }
+
     // ========== SUB GUARD: Add clean low band back after all nonlinear processing ==========
-    // The clean sub bypasses: auto-gain, tone filter, waveshaper, compressor, and soft clipper
+    // The clean sub bypasses: auto-gain, waveshaper, compressor, and soft clipper
+    // (tone filter is mirrored above for phase coherence at recombine)
     if (subGuardActive)
     {
         for (size_t channel = 0; channel < numChannels; ++channel)
@@ -2478,6 +2502,8 @@ void PluginProcessor::resetDSPState()
         highPassFilter2.reset();
     if (toneFilter.state)
         toneFilter.reset();
+    if (toneFilterLow.state)
+        toneFilterLow.reset();
 
     // Reset envelope states
     preCompEnvelope[0] = 1.0f;

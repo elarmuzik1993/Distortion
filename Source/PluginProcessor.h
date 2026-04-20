@@ -282,6 +282,11 @@ private:
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> toneFilter;
 
+    // Phase-matching mirror of toneFilter applied to the Sub Guard low branch
+    // before recombine, so both bands share the same magnitude/phase response.
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> toneFilterLow;
+
     juce::AudioBuffer<float> lowBandBuffer;   // For clean low frequencies
     juce::AudioBuffer<float> highBandBuffer;  // For distorted high frequencies
     juce::AudioBuffer<float> dryBuffer;       // For global wet/dry mix
