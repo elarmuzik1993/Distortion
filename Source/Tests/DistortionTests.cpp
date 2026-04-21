@@ -1680,6 +1680,37 @@ void DryWetAlignmentTests::testOversamplingReinit()
     }
 }
 
+void BusLayoutTests::runTest()
+{
+    beginTest("Stereo-only layout support");
+
+    PluginProcessor processor;
+
+    auto stereoLayout = processor.getBusesLayout();
+    stereoLayout.inputBuses.getReference(0) = juce::AudioChannelSet::stereo();
+    stereoLayout.outputBuses.getReference(0) = juce::AudioChannelSet::stereo();
+    expect(processor.checkBusesLayoutSupported(stereoLayout),
+           "Stereo input/output should be supported");
+
+    auto monoLayout = processor.getBusesLayout();
+    monoLayout.inputBuses.getReference(0) = juce::AudioChannelSet::mono();
+    monoLayout.outputBuses.getReference(0) = juce::AudioChannelSet::mono();
+    expect(!processor.checkBusesLayoutSupported(monoLayout),
+           "Mono input/output should be rejected");
+
+    auto quadLayout = processor.getBusesLayout();
+    quadLayout.inputBuses.getReference(0) = juce::AudioChannelSet::quadraphonic();
+    quadLayout.outputBuses.getReference(0) = juce::AudioChannelSet::quadraphonic();
+    expect(!processor.checkBusesLayoutSupported(quadLayout),
+           "Quad input/output should be rejected");
+
+    auto surroundLayout = processor.getBusesLayout();
+    surroundLayout.inputBuses.getReference(0) = juce::AudioChannelSet::create5point1();
+    surroundLayout.outputBuses.getReference(0) = juce::AudioChannelSet::create5point1();
+    expect(!processor.checkBusesLayoutSupported(surroundLayout),
+           "5.1 input/output should be rejected");
+}
+
 //==============================================================================
 // ParameterTests Implementation
 //==============================================================================

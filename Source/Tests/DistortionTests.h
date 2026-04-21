@@ -140,6 +140,13 @@ private:
     void testOversamplingReinit();
 };
 
+class BusLayoutTests : public juce::UnitTest
+{
+public:
+    BusLayoutTests() : UnitTest("Bus Layout", TestCategories::ProcessBlock) {}
+    void runTest() override;
+};
+
 /** Tests for all parameters - ranges and smoothing */
 class ParameterTests : public juce::UnitTest
 {
@@ -393,6 +400,7 @@ inline void registerAllTests()
     static LFOTests lfoTests;
     static LFODestinationTests lfoDestinationTests;
     static ProcessBlockTests processBlockTests;
+    static BusLayoutTests busLayoutTests;
     static ParameterTests parameterTests;
     static SampleRateTests sampleRateTests;
     static ThreadSafetyTests threadSafetyTests;
