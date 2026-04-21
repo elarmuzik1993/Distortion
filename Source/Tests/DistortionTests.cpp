@@ -1,7 +1,10 @@
 #if JUCE_DEBUG
 
 #include "DistortionTests.h"
+#include "../RTAllocationGuard.h"
+#include <atomic>
 #include <iostream>
+#include <thread>
 
 using namespace TestUtilities;
 
@@ -2353,5 +2356,144 @@ void StatefulDistortionTests::testTapeHysteresis()
 
 // Static test registration moved to registerAllTests() in DistortionTests.h
 // to ensure tests are registered before they're run
+
+//==============================================================================
+// RTAllocationGuardTest Implementation (PR-0)
+//
+// Verifies that the debug RT-allocation guard correctly counts global
+// operator new / new[] invocations that occur inside a ScopedRTAssert scope
+// on the current thread, and ignores allocations outside any scope. This
+// test does NOT assert that processBlock is allocation-free today - that
+// property is established piecewise by the later RT-1..RT-5 PRs.
+//==============================================================================
+
+void RTAllocationGuardTest::runTest()
+{
+#if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD
+    beginTest("Counter increments inside scope");
+    {
+        rt_guard::resetAllocationCounter();
+        {
+            RT_ASSERT_SCOPE();
+            // Force an allocation that must go through operator new.
+            auto* p = new int (42);
+            delete p;
+        }
+        expect(rt_guard::getAllocationCount() >= 1,
+               "Guard did not count operator new inside an active scope");
+    }
+
+    beginTest("Counter stays at zero outside scope");
+    {
+        rt_guard::resetAllocationCounter();
+        {
+            auto* p = new int (42);
+            delete p;
+        }
+        expectEquals(rt_guard::getAllocationCount(), 0,
+                     "Guard counted an allocation outside any scope");
+    }
+
+    beginTest("Stack-only path does not trip guard");
+    {
+        rt_guard::resetAllocationCounter();
+        {
+            RT_ASSERT_SCOPE();
+            volatile int stackOnly = 7;
+            juce::ignoreUnused (stackOnly);
+        }
+        expectEquals(rt_guard::getAllocationCount(), 0,
+                     "Guard false-positive on pure stack path");
+    }
+
+    beginTest("Counter reset works");
+    {
+        rt_guard::resetAllocationCounter();
+        {
+            RT_ASSERT_SCOPE();
+            delete (new int (1));
+            delete (new int (2));
+        }
+        expect(rt_guard::getAllocationCount() >= 2, "Pre-reset count should be >=2");
+        rt_guard::resetAllocationCounter();
+        expectEquals(rt_guard::getAllocationCount(), 0, "Reset did not zero the counter");
+    }
+
+    // Proves the depth-counter fix: an inner scope exiting must not turn off
+    // counting for the still-live outer scope.
+    beginTest("Nested scopes remain active after inner exits");
+    {
+        rt_guard::resetAllocationCounter();
+        {
+            RT_ASSERT_SCOPE();          // outer
+            delete (new int (1));       // counted
+            {
+                RT_ASSERT_SCOPE();      // inner
+                delete (new int (2));   // counted
+            }                            // inner dtor: depth 2 -> 1 (still active)
+            delete (new int (3));       // must still be counted
+        }                                // outer dtor: depth 1 -> 0
+        delete (new int (4));           // must NOT be counted
+        expectEquals(rt_guard::getAllocationCount(), 3,
+                     "Nested-scope handling is incorrect");
+    }
+
+    // Proves per-thread semantics: a scope active on thread A must not count
+    // allocations that occur on thread B (which is itself not in a scope).
+    beginTest("Active scope on one thread does not count another thread's allocs");
+    {
+        rt_guard::resetAllocationCounter();
+
+        std::atomic<bool> scopeReady   { false };
+        std::atomic<bool> workerDone   { false };
+
+        std::thread worker ([&]
+        {
+            // Spin (no heap alloc) until main opens its scope.
+            while (! scopeReady.load (std::memory_order_acquire))
+                std::this_thread::yield();
+
+            // Main has a scope active; this worker has none. This alloc must
+            // NOT be counted.
+            auto* p = new int (99);
+            delete p;
+
+            workerDone.store (true, std::memory_order_release);
+        });
+
+        {
+            RT_ASSERT_SCOPE();
+            scopeReady.store (true, std::memory_order_release);
+            while (! workerDone.load (std::memory_order_acquire))
+                std::this_thread::yield();
+        }
+
+        worker.join();
+        expectEquals(rt_guard::getAllocationCount(), 0,
+                     "Main-thread scope incorrectly counted another thread's alloc");
+    }
+
+    // Proves a worker thread can own its own scope and count its own allocs
+    // without any scope being active on main.
+    beginTest("Worker thread counts allocations inside its own scope");
+    {
+        rt_guard::resetAllocationCounter();
+
+        std::thread worker ([]
+        {
+            RT_ASSERT_SCOPE();
+            auto* p = new int (100);
+            delete p;
+        });
+        worker.join();
+
+        expect(rt_guard::getAllocationCount() >= 1,
+               "Worker-thread scope failed to count its own allocation");
+    }
+#else
+    beginTest("RT guard disabled in this build");
+    expect(true, "DISTORTION_RT_GUARD not defined; skipping.");
+#endif
+}
 
 #endif // JUCE_DEBUG

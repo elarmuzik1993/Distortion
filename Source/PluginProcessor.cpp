@@ -8,6 +8,7 @@
 
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "RTAllocationGuard.h"
 #include <memory>
 
 // Include test header in debug builds (tests run from separate test runner)
@@ -1031,6 +1032,7 @@ void PluginProcessor::reinitializeOversampling()
 
 void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
+    RT_ASSERT_SCOPE();
     juce::ignoreUnused(midiMessages);
 
     // CRITICAL: Enable flush-to-zero and denormals-are-zero to prevent denormal issues at 44.1kHz

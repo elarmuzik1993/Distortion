@@ -61,6 +61,8 @@ set(TEST_SOURCES
     Source/Tests/DistortionTests.cpp
     Source/Tests/DistortionTests.h
     Source/Tests/TestUtilities.h
+    Source/RTAllocationGuard.h
+    Source/RTAllocationGuard.cpp
 )
 
 # ============================================================================
@@ -171,6 +173,7 @@ target_compile_definitions(DistortionTests
         JUCE_USE_CURL=0
         JUCE_STRICT_REFCOUNTEDPOINTER=1
         JUCE_STANDALONE_APPLICATION=1
+        DISTORTION_RT_GUARD=1
 )
 
 target_link_libraries(DistortionTests

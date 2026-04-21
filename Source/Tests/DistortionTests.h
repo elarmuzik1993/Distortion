@@ -185,6 +185,14 @@ private:
     void testPerInstanceRandomGenerators();
 };
 
+/** Tests for the debug RT-allocation guard (PR-0 instrumentation). */
+class RTAllocationGuardTest : public juce::UnitTest
+{
+public:
+    RTAllocationGuardTest() : UnitTest("RT Allocation Guard", TestCategories::ThreadSafety) {}
+    void runTest() override;
+};
+
 /** Tests for state save/load */
 class StateIOTests : public juce::UnitTest
 {
@@ -360,6 +368,7 @@ inline void registerAllTests()
     static ParameterTests parameterTests;
     static SampleRateTests sampleRateTests;
     static ThreadSafetyTests threadSafetyTests;
+    static RTAllocationGuardTest rtAllocationGuardTest;
     static StateIOTests stateIOTests;
     static GoldenAudioTests goldenAudioTests;
     static NormalizationTests normalizationTests;
