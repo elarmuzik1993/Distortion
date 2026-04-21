@@ -348,7 +348,7 @@ private:
 
     // Compressor state variables (LA-2A optical cell simulation)
     // Optical cell envelope follower (T4 cell)
-    float compEnvelopeState = 0.0f;
+    float compEnvelopeState = 1.0f;
 
 
     // RMS detection for program-dependent behavior

@@ -498,9 +498,10 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     smoothedGlobalMix.reset(sampleRate, 0.02);
     smoothedGlobalMix.setCurrentAndTargetValue(globalMixParam ? globalMixParam->load() / 100.0f : 1.0f);
 
-    compEnvelopeState = 0.0f;
+    compEnvelopeState = 1.0f;
     compRmsHistory = 0.0f;
     tubeWarmth = 0.0f;
+    outputLimiterEnvelope = 1.0f;
 
     // Reset manual DC blocker state
     for (int ch = 0; ch < 2; ++ch)
@@ -901,28 +902,37 @@ void PluginProcessor::applyLA2ACompression(juce::AudioBuffer<float>& buffer,
 void PluginProcessor::reinitializeOversampling()
 {
     const int stages = requestedOversamplingStages.load();
-    if (stages == currentOversamplingStages)
-        return;
-
-    currentOversamplingStages = stages;
     const int numChannels = std::max(1, getTotalNumInputChannels());
     const double sr = getSampleRate();
     const int currentBlockSize = getBlockSize();
+    const bool needsRebuild = stages != currentOversamplingStages
+        || currentNumChannels != numChannels
+        || (stages > 0 && !oversampling);
 
-    if (stages == 0)
+    if (needsRebuild)
     {
-        oversampling.reset();
-        oversamplingFactor = 1;
+        currentOversamplingStages = stages;
+
+        if (stages == 0)
+        {
+            oversampling.reset();
+            oversamplingFactor = 1;
+        }
+        else
+        {
+            oversampling = std::make_unique<juce::dsp::Oversampling<float>>(
+                numChannels, stages,
+                juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR,
+                false, false
+            );
+            oversampling->initProcessing(static_cast<size_t>(currentBlockSize));
+            oversamplingFactor = oversampling->getOversamplingFactor();
+        }
     }
-    else
+    else if (oversampling)
     {
-        oversampling = std::make_unique<juce::dsp::Oversampling<float>>(
-            numChannels, stages,
-            juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR,
-            false, false
-        );
+        oversampling->reset();
         oversampling->initProcessing(static_cast<size_t>(currentBlockSize));
-        oversamplingFactor = oversampling->getOversamplingFactor();
     }
     currentNumChannels = numChannels;
 
@@ -1086,6 +1096,9 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         // Force update of all dynamic filters on next use
         lastHighPassFreq = -1.0f;  // Force hi-pass filter update
         lastOversampledSampleRate = 0.0;  // Force distortion filter update
+
+        // Queue oversampling reset for the next block so it picks up the new sample rate
+        oversamplingNeedsRecreate.store(true, std::memory_order_release);
     }
 
     // Load parameters and scale them
@@ -1220,7 +1233,8 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
     // ========== SAVE DRY BUFFER FOR GLOBAL MIX ==========
     const float globalMixAmount = smoothedGlobalMix.getCurrentValue();
-    const bool needsGlobalMix = globalMixAmount < 0.999f;
+    // Capture dry buffer if mix is not 100% wet OR if it is currently transitioning (to avoid a one-block glitch)
+    const bool needsGlobalMix = globalMixAmount < 0.999f || smoothedGlobalMix.isSmoothing();
     if (needsGlobalMix)
     {
         if (dryBuffer.getNumSamples() < buffer.getNumSamples())
@@ -2514,7 +2528,7 @@ void PluginProcessor::resetDSPState()
     tubeBiasEnvelope[1] = 0.0f;
     tapeSaturationEnvelope[0] = 0.0f;
     tapeSaturationEnvelope[1] = 0.0f;
-    compEnvelopeState = 0.0f;
+    compEnvelopeState = 1.0f;
     compRmsHistory = 0.0f;
     tubeWarmth = 0.0f;
 
