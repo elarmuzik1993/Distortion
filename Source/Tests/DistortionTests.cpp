@@ -1654,9 +1654,9 @@ void DryWetAlignmentTests::testOversamplingReinit()
         expect(!containsInvalidSamples(buffer), "Output invalid before reinit");
     }
 
-    // Request a different oversampling factor (2x stages = 1). The processor
-    // applies this change inside processBlock via reinitializeOversampling.
-    processor.requestedOversamplingStages.store(1);
+    // Request a different oversampling factor (2x stages = 1) on the message thread.
+    processor.requestOversamplingRebuild(1);
+    processor.handleAsyncUpdate();
 
     // Process several blocks to drive the reinit and then settle.
     warmUp(processor, sr, blockSize, 1000.0, 8, phase);
@@ -1669,7 +1669,8 @@ void DryWetAlignmentTests::testOversamplingReinit()
     }
 
     // And flip to off (stages = 0): latency becomes 0 → fast path engaged.
-    processor.requestedOversamplingStages.store(0);
+    processor.requestOversamplingRebuild(0);
+    processor.handleAsyncUpdate();
     warmUp(processor, sr, blockSize, 1000.0, 8, phase);
 
     {
@@ -2489,6 +2490,174 @@ void RTAllocationGuardTest::runTest()
 
         expect(rt_guard::getAllocationCount() >= 1,
                "Worker-thread scope failed to count its own allocation");
+    }
+#else
+    beginTest("RT guard disabled in this build");
+    expect(true, "DISTORTION_RT_GUARD not defined; skipping.");
+#endif
+}
+
+void RTBufferPreallocTest::runTest()
+{
+#if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD
+    beginTest("No allocation on prepared-size block with pre-sized scratch buffers");
+    {
+        PluginProcessor processor;
+        processor.prepareToPlay(48000.0, 512);
+
+        auto* distortionAmount = processor.parameters.getParameter("distortionAmount");
+        auto* subGuardFreq = processor.parameters.getParameter("subGuardFreq");
+        auto* globalMix = processor.parameters.getParameter("globalMix");
+        auto* subGuardFreqFloat = dynamic_cast<juce::AudioParameterFloat*>(subGuardFreq);
+
+        expect(distortionAmount != nullptr, "distortionAmount parameter not found");
+        expect(subGuardFreq != nullptr, "subGuardFreq parameter not found");
+        expect(globalMix != nullptr, "globalMix parameter not found");
+        expect(subGuardFreqFloat != nullptr, "subGuardFreq parameter type mismatch");
+
+        if (distortionAmount == nullptr || subGuardFreq == nullptr || globalMix == nullptr || subGuardFreqFloat == nullptr)
+            return;
+
+        distortionAmount->setValueNotifyingHost(0.5f);
+        subGuardFreq->setValueNotifyingHost(subGuardFreqFloat->convertTo0to1(100.0f));
+        globalMix->setValueNotifyingHost(0.7f);
+
+        juce::MidiBuffer midi;
+        auto warmupBuffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+        processor.processBlock(warmupBuffer, midi);
+
+        auto measuredBuffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+        rt_guard::resetAllocationCounter();
+        processor.processBlock(measuredBuffer, midi);
+
+        expectEquals(rt_guard::getAllocationCount(), 0,
+                     "Prepared-size processBlock should not allocate from scratch-buffer resizing");
+    }
+#else
+    beginTest("RT guard disabled in this build");
+    expect(true, "DISTORTION_RT_GUARD not defined; skipping.");
+#endif
+}
+
+void RTCleanPreHighPassTest::runTest()
+{
+#if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD
+    beginTest("No allocation during 100-block high-pass sweep");
+    {
+        PluginProcessor processor;
+        processor.prepareToPlay(48000.0, 512);
+
+        auto* distortionAmount = processor.parameters.getParameter("distortionAmount");
+        auto* subGuardFreq = processor.parameters.getParameter("subGuardFreq");
+        auto* highPassFreq = processor.parameters.getParameter("highPassFreq");
+        auto* highPassFreqFloat = dynamic_cast<juce::AudioParameterFloat*>(highPassFreq);
+
+        expect(distortionAmount != nullptr, "distortionAmount parameter not found");
+        expect(subGuardFreq != nullptr, "subGuardFreq parameter not found");
+        expect(highPassFreq != nullptr, "highPassFreq parameter not found");
+        expect(highPassFreqFloat != nullptr, "highPassFreq parameter type mismatch");
+
+        if (distortionAmount == nullptr || subGuardFreq == nullptr || highPassFreq == nullptr || highPassFreqFloat == nullptr)
+            return;
+
+        distortionAmount->setValueNotifyingHost(0.5f);
+        subGuardFreq->setValueNotifyingHost(0.0f);
+        highPassFreq->setValueNotifyingHost(highPassFreqFloat->convertTo0to1(20.0f));
+
+        juce::MidiBuffer midi;
+        auto warmupBuffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+        processor.processBlock(warmupBuffer, midi);
+
+        rt_guard::resetAllocationCounter();
+
+        for (int i = 0; i < 100; ++i)
+        {
+            const float cutoffHz = 20.0f + (480.0f * static_cast<float>(i) / 99.0f);
+            highPassFreq->setValueNotifyingHost(highPassFreqFloat->convertTo0to1(cutoffHz));
+
+            auto buffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+            processor.processBlock(buffer, midi);
+        }
+
+        expectEquals(rt_guard::getAllocationCount(), 0,
+                     "High-pass coefficient updates should not allocate on the audio thread");
+    }
+#else
+    beginTest("RT guard disabled in this build");
+    expect(true, "DISTORTION_RT_GUARD not defined; skipping.");
+#endif
+}
+
+void RTCleanSubGuardTest::runTest()
+{
+#if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD
+    beginTest("No allocation during 200-block Sub Guard sweep");
+    {
+        PluginProcessor processor;
+        processor.prepareToPlay(48000.0, 512);
+
+        setParameter(processor.parameters, "distortionAmount", 50.0f);
+        setParameter(processor.parameters, "highPassFreq", 20.0f);
+        setParameter(processor.parameters, "globalMix", 100.0f);
+        setParameter(processor.parameters, "subGuardFreq", 0.0f);
+
+        juce::MidiBuffer midi;
+        auto warmupBuffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+        processor.processBlock(warmupBuffer, midi);
+
+        rt_guard::resetAllocationCounter();
+
+        for (int i = 0; i < 200; ++i)
+        {
+            const float sweepHz = 200.0f * static_cast<float>(i) / 199.0f;
+            setParameter(processor.parameters, "subGuardFreq", sweepHz);
+
+            auto buffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+            processor.processBlock(buffer, midi);
+        }
+
+        expectEquals(rt_guard::getAllocationCount(), 0,
+                     "Sub Guard coefficient updates should not allocate on the audio thread");
+    }
+#else
+    beginTest("RT guard disabled in this build");
+    expect(true, "DISTORTION_RT_GUARD not defined; skipping.");
+#endif
+}
+
+void RTCleanOversamplingTest::runTest()
+{
+#if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD
+    beginTest("No allocation in processBlock while oversampling rebuild is deferred");
+    {
+        PluginProcessor processor;
+        processor.prepareToPlay(48000.0, 512);
+
+        setParameter(processor.parameters, "distortionAmount", 50.0f);
+        setParameter(processor.parameters, "subGuardFreq", 0.0f);
+        setParameter(processor.parameters, "highPassFreq", 20.0f);
+
+        juce::MidiBuffer midi;
+        auto warmupBuffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+        processor.processBlock(warmupBuffer, midi);
+
+        processor.requestOversamplingRebuild(1);
+
+        auto pendingBuffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+        rt_guard::resetAllocationCounter();
+        processor.processBlock(pendingBuffer, midi);
+        expectEquals(rt_guard::getAllocationCount(), 0,
+                     "processBlock should not allocate while oversampling rebuild is pending");
+
+        processor.handleAsyncUpdate();
+
+        auto rebuiltBuffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+        rt_guard::resetAllocationCounter();
+        processor.processBlock(rebuiltBuffer, midi);
+        expectEquals(rt_guard::getAllocationCount(), 0,
+                     "processBlock should not allocate after deferred oversampling rebuild");
+        expect(!containsInvalidSamples(rebuiltBuffer),
+               "Output must remain valid after deferred oversampling rebuild");
     }
 #else
     beginTest("RT guard disabled in this build");

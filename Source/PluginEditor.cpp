@@ -475,8 +475,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     // Load UI settings
     loadSettings();
     // Sync oversampling setting to processor (in case it was saved as non-default)
-    audioProcessor.requestedOversamplingStages.store(settingsState.oversamplingMode);
-    audioProcessor.oversamplingNeedsRecreate.store(true);
+    audioProcessor.requestOversamplingRebuild(settingsState.oversamplingMode);
     applyOscilloscopeEnabled(settingsState.oscilloscopeEnabled);
     oscilloscope.setStereoMode(settingsState.oscilloscopeStereo);
     oscilloscope.setScopeLength(settingsState.scopeLength);

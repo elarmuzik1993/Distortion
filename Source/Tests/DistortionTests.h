@@ -193,6 +193,34 @@ public:
     void runTest() override;
 };
 
+class RTBufferPreallocTest : public juce::UnitTest
+{
+public:
+    RTBufferPreallocTest() : UnitTest("RT Buffer Preallocation", TestCategories::ThreadSafety) {}
+    void runTest() override;
+};
+
+class RTCleanPreHighPassTest : public juce::UnitTest
+{
+public:
+    RTCleanPreHighPassTest() : UnitTest("RT Clean Pre HighPass", TestCategories::ThreadSafety) {}
+    void runTest() override;
+};
+
+class RTCleanSubGuardTest : public juce::UnitTest
+{
+public:
+    RTCleanSubGuardTest() : UnitTest("RT Clean Sub Guard", TestCategories::ThreadSafety) {}
+    void runTest() override;
+};
+
+class RTCleanOversamplingTest : public juce::UnitTest
+{
+public:
+    RTCleanOversamplingTest() : UnitTest("RT Clean Oversampling", TestCategories::ThreadSafety) {}
+    void runTest() override;
+};
+
 /** Tests for state save/load */
 class StateIOTests : public juce::UnitTest
 {
@@ -369,6 +397,10 @@ inline void registerAllTests()
     static SampleRateTests sampleRateTests;
     static ThreadSafetyTests threadSafetyTests;
     static RTAllocationGuardTest rtAllocationGuardTest;
+    static RTBufferPreallocTest rtBufferPreallocTest;
+    static RTCleanPreHighPassTest rtCleanPreHighPassTest;
+    static RTCleanSubGuardTest rtCleanSubGuardTest;
+    static RTCleanOversamplingTest rtCleanOversamplingTest;
     static StateIOTests stateIOTests;
     static GoldenAudioTests goldenAudioTests;
     static NormalizationTests normalizationTests;

@@ -11,6 +11,79 @@
 #include "RTAllocationGuard.h"
 #include <memory>
 
+namespace
+{
+void writeFirstOrderHighPassCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
+                                   const double sampleRate,
+                                   const double cutoffHz) noexcept
+{
+    const auto n = std::tan(juce::MathConstants<double>::pi * cutoffHz / sampleRate);
+    const auto invA0 = 1.0 / (n + 1.0);
+    auto* coeffs = dest.getRawCoefficients();
+
+    coeffs[0] = static_cast<float>(invA0);
+    coeffs[1] = static_cast<float>(-invA0);
+    coeffs[2] = static_cast<float>((n - 1.0) * invA0);
+}
+
+void writeFirstOrderLowPassCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
+                                  const double sampleRate,
+                                  const double cutoffHz) noexcept
+{
+    const auto n = std::tan(juce::MathConstants<double>::pi * cutoffHz / sampleRate);
+    const auto invA0 = 1.0 / (n + 1.0);
+    auto* coeffs = dest.getRawCoefficients();
+
+    coeffs[0] = static_cast<float>(n * invA0);
+    coeffs[1] = static_cast<float>(n * invA0);
+    coeffs[2] = static_cast<float>((n - 1.0) * invA0);
+}
+
+void writeSecondOrderLowPassCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
+                                   const double sampleRate,
+                                   const double cutoffHz,
+                                   const double q) noexcept
+{
+    const auto n = 1.0 / std::tan(juce::MathConstants<double>::pi * cutoffHz / sampleRate);
+    const auto nSquared = n * n;
+    const auto invQ = 1.0 / q;
+    const auto c1 = 1.0 / (1.0 + invQ * n + nSquared);
+    auto* coeffs = dest.getRawCoefficients();
+
+    coeffs[0] = static_cast<float>(c1);
+    coeffs[1] = static_cast<float>(c1 * 2.0);
+    coeffs[2] = static_cast<float>(c1);
+    coeffs[3] = static_cast<float>(c1 * 2.0 * (1.0 - nSquared));
+    coeffs[4] = static_cast<float>(c1 * (1.0 - invQ * n + nSquared));
+}
+
+void writeSecondOrderHighPassCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
+                                    const double sampleRate,
+                                    const double cutoffHz,
+                                    const double q) noexcept
+{
+    const auto n = std::tan(juce::MathConstants<double>::pi * cutoffHz / sampleRate);
+    const auto nSquared = n * n;
+    const auto invQ = 1.0 / q;
+    const auto c1 = 1.0 / (1.0 + invQ * n + nSquared);
+    auto* coeffs = dest.getRawCoefficients();
+
+    coeffs[0] = static_cast<float>(c1);
+    coeffs[1] = static_cast<float>(c1 * -2.0);
+    coeffs[2] = static_cast<float>(c1);
+    coeffs[3] = static_cast<float>(c1 * 2.0 * (nSquared - 1.0));
+    coeffs[4] = static_cast<float>(c1 * (1.0 - invQ * n + nSquared));
+}
+
+void swapActiveWithStandby(juce::dsp::IIR::Coefficients<float>::Ptr& active,
+                           juce::dsp::IIR::Coefficients<float>::Ptr& standby) noexcept
+{
+    auto previousActive = active;
+    active = standby;
+    standby = previousActive;
+}
+}
+
 // Include test header in debug builds (tests run from separate test runner)
 #if JUCE_DEBUG
 #include "Tests/DistortionTests.h"
@@ -530,35 +603,15 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     scopeBuffer.clear();
     scopeFifo.setTotalSize(DSPConstants::SCOPE_BUFFER_SIZE);
 
-
-
-    // Oversampling — use requestedOversamplingStages atomic (0=Off, 1=2x, 2=4x)
-    const int stages = requestedOversamplingStages.load();
-    currentOversamplingStages = stages;
-
-    if (stages == 0) {
-        // No oversampling — null out the object, factor = 1
-        oversampling.reset();
-        oversamplingFactor = 1;
-    } else {
-        if (!oversampling || currentNumChannels != numChannels
-            || static_cast<int>(oversampling->getOversamplingFactor()) != (1 << stages)) {
-            oversampling = std::make_unique<juce::dsp::Oversampling<float>>(
-                numChannels, stages,
-                juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR,
-                false, false
-            );
-        }
-        oversampling->initProcessing(static_cast<size_t>(samplesPerBlock));
-        oversamplingFactor = oversampling->getOversamplingFactor();
-    }
-    currentNumChannels = numChannels;
+    rebuildOversampling(sampleRate, samplesPerBlock);
 
     // Prepare DSP filters with oversampled sample rate & block size
     juce::dsp::ProcessSpec spec;
     spec.sampleRate = sampleRate * oversamplingFactor;
     spec.maximumBlockSize = static_cast<juce::uint32>(samplesPerBlock * oversamplingFactor);
     spec.numChannels = static_cast<juce::uint32>(numChannels);
+
+    const int worstCaseOversampledBlockSize = (samplesPerBlock * oversamplingFactor) + 64;
 
     // CRITICAL: For JUCE IIR ProcessorDuplicator filters, the order MUST be:
     // 1. prepare() - creates the internal state
@@ -576,6 +629,7 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // CRITICAL: Use first-order filter for numerical stability at low frequencies
     preHighPassFilter.prepare(baseSpec);
     *preHighPassFilter.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(baseSpec.sampleRate, DSPConstants::DEFAULT_HIPASS_FREQ);
+    preHighPassStandby = juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(baseSpec.sampleRate, DSPConstants::DEFAULT_HIPASS_FREQ);
     preHighPassFilter.reset();
 
     // Force filter update on first processBlock (especially important for DAW state restoration)
@@ -601,45 +655,55 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // LR24 filters (4th order = 2 cascaded 2nd-order stages) - PRESERVE mode
     lowPassFilter1.prepare(spec);
     *lowPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq);
+    lowPassFilter1Standby = juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq);
     lowPassFilter1.reset();
 
     lowPassFilter2.prepare(spec);
     *lowPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq);
+    lowPassFilter2Standby = juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq);
     lowPassFilter2.reset();
 
     highPassFilter1.prepare(spec);
     *highPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq);
+    highPassFilter1Standby = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq);
     highPassFilter1.reset();
 
     highPassFilter2.prepare(spec);
     *highPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq);
+    highPassFilter2Standby = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq);
     highPassFilter2.reset();
 
     // LR12 filters (2nd order = single stage, Q=0.5 for true Linkwitz-Riley 2) - AGGRESSIVE mode
     constexpr float lr2Q = 0.5f;
     subGuardLP12.prepare(spec);
     *subGuardLP12.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr2Q);
+    subGuardLP12Standby = juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr2Q);
     subGuardLP12.reset();
 
     subGuardHP12.prepare(spec);
     *subGuardHP12.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
+    subGuardHP12Standby = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
     subGuardHP12.reset();
 
     // LR18 filters (1st + 2nd order = 3rd order approximation, Q=0.5 on 2nd-order) - CONTROL mode
     subGuardLP18_1.prepare(spec);
     *subGuardLP18_1.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderLowPass(spec.sampleRate, filterInitFreq);
+    subGuardLP18_1Standby = juce::dsp::IIR::Coefficients<float>::makeFirstOrderLowPass(spec.sampleRate, filterInitFreq);
     subGuardLP18_1.reset();
 
     subGuardLP18_2.prepare(spec);
     *subGuardLP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr2Q);
+    subGuardLP18_2Standby = juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr2Q);
     subGuardLP18_2.reset();
 
     subGuardHP18_1.prepare(spec);
     *subGuardHP18_1.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(spec.sampleRate, filterInitFreq);
+    subGuardHP18_1Standby = juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(spec.sampleRate, filterInitFreq);
     subGuardHP18_1.reset();
 
     subGuardHP18_2.prepare(spec);
     *subGuardHP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
+    subGuardHP18_2Standby = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
     subGuardHP18_2.reset();
 
     // Initialize Sub Guard smoothing (use actual parameter value, not filterInitFreq)
@@ -697,8 +761,6 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // 1. Internal filter latency compensation
     // 2. Sample rate (44.1kHz vs 48kHz have different characteristics)
     // 3. Block size alignment requirements
-    // SOLUTION: Allocate 2x the expected size to handle all edge cases safely
-    const size_t expectedOversampledSize = static_cast<size_t>(samplesPerBlock) * oversamplingFactor;
     const size_t oversamplingLatencySamples = oversampling
         ? static_cast<size_t>(oversampling->getLatencyInSamples()) : 0;
 
@@ -714,10 +776,8 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     dryDelayState.setSize(numChannels, dryStateLen, false, false, true);
     dryDelayState.clear();
 
-    // Use 2x multiplier + latency + 128 sample safety margin for absolute safety
-    const int oversampledBlockSize = static_cast<int>((expectedOversampledSize + oversamplingLatencySamples) * 2 + 128);
-    lowBandBuffer.setSize(numChannels, oversampledBlockSize, false, false, true);
-    highBandBuffer.setSize(numChannels, oversampledBlockSize, false, false, true);
+    lowBandBuffer.setSize(numChannels, worstCaseOversampledBlockSize, false, false, true);
+    highBandBuffer.setSize(numChannels, worstCaseOversampledBlockSize, false, false, true);
     dryBuffer.setSize(numChannels, samplesPerBlock + 64, false, false, true);
 }
 
@@ -725,6 +785,7 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 
 void PluginProcessor::releaseResources()
 {
+    cancelPendingUpdate();
     oversampling.reset();
     preHighPassFilter.reset();
     toneFilter.reset();
@@ -900,12 +961,29 @@ void PluginProcessor::applyLA2ACompression(juce::AudioBuffer<float>& buffer,
     currentGainReductionDB.store(maxGainReductionDB, std::memory_order_relaxed);
 }
 
-void PluginProcessor::reinitializeOversampling()
+void PluginProcessor::requestOversamplingRebuild(int stages)
 {
-    const int stages = requestedOversamplingStages.load();
+    requestedOversamplingStages.store(stages, std::memory_order_release);
+    triggerAsyncUpdate();
+}
+
+void PluginProcessor::handleAsyncUpdate()
+{
+    const double sampleRate = getSampleRate();
+    const int samplesPerBlock = getBlockSize();
+    if (sampleRate <= 0.0 || samplesPerBlock <= 0)
+        return;
+
+    const juce::ScopedLock callbackLockGuard(getCallbackLock());
+    rebuildOversampling(sampleRate, samplesPerBlock);
+}
+
+void PluginProcessor::rebuildOversampling(double sampleRate, int samplesPerBlock)
+{
+    const int stages = requestedOversamplingStages.load(std::memory_order_acquire);
     const int numChannels = std::max(1, getTotalNumInputChannels());
-    const double sr = getSampleRate();
-    const int currentBlockSize = getBlockSize();
+    const double sr = sampleRate;
+    const int currentBlockSize = samplesPerBlock;
     const bool needsRebuild = stages != currentOversamplingStages
         || currentNumChannels != numChannels
         || (stages > 0 && !oversampling);
@@ -976,33 +1054,43 @@ void PluginProcessor::reinitializeOversampling()
 
     lowPassFilter1.prepare(spec);
     *lowPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq);
+    lowPassFilter1Standby = juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq);
     lowPassFilter1.reset();
     lowPassFilter2.prepare(spec);
     *lowPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq);
+    lowPassFilter2Standby = juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq);
     lowPassFilter2.reset();
     highPassFilter1.prepare(spec);
     *highPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq);
+    highPassFilter1Standby = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq);
     highPassFilter1.reset();
     highPassFilter2.prepare(spec);
     *highPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq);
+    highPassFilter2Standby = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq);
     highPassFilter2.reset();
     subGuardLP12.prepare(spec);
     *subGuardLP12.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr2Q);
+    subGuardLP12Standby = juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr2Q);
     subGuardLP12.reset();
     subGuardHP12.prepare(spec);
     *subGuardHP12.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
+    subGuardHP12Standby = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
     subGuardHP12.reset();
     subGuardLP18_1.prepare(spec);
     *subGuardLP18_1.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderLowPass(spec.sampleRate, filterInitFreq);
+    subGuardLP18_1Standby = juce::dsp::IIR::Coefficients<float>::makeFirstOrderLowPass(spec.sampleRate, filterInitFreq);
     subGuardLP18_1.reset();
     subGuardLP18_2.prepare(spec);
     *subGuardLP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr2Q);
+    subGuardLP18_2Standby = juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr2Q);
     subGuardLP18_2.reset();
     subGuardHP18_1.prepare(spec);
     *subGuardHP18_1.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(spec.sampleRate, filterInitFreq);
+    subGuardHP18_1Standby = juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(spec.sampleRate, filterInitFreq);
     subGuardHP18_1.reset();
     subGuardHP18_2.prepare(spec);
     *subGuardHP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
+    subGuardHP18_2Standby = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
     subGuardHP18_2.reset();
 
     lastOversampledSampleRate = spec.sampleRate;
@@ -1049,18 +1137,13 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         resetDSPState();
     }
 
-    // Runtime oversampling reconfiguration (triggered by settings overlay)
-    if (oversamplingNeedsRecreate.exchange(false, std::memory_order_acquire))
-    {
-        reinitializeOversampling();
-    }
-
     // CRITICAL: Detect sample rate changes and update coefficients
     // Some DAWs can change sample rate without calling prepareToPlay
     // This ensures all sample-rate-dependent processing works correctly at any rate (44.1, 48, 88.2, 96, 192 kHz)
     const double currentSR = getSampleRate();
     if (currentSR > 0 && std::abs(currentSR - lastSampleRate) > 0.1)
     {
+        debugHadUnexpectedSampleRateChange.store(true, std::memory_order_relaxed);
         currentSampleRate = static_cast<float>(currentSR);
 
         // Update time-constant coefficients (DC blocking, compression envelope)
@@ -1098,9 +1181,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         // Force update of all dynamic filters on next use
         lastHighPassFreq = -1.0f;  // Force hi-pass filter update
         lastOversampledSampleRate = 0.0;  // Force distortion filter update
-
-        // Queue oversampling reset for the next block so it picks up the new sample rate
-        oversamplingNeedsRecreate.store(true, std::memory_order_release);
     }
 
     // Load parameters and scale them
@@ -1239,8 +1319,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const bool needsGlobalMix = globalMixAmount < 0.999f || smoothedGlobalMix.isSmoothing();
     if (needsGlobalMix)
     {
-        if (dryBuffer.getNumSamples() < buffer.getNumSamples())
-            dryBuffer.setSize(buffer.getNumChannels(), buffer.getNumSamples() + 64, false, false, true);
+        jassert(dryBuffer.getNumSamples() >= buffer.getNumSamples());
         for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
             dryBuffer.copyFrom(ch, 0, buffer, ch, 0, buffer.getNumSamples());
     }
@@ -1380,9 +1459,12 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     {
         if (baseSampleRate >= 1000.0 && baseSampleRate <= 500000.0 &&
             modulatedHighPassFreq >= 1.0f && modulatedHighPassFreq <= (baseSampleRate / 2.0f) &&
-            preHighPassFilter.state)
+            preHighPassFilter.state && preHighPassStandby != nullptr)
         {
-            *preHighPassFilter.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(baseSampleRate, modulatedHighPassFreq);
+            writeFirstOrderHighPassCoeffs(*preHighPassStandby, baseSampleRate, modulatedHighPassFreq);
+            auto previousActive = preHighPassFilter.state;
+            preHighPassFilter.state = preHighPassStandby;
+            preHighPassStandby = previousActive;
             lastHighPassFreq = modulatedHighPassFreq;
         }
     }
@@ -1420,13 +1502,9 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     if (actualOversampledSamples > static_cast<size_t>(lowBandBuffer.getNumSamples()))
     {
         debugHadBufferOverflow.store(true, std::memory_order_relaxed);
-
-        // Emergency resize to prevent crash (this should never happen after fix)
-        lowBandBuffer.setSize(buffer.getNumChannels(), static_cast<int>(actualOversampledSamples + 64),
-                              false, false, true);
-        highBandBuffer.setSize(buffer.getNumChannels(), static_cast<int>(actualOversampledSamples + 64),
-                               false, false, true);
     }
+    jassert(actualOversampledSamples <= static_cast<size_t>(lowBandBuffer.getNumSamples()));
+    jassert(actualOversampledSamples <= static_cast<size_t>(highBandBuffer.getNumSamples()));
 
     // Get the actual oversampled sample rate
     const double oversampledSR = getSampleRate() * oversamplingFactor;
@@ -2589,34 +2667,65 @@ void PluginProcessor::updateSubGuardCoefficients(float freq, double sampleRate)
 {
     // Update all filter bank coefficients at the new frequency
     // Only the active bank will be used in processBlock
+    constexpr double butterworthQ = 0.7071067811865476;
 
     // LR24 filters (2 cascaded 2nd-order stages)
-    if (lowPassFilter1.state)
-        *lowPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(sampleRate, freq);
-    if (lowPassFilter2.state)
-        *lowPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(sampleRate, freq);
-    if (highPassFilter1.state)
-        *highPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(sampleRate, freq);
-    if (highPassFilter2.state)
-        *highPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(sampleRate, freq);
+    if (lowPassFilter1.state && lowPassFilter1Standby != nullptr)
+    {
+        writeSecondOrderLowPassCoeffs(*lowPassFilter1Standby, sampleRate, freq, butterworthQ);
+        swapActiveWithStandby(lowPassFilter1.state, lowPassFilter1Standby);
+    }
+    if (lowPassFilter2.state && lowPassFilter2Standby != nullptr)
+    {
+        writeSecondOrderLowPassCoeffs(*lowPassFilter2Standby, sampleRate, freq, butterworthQ);
+        swapActiveWithStandby(lowPassFilter2.state, lowPassFilter2Standby);
+    }
+    if (highPassFilter1.state && highPassFilter1Standby != nullptr)
+    {
+        writeSecondOrderHighPassCoeffs(*highPassFilter1Standby, sampleRate, freq, butterworthQ);
+        swapActiveWithStandby(highPassFilter1.state, highPassFilter1Standby);
+    }
+    if (highPassFilter2.state && highPassFilter2Standby != nullptr)
+    {
+        writeSecondOrderHighPassCoeffs(*highPassFilter2Standby, sampleRate, freq, butterworthQ);
+        swapActiveWithStandby(highPassFilter2.state, highPassFilter2Standby);
+    }
 
     // LR12 filters (single 2nd-order stage with Q=0.5 for true Linkwitz-Riley 2)
     // Default Butterworth Q=0.707 causes +3dB boost at crossover; LR2 Q=0.5 sums flat
     constexpr float lr2Q = 0.5f;
-    if (subGuardLP12.state)
-        *subGuardLP12.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(sampleRate, freq, lr2Q);
-    if (subGuardHP12.state)
-        *subGuardHP12.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(sampleRate, freq, lr2Q);
+    if (subGuardLP12.state && subGuardLP12Standby != nullptr)
+    {
+        writeSecondOrderLowPassCoeffs(*subGuardLP12Standby, sampleRate, freq, lr2Q);
+        swapActiveWithStandby(subGuardLP12.state, subGuardLP12Standby);
+    }
+    if (subGuardHP12.state && subGuardHP12Standby != nullptr)
+    {
+        writeSecondOrderHighPassCoeffs(*subGuardHP12Standby, sampleRate, freq, lr2Q);
+        swapActiveWithStandby(subGuardHP12.state, subGuardHP12Standby);
+    }
 
     // LR18 filters (1st + 2nd order cascaded, Q=0.5 on 2nd-order stage for flat sum)
-    if (subGuardLP18_1.state)
-        *subGuardLP18_1.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderLowPass(sampleRate, freq);
-    if (subGuardLP18_2.state)
-        *subGuardLP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(sampleRate, freq, lr2Q);
-    if (subGuardHP18_1.state)
-        *subGuardHP18_1.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(sampleRate, freq);
-    if (subGuardHP18_2.state)
-        *subGuardHP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(sampleRate, freq, lr2Q);
+    if (subGuardLP18_1.state && subGuardLP18_1Standby != nullptr)
+    {
+        writeFirstOrderLowPassCoeffs(*subGuardLP18_1Standby, sampleRate, freq);
+        swapActiveWithStandby(subGuardLP18_1.state, subGuardLP18_1Standby);
+    }
+    if (subGuardLP18_2.state && subGuardLP18_2Standby != nullptr)
+    {
+        writeSecondOrderLowPassCoeffs(*subGuardLP18_2Standby, sampleRate, freq, lr2Q);
+        swapActiveWithStandby(subGuardLP18_2.state, subGuardLP18_2Standby);
+    }
+    if (subGuardHP18_1.state && subGuardHP18_1Standby != nullptr)
+    {
+        writeFirstOrderHighPassCoeffs(*subGuardHP18_1Standby, sampleRate, freq);
+        swapActiveWithStandby(subGuardHP18_1.state, subGuardHP18_1Standby);
+    }
+    if (subGuardHP18_2.state && subGuardHP18_2Standby != nullptr)
+    {
+        writeSecondOrderHighPassCoeffs(*subGuardHP18_2Standby, sampleRate, freq, lr2Q);
+        swapActiveWithStandby(subGuardHP18_2.state, subGuardHP18_2Standby);
+    }
 }
 
 //Add Parameter Definition Here

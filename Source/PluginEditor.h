@@ -679,8 +679,7 @@ public:
         oversamplingCombo.onChange = [this]() {
             int mode = oversamplingCombo.getSelectedId() - 1; // 0=Off, 1=2x, 2=4x
             settingsState.oversamplingMode = mode;
-            processor.requestedOversamplingStages.store(mode);
-            processor.oversamplingNeedsRecreate.store(true);
+            processor.requestOversamplingRebuild(mode);
         };
 
         // Auto Gain toggle
