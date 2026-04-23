@@ -221,6 +221,20 @@ public:
     void runTest() override;
 };
 
+class RTCleanToneSweepTest : public juce::UnitTest
+{
+public:
+    RTCleanToneSweepTest() : UnitTest("RT Clean Tone Sweep", TestCategories::ThreadSafety) {}
+    void runTest() override;
+};
+
+class RTCleanSampleRateDriftTest : public juce::UnitTest
+{
+public:
+    RTCleanSampleRateDriftTest() : UnitTest("RT Clean Sample Rate Drift", TestCategories::ThreadSafety) {}
+    void runTest() override;
+};
+
 /** Tests for state save/load */
 class StateIOTests : public juce::UnitTest
 {
@@ -401,6 +415,8 @@ inline void registerAllTests()
     static RTCleanPreHighPassTest rtCleanPreHighPassTest;
     static RTCleanSubGuardTest rtCleanSubGuardTest;
     static RTCleanOversamplingTest rtCleanOversamplingTest;
+    static RTCleanToneSweepTest rtCleanToneSweepTest;
+    static RTCleanSampleRateDriftTest rtCleanSampleRateDriftTest;
     static StateIOTests stateIOTests;
     static GoldenAudioTests goldenAudioTests;
     static NormalizationTests normalizationTests;

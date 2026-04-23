@@ -138,18 +138,8 @@ PluginProcessor::PluginProcessor()
     const double defaultSampleRate = 44100.0;
     smoothedOutputGain.reset(defaultSampleRate, DSPConstants::GAIN_SMOOTH_TIME_S);
     smoothedOutputGain.setCurrentAndTargetValue(1.0f);
-    bypassRamp.reset(defaultSampleRate, 0.01);
-    bypassRamp.setCurrentAndTargetValue(0.0f);
-    smoothedLfoDepth.reset(defaultSampleRate, 0.02);
-    smoothedLfoDepth.setCurrentAndTargetValue(0.0f);
-    smoothedDistMix.reset(defaultSampleRate, 0.02);
-    smoothedDistMix.setCurrentAndTargetValue(1.0f);
-    smoothedToneParam.reset(defaultSampleRate, 0.02);
-    smoothedToneParam.setCurrentAndTargetValue(20000.0f);
     smoothedGlobalMix.reset(defaultSampleRate, 0.02);
     smoothedGlobalMix.setCurrentAndTargetValue(1.0f);
-    smoothedGainReduction.reset(defaultSampleRate, DSPConstants::COMP_GR_SMOOTH_TIME_S);
-    smoothedGainReduction.setCurrentAndTargetValue(1.0f);
     smoothedSubGuardFreq.reset(defaultSampleRate, DSPConstants::SUBGUARD_FREQ_SMOOTH_TIME_S);
     smoothedSubGuardFreq.setCurrentAndTargetValue(DSPConstants::SUBGUARD_FREQ_DEFAULT);
 }
@@ -557,18 +547,7 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     smoothedOutputGain.reset(sampleRate, DSPConstants::GAIN_SMOOTH_TIME_S);
     smoothedOutputGain.setCurrentAndTargetValue(1.0f);  // Initialize to unity gain
 
-    // Bypass crossfade (10ms to prevent clicks)
-    bypassRamp.reset(sampleRate, 0.01);
-    bypassRamp.setCurrentAndTargetValue(0.0f);  // Start in bypass
-    wasBypassed = true;
-
-    // Smoothed parameters for automation (20ms smoothing)
-    smoothedLfoDepth.reset(sampleRate, 0.02);
-    smoothedLfoDepth.setCurrentAndTargetValue(lfoDepthParam ? lfoDepthParam->load() : 0.0f);
-    smoothedDistMix.reset(sampleRate, 0.02);
-    smoothedDistMix.setCurrentAndTargetValue(distMixParam ? distMixParam->load() / 100.0f : 1.0f);
-    smoothedToneParam.reset(sampleRate, 0.02);
-    smoothedToneParam.setCurrentAndTargetValue(toneParam ? toneParam->load() : 20000.0f);
+    // Global mix smoothing (for wet/dry crossfade during automation)
     smoothedGlobalMix.reset(sampleRate, 0.02);
     smoothedGlobalMix.setCurrentAndTargetValue(globalMixParam ? globalMixParam->load() / 100.0f : 1.0f);
 
@@ -593,11 +572,6 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 
     // Update all sample-rate-dependent coefficients (DC blocking, compression, etc.)
     updateSampleRateDependentCoefficients(sampleRate);
-
-    // Initialize smoothed gain reduction with slow release (LA-2A style)
-    smoothedGainReduction.reset(sampleRate, DSPConstants::COMP_GR_SMOOTH_TIME_S);
-    smoothedGainReduction.setCurrentAndTargetValue(1.0f);  // Start at unity (no reduction)
-
 
     scopeBuffer.setSize(2, DSPConstants::SCOPE_BUFFER_SIZE);
     scopeBuffer.clear();
@@ -1138,8 +1112,17 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     }
 
     // CRITICAL: Detect sample rate changes and update coefficients
-    // Some DAWs can change sample rate without calling prepareToPlay
-    // This ensures all sample-rate-dependent processing works correctly at any rate (44.1, 48, 88.2, 96, 192 kHz)
+    // Belt-and-suspenders catch for non-compliant hosts that change sample rate without
+    // calling prepareToPlay. Standard DAWs (Reaper, Ableton, FL, Bitwig, Cubase, Pro Tools)
+    // always call prepareToPlay on SR change, so in normal operation this branch is
+    // skipped. Everything below must stay allocation-free for RT safety:
+    //   - updateSampleRateDependentCoefficients: only std::exp, no allocation.
+    //   - SmoothedValue::reset(double, double) is noexcept and allocation-free in JUCE 7.
+    // The branch does NOT rebuild the oversampler or re-prepare filters; that is deferred
+    // to a proper prepareToPlay or handleAsyncUpdate on the message thread. Block-size
+    // changes without prepareToPlay are NOT supported: the dryBuffer jassert below will
+    // fire in debug, and release builds have undefined behaviour if the block grows beyond
+    // the last prepared size. No supported DAW exhibits that pattern.
     const double currentSR = getSampleRate();
     if (currentSR > 0 && std::abs(currentSR - lastSampleRate) > 0.1)
     {
@@ -1153,26 +1136,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         auto tempOutputGain = smoothedOutputGain.getCurrentValue();
         smoothedOutputGain.reset(currentSR, DSPConstants::GAIN_SMOOTH_TIME_S);
         smoothedOutputGain.setCurrentAndTargetValue(tempOutputGain);
-
-        auto tempGainReduction = smoothedGainReduction.getCurrentValue();
-        smoothedGainReduction.reset(currentSR, DSPConstants::COMP_GR_SMOOTH_TIME_S);
-        smoothedGainReduction.setCurrentAndTargetValue(tempGainReduction);
-
-        auto tempBypassRamp = bypassRamp.getCurrentValue();
-        bypassRamp.reset(currentSR, 0.01);
-        bypassRamp.setCurrentAndTargetValue(tempBypassRamp);
-
-        auto tempLfoDepth = smoothedLfoDepth.getCurrentValue();
-        smoothedLfoDepth.reset(currentSR, 0.02);
-        smoothedLfoDepth.setCurrentAndTargetValue(tempLfoDepth);
-
-        auto tempDistMix = smoothedDistMix.getCurrentValue();
-        smoothedDistMix.reset(currentSR, 0.02);
-        smoothedDistMix.setCurrentAndTargetValue(tempDistMix);
-
-        auto tempToneParam = smoothedToneParam.getCurrentValue();
-        smoothedToneParam.reset(currentSR, 0.02);
-        smoothedToneParam.setCurrentAndTargetValue(tempToneParam);
 
         auto tempGlobalMix = smoothedGlobalMix.getCurrentValue();
         smoothedGlobalMix.reset(currentSR, 0.02);
@@ -1220,7 +1183,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     if (std::isnan(globalMix)) globalMix = 100.0f;
 
     // Set targets for smoothed parameters (prevent zipper noise from automation)
-    smoothedLfoDepth.setTargetValue(lfoDepth);
     smoothedGlobalMix.setTargetValue(globalMix / 100.0f);
 
     // LFO modulation for dynamic distortion effects
@@ -1292,9 +1254,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         }
     }
 
-    // Update dist mix smoothed value (for state tracking, not consumed per-sample)
-    smoothedDistMix.setTargetValue(distMix / 100.0f);
-
     // Calculate distortion drive from modulated parameter
     float distortionDrive = 1.0f + (modulatedDistortionParam / 100.0f) * 3.0f;
 
@@ -1324,28 +1283,15 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             dryBuffer.copyFrom(ch, 0, buffer, ch, 0, buffer.getNumSamples());
     }
 
-    // Bypass state detection with crossfade (prevent clicks)
+    // Bypass state detection
     const bool bypassed = (modulatedDistortionParam < 0.5f && !compEnabled);
-    if (bypassed && !wasBypassed)
-    {
-        // Entering bypass - fade out wet signal
-        bypassRamp.setTargetValue(0.0f);
-    }
-    else if (!bypassed && wasBypassed)
-    {
-        // Exiting bypass - fade in wet signal
-        bypassRamp.setTargetValue(1.0f);
-    }
-    wasBypassed = bypassed;
 
-    // TRUE BYPASS MODE: Skip processing but consume ramp for state tracking
+    // TRUE BYPASS MODE: Pass through with output gain only
     if (bypassed)
     {
-        // Apply output gain and consume bypass ramp to keep in sync
         for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
         {
             const float currentOutputGain = smoothedOutputGain.getNextValue();
-            bypassRamp.getNextValue();  // Consume ramp to keep state in sync
             for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
             {
                 // Simple pass-through with output gain
@@ -1940,16 +1886,24 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const float toneFreq = modulatedToneFreq;
     const float waveshaperMix = *waveshaperMixParam;
 
-    // Update tone filter coefficients if frequency changed
+    // Update tone filter coefficients if frequency changed (RT-safe in-place write)
     if (std::abs(toneFreq - lastToneFreq) > 1.0f && toneFilter.state != nullptr)
     {
         const double toneSampleRate = currentSampleRate * oversamplingFactor;
         // Clamp frequency to valid range (well below Nyquist)
         const float clampedToneFreq = juce::jlimit(2000.0f, std::min(20000.0f, (float)(toneSampleRate * 0.45)), toneFreq);
-        auto toneCoeffs = juce::dsp::IIR::Coefficients<float>::makeLowPass(toneSampleRate, clampedToneFreq);
-        *toneFilter.state = *toneCoeffs;
+        // Butterworth Q matches JUCE's default inverseRootTwo used by makeLowPass(sr, freq).
+        constexpr double butterworthQ = 0.7071067811865476;
+        // In-place write into the Coefficients object. ProcessorDuplicator's per-channel
+        // IIR::Filter holds its own CoefficientsPtr that was initialised from .state in
+        // prepare() and aliases the same object — so writing through .state here updates
+        // the coefficients read by every channel's Filter on the next process() call.
+        // No standby-swap is used for the tone filter: the swap exchanges only .state's
+        // pointer, which the per-channel Filter does not track. Audio thread is the sole
+        // writer and reader, sequenced, so no torn reads are possible.
+        writeSecondOrderLowPassCoeffs(*toneFilter.state, toneSampleRate, clampedToneFreq, butterworthQ);
         if (toneFilterLow.state != nullptr)
-            *toneFilterLow.state = *toneCoeffs;
+            writeSecondOrderLowPassCoeffs(*toneFilterLow.state, toneSampleRate, clampedToneFreq, butterworthQ);
         lastToneFreq = toneFreq;
     }
 
@@ -2788,7 +2742,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "lfoRate", 1 },
         "LFO Rate",
-        juce::NormalisableRange<float>(0.1f, 10.0f, 0.01f, 0.35f),  // 0.1-10Hz, log skew for more control at low rates
+        // Range starts at 0.0 so the default "off" (0.0) is inside the layout. The LFO is
+        // gated by lfoEnabled + lfoRate > 0.0f, so any rate > 0 engages it.
+        juce::NormalisableRange<float>(0.0f, 10.0f, 0.01f, 0.35f),
         0.0f));  // Default 0 = LFO off
 
     params.push_back(std::make_unique<juce::AudioParameterFloat>(

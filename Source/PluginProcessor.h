@@ -314,13 +314,6 @@ private:
     juce::AudioBuffer<float> dryDelayState;
 
     juce::SmoothedValue<float> smoothedOutputGain;  // Only output gain uses SmoothedValue (normal rate)
-    juce::SmoothedValue<float> bypassRamp;  // Bypass crossfade to prevent clicks (10ms)
-    bool wasBypassed = true;  // Track bypass state for crossfade detection
-
-    // Smoothed parameters for automation (prevent zipper noise)
-    juce::SmoothedValue<float> smoothedLfoDepth;
-    juce::SmoothedValue<float> smoothedDistMix;
-    juce::SmoothedValue<float> smoothedToneParam;
     juce::SmoothedValue<float> smoothedGlobalMix;
 
     // Thread safety for state persistence
@@ -368,9 +361,6 @@ private:
 
     // RMS detection for program-dependent behavior
     float compRmsHistory = 0.0f;
-
-    // Smoothed gain reduction for visual/smooth compression
-    juce::SmoothedValue<float> smoothedGainReduction;
 
     // Tube harmonic state
     float tubeWarmth = 0.0f;

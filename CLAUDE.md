@@ -132,7 +132,7 @@ The plugin processes audio through a carefully ordered chain:
 10. **LA2A Compression** → LA2A-style optical compressor (full-band processing)
 11. **DC Blocking** → Manual one-pole DC blocker (~35Hz cutoff, R=0.995)
 12. **Output Limiter** → Final stereo-linked safety limiter (-0.5dBFS, 0.5ms attack, 50ms release)
-13. **Output Stage** → Final gain staging (±12dB)
+13. **Output Stage** → Final gain staging (±9dB; formula `(param-50)*0.18` dB at knob 0–100)
 
 ### Core Processing Components
 
@@ -295,7 +295,7 @@ All processing constants centralized in `DSPConstants` namespace (PluginProcesso
 **Gain Staging**:
 - Input gain: Unity (1.0) at default 50, range 0-2.83 via `pow(param/50, 1.5)`
 - Distortion drive: 1.0-4.0 range for controlled saturation (reduced from 1.0-8.0 for more gradual response at low percentages)
-- Output gain: ±12dB range around unity
+- Output gain: ±9dB range around unity (knob 0–100 mapped as `(param-50)*0.18` dB)
 
 ### Filter Coefficient Caching
 

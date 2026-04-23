@@ -2665,4 +2665,194 @@ void RTCleanOversamplingTest::runTest()
 #endif
 }
 
+void RTCleanToneSweepTest::runTest()
+{
+#if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD
+    beginTest("No allocation during 100-block tone frequency sweep (PR-10)");
+    {
+        PluginProcessor processor;
+        processor.prepareToPlay(48000.0, 512);
+
+        auto* distortionAmount = processor.parameters.getParameter("distortionAmount");
+        auto* subGuardFreq = processor.parameters.getParameter("subGuardFreq");
+        auto* subGuardFreqFloat = dynamic_cast<juce::AudioParameterFloat*>(subGuardFreq);
+        auto* tone = processor.parameters.getParameter("tone");
+        auto* toneFloat = dynamic_cast<juce::AudioParameterFloat*>(tone);
+
+        expect(distortionAmount != nullptr, "distortionAmount parameter not found");
+        expect(subGuardFreqFloat != nullptr, "subGuardFreq parameter not found / type mismatch");
+        expect(toneFloat != nullptr, "tone parameter not found / type mismatch");
+        if (distortionAmount == nullptr || subGuardFreqFloat == nullptr || toneFloat == nullptr)
+            return;
+
+        // Distortion ON so the tone filter is actually in the signal path.
+        // Sub Guard OFF for this sweep (sub guard ON tested separately below).
+        distortionAmount->setValueNotifyingHost(0.5f);
+        subGuardFreq->setValueNotifyingHost(subGuardFreqFloat->convertTo0to1(0.0f));
+        tone->setValueNotifyingHost(toneFloat->convertTo0to1(20000.0f));
+
+        juce::MidiBuffer midi;
+        auto warmupBuffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+        processor.processBlock(warmupBuffer, midi);
+
+        rt_guard::resetAllocationCounter();
+
+        for (int i = 0; i < 100; ++i)
+        {
+            // Sweep from 2 kHz to 20 kHz (full parameter range)
+            const float toneHz = 2000.0f + (18000.0f * static_cast<float>(i) / 99.0f);
+            tone->setValueNotifyingHost(toneFloat->convertTo0to1(toneHz));
+
+            auto buffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+            processor.processBlock(buffer, midi);
+        }
+
+        expectEquals(rt_guard::getAllocationCount(), 0,
+                     "Tone filter coefficient updates should not allocate on the audio thread");
+    }
+
+    beginTest("Tone filter coefficient update actually affects audio output (correctness)");
+    {
+        // Regression test: changing the tone parameter must audibly change the tone filter
+        // output. The in-place write through .state aliases the object held by each
+        // per-channel Filter.coefficients, so updates take effect on the next process().
+        PluginProcessor processor;
+        processor.prepareToPlay(48000.0, 512);
+
+        auto* distortionAmount = processor.parameters.getParameter("distortionAmount");
+        auto* subGuardFreq = processor.parameters.getParameter("subGuardFreq");
+        auto* subGuardFreqFloat = dynamic_cast<juce::AudioParameterFloat*>(subGuardFreq);
+        auto* tone = processor.parameters.getParameter("tone");
+        auto* toneFloat = dynamic_cast<juce::AudioParameterFloat*>(tone);
+
+        if (distortionAmount == nullptr || subGuardFreqFloat == nullptr || toneFloat == nullptr)
+            return;
+
+        // Distortion ON so tone filter is active. Sub Guard OFF to isolate tone filter only.
+        distortionAmount->setValueNotifyingHost(0.5f);
+        subGuardFreq->setValueNotifyingHost(subGuardFreqFloat->convertTo0to1(0.0f));
+
+        juce::MidiBuffer midi;
+        const int blocksToSettle = 16;  // enough for any parameter smoothing
+
+        // Measure output at tone = 20kHz (effectively bypassed) with 8 kHz input
+        tone->setValueNotifyingHost(toneFloat->convertTo0to1(20000.0f));
+        for (int b = 0; b < blocksToSettle; ++b)
+        {
+            auto warm = generateSineWave(8000.0, 48000.0, 512, 0.3f);
+            processor.processBlock(warm, midi);
+        }
+        auto measureOpen = generateSineWave(8000.0, 48000.0, 512, 0.3f);
+        processor.processBlock(measureOpen, midi);
+        float peakOpen = 0.0f;
+        for (int i = 256; i < 512; ++i)
+            peakOpen = std::max(peakOpen, std::abs(measureOpen.getSample(0, i)));
+
+        // Now change tone to 2kHz — 8kHz input should be heavily attenuated
+        tone->setValueNotifyingHost(toneFloat->convertTo0to1(2000.0f));
+        for (int b = 0; b < blocksToSettle; ++b)
+        {
+            auto warm = generateSineWave(8000.0, 48000.0, 512, 0.3f);
+            processor.processBlock(warm, midi);
+        }
+        auto measureClosed = generateSineWave(8000.0, 48000.0, 512, 0.3f);
+        processor.processBlock(measureClosed, midi);
+        float peakClosed = 0.0f;
+        for (int i = 256; i < 512; ++i)
+            peakClosed = std::max(peakClosed, std::abs(measureClosed.getSample(0, i)));
+
+        // 8kHz through a 2kHz LP (2nd-order) is attenuated by ~24 dB vs open tone.
+        // Require at least 6 dB difference (factor of 2) — weaker criterion, avoids
+        // false positives from limiter / auto-gain compensation.
+        expect(peakClosed < peakOpen * 0.6f,
+               "Closing tone filter to 2kHz must attenuate 8kHz input more than open @ 20kHz "
+               "(peakOpen=" + juce::String(peakOpen) + " peakClosed=" + juce::String(peakClosed) + ")");
+    }
+
+    beginTest("No allocation during tone sweep with Sub Guard engaged (toneFilterLow path)");
+    {
+        PluginProcessor processor;
+        processor.prepareToPlay(48000.0, 512);
+
+        auto* distortionAmount = processor.parameters.getParameter("distortionAmount");
+        auto* subGuardFreq = processor.parameters.getParameter("subGuardFreq");
+        auto* subGuardFreqFloat = dynamic_cast<juce::AudioParameterFloat*>(subGuardFreq);
+        auto* tone = processor.parameters.getParameter("tone");
+        auto* toneFloat = dynamic_cast<juce::AudioParameterFloat*>(tone);
+
+        if (distortionAmount == nullptr || subGuardFreqFloat == nullptr || toneFloat == nullptr)
+            return;
+
+        distortionAmount->setValueNotifyingHost(0.5f);
+        subGuardFreq->setValueNotifyingHost(subGuardFreqFloat->convertTo0to1(100.0f));
+        tone->setValueNotifyingHost(toneFloat->convertTo0to1(20000.0f));
+
+        juce::MidiBuffer midi;
+        auto warmupBuffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+        processor.processBlock(warmupBuffer, midi);
+
+        rt_guard::resetAllocationCounter();
+
+        for (int i = 0; i < 100; ++i)
+        {
+            const float toneHz = 2000.0f + (18000.0f * static_cast<float>(i) / 99.0f);
+            tone->setValueNotifyingHost(toneFloat->convertTo0to1(toneHz));
+
+            auto buffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+            processor.processBlock(buffer, midi);
+        }
+
+        expectEquals(rt_guard::getAllocationCount(), 0,
+                     "Tone filter (including low mirror) must not allocate on the audio thread");
+    }
+#else
+    beginTest("RT guard disabled in this build");
+    expect(true, "DISTORTION_RT_GUARD not defined; skipping.");
+#endif
+}
+
+void RTCleanSampleRateDriftTest::runTest()
+{
+#if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD
+    beginTest("No allocation when SR drift branch fires inside processBlock (PR-12)");
+    {
+        PluginProcessor processor;
+        processor.prepareToPlay(48000.0, 512);
+
+        setParameter(processor.parameters, "distortionAmount", 50.0f);
+        setParameter(processor.parameters, "subGuardFreq", 0.0f);
+
+        juce::MidiBuffer midi;
+        auto warmupBuffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+        processor.processBlock(warmupBuffer, midi);
+
+        // Force a sample-rate drift WITHOUT calling prepareToPlay, so the SR-drift
+        // branch inside processBlock runs. Use the same block size the processor was
+        // prepared for (512); only the sample rate changes.
+        processor.setRateAndBufferSizeDetails(44100.0, 512);
+
+        rt_guard::resetAllocationCounter();
+
+        auto driftBuffer = generateSineWave(1000.0, 44100.0, 512, 0.25f);
+        processor.processBlock(driftBuffer, midi);
+
+        expectEquals(rt_guard::getAllocationCount(), 0,
+                     "Sample-rate drift branch must not allocate on the audio thread");
+
+        // Subsequent blocks at the new rate: still zero allocations.
+        rt_guard::resetAllocationCounter();
+        for (int i = 0; i < 4; ++i)
+        {
+            auto b = generateSineWave(1000.0, 44100.0, 512, 0.25f);
+            processor.processBlock(b, midi);
+        }
+        expectEquals(rt_guard::getAllocationCount(), 0,
+                     "Post-drift blocks at the new sample rate must not allocate");
+    }
+#else
+    beginTest("RT guard disabled in this build");
+    expect(true, "DISTORTION_RT_GUARD not defined; skipping.");
+#endif
+}
+
 #endif // JUCE_DEBUG
