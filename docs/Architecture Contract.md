@@ -1,12 +1,12 @@
 ---
-date: 2026-04-23
+date: 2026-04-26
 status: active
 tags: [project, plugin, audio, juce, dsp, contract, reference]
 ---
 
 # Monolit Distortion — Architecture Contract
 
-Updated on `ship/v2.1` after PR-10..PR-13. Use as a reference alongside handoff notes. Changes that break anything here are contract violations.
+Updated on `ship/v2.1` after PR-10..PR-14. Use as a reference alongside handoff notes. Changes that break anything here are contract violations.
 
 ## Threading
 - `processBlock` is the only audio-thread entry point. No locks held inside.
@@ -16,9 +16,10 @@ Updated on `ship/v2.1` after PR-10..PR-13. Use as a reference alongside handoff 
 
 ## RT-safety
 - No allocation in `processBlock`. Buffers are sized once in `prepareToPlay` / `rebuildOversampling` with `avoidReallocating = true`.
-- Filter coefficient changes must never call `IIR::Coefficients::makeXxx(...)` from `processBlock`. Two RT-safe patterns are used:
-  - **In-place write** (tone filter, PR-10): `writeXxxCoeffs(*filter.state, ...)`. The per-channel `IIR::Filter` was initialised in `prepare()` with a `CoefficientsPtr` that aliases `.state`, so writing through `.state` updates the coefficients the filter reads on its next `process()`.
-  - **Standby-swap** (pre-HP, Sub Guard, PR-2/PR-3): `writeXxxCoeffs(*standby, ...)` then swap the `.state` / standby `Ptr` pair. CAVEAT: the per-channel `Filter.coefficients` held inside `ProcessorDuplicator.processors` is an independent `CoefficientsPtr` that is NOT reassigned by swapping `.state`. The legacy pre-HP / Sub Guard sites do not re-sync per-channel pointers, so updates land intermittently; prefer the in-place pattern for new filters. Flagged for follow-up.
+- Filter coefficient changes must never call `IIR::Coefficients::makeXxx(...)` from `processBlock`. **Single canonical pattern: in-place write.**
+  - `writeXxxCoeffs(*filter.state, sampleRate, freq, q)`. Each per-channel `IIR::Filter` was constructed by `ProcessorDuplicator::prepare()` with a `CoefficientsPtr` that aliases `.state` — so writing through `.state` directly mutates the Coefficients object every channel reads on its next `process()`. No standby, no swap.
+  - Helpers in the anonymous namespace of `PluginProcessor.cpp`: `writeFirstOrderHighPassCoeffs`, `writeFirstOrderLowPassCoeffs`, `writeSecondOrderHighPassCoeffs`, `writeSecondOrderLowPassCoeffs`. Each writes the same raw-coefficient layout JUCE's `assignImpl` produces (b0/a0, b1/a0, b2/a0, a1/a0, a2/a0).
+  - The standby-swap pattern was tried in PR-2/PR-3 and removed in PR-14: swapping `.state` does NOT update the per-channel `Filter.coefficients` Ptrs (each filter holds an independent refcounted handle from `prepare()`-time). Direct in-place write is both simpler and the only correct pattern.
 - Sample-rate drift branch (non-`prepareToPlay` SR change) stays allocation-free: only `std::exp` math and `SmoothedValue::reset(double, double)` (noexcept, allocation-free in JUCE 7). Block-size changes without `prepareToPlay` are unsupported; the `dryBuffer` size jassert would trip.
 - `juce::ScopedNoDenormals` wraps the block.
 - Active smoothers: `smoothedOutputGain`, `smoothedGlobalMix`, `smoothedSubGuardFreq`. Other block-level parameters (`inputGain`, `distortionDrive`, `distMix`) use manual linear interpolation via `last*` endpoints. The previously-declared `smoothedLfoDepth` / `smoothedDistMix` / `smoothedToneParam` / `smoothedGainReduction` / `bypassRamp` were unused and removed in PR-11.
