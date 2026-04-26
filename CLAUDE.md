@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Distortion** is a professional JUCE audio plugin by Elar Music Audio featuring multi-stage distortion processing, LA2A-style optical compression, and advanced signal processing. The plugin supports VST3, VST2, and Standalone formats.
+**Monolit Distortion** is a professional JUCE audio plugin by Boris Miscenco (Monolit Beats) featuring multi-stage distortion processing, LA2A-style optical compression, and advanced signal processing. The plugin supports VST3, VST2, and Standalone formats.
 
 ## Build System
 
@@ -132,7 +132,7 @@ The plugin processes audio through a carefully ordered chain:
 10. **LA2A Compression** → LA2A-style optical compressor (full-band processing)
 11. **DC Blocking** → Manual one-pole DC blocker (~35Hz cutoff, R=0.995)
 12. **Output Limiter** → Final stereo-linked safety limiter (-0.5dBFS, 0.5ms attack, 50ms release)
-13. **Output Stage** → Final gain staging (±12dB)
+13. **Output Stage** → Final gain staging (±9dB; formula `(param-50)*0.18` dB at knob 0–100)
 
 ### Core Processing Components
 
@@ -295,7 +295,7 @@ All processing constants centralized in `DSPConstants` namespace (PluginProcesso
 **Gain Staging**:
 - Input gain: Unity (1.0) at default 50, range 0-2.83 via `pow(param/50, 1.5)`
 - Distortion drive: 1.0-4.0 range for controlled saturation (reduced from 1.0-8.0 for more gradual response at low percentages)
-- Output gain: ±12dB range around unity
+- Output gain: ±9dB range around unity (knob 0–100 mapped as `(param-50)*0.18` dB)
 
 ### Filter Coefficient Caching
 
@@ -367,7 +367,7 @@ for (size_t channel = 0; channel < numChannels; ++channel)
 
 ## Recent Architectural Changes
 
-**Current Session Changes (Oscilloscope Quality Audit — v1.9)**:
+**Current Session Changes (Oscilloscope Quality Audit — v2.1)**:
 - **Removed SpinLock from scope pipeline**: `juce::AbstractFifo` is lock-free SPSC by design. The `scopeLock` SpinLock and `bufferLock` CriticalSection were redundant and risked audio-thread stalls. Both removed entirely.
 - **Fixed FIFO drain logic in `fillScopeBuffer()`**: Previously read oldest 512 samples from a nearly-full 2048-sample FIFO, causing ~64ms display latency. Now drains excess samples first so the display always shows the most recent audio.
 - **Zero-crossing trigger**: `Oscilloscope::timerCallback()` scans the first `SCOPE_TRIGGER_MARGIN` (256) samples of the buffer for a rising zero-crossing on channel 0, stores `triggerOffset`, and both draw functions offset all reads by it. Waveform is now phase-stable across frames.
@@ -378,7 +378,7 @@ for (size_t channel = 0; channel < numChannels; ++channel)
 - **Reduced glow stroke passes**: 3 strokes per channel (3px + 2px + 1px) merged into 2 (3px glow + 1px main). Stereo: 6→4 strokes per frame.
 - **`SCOPE_TRIGGER_MARGIN = 256`** constant added to `DSPConstants` in `PluginProcessor.h`.
 - **Tests**: All 2033 assertions pass. New `testScopeDrainExcess` test added to `ThreadSafetyTests`.
-- **Version**: Updated to v1.9 Oscilloscope Quality
+- **Version**: Updated to v2.1 (Oscilloscope Quality Audit)
 
 **Previous Session Changes (LFO Destination Routing)**:
 - **LFO Destination Parameter**: Added `"lfoDestination"` AudioParameterChoice with 5 destinations

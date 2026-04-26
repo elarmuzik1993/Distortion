@@ -1,7 +1,10 @@
 #if JUCE_DEBUG
 
 #include "DistortionTests.h"
+#include "../RTAllocationGuard.h"
+#include <atomic>
 #include <iostream>
+#include <thread>
 
 using namespace TestUtilities;
 
@@ -1385,6 +1388,299 @@ void ProcessBlockTests::testOutputGain()
 }
 
 //==============================================================================
+// DryWetAlignmentTests Implementation
+//==============================================================================
+
+namespace
+{
+    // Configure a processor so the oversampled wet path is engaged but the
+    // signal passes through near-linearly. Disables auto-gain, compression,
+    // extreme mode, and limits distortion to just above the bypass threshold.
+    inline void configureForAlignmentTest(PluginProcessor& processor, float globalMixPct)
+    {
+        setParameter(processor.parameters, "distortionAmount", 0.5f);   // min above bypass
+        setParameter(processor.parameters, "clipType", 1.0f);            // Tube (smooth)
+        setParameter(processor.parameters, "compEnabled", 0.0f);
+        setParameter(processor.parameters, "autoGainEnabled", 0.0f);
+        setParameter(processor.parameters, "extremeEnabled", 0.0f);
+        setParameter(processor.parameters, "subGuardFreq", 0.0f);        // off
+        setParameter(processor.parameters, "distMix", 100.0f);           // dist stage wet
+        setParameter(processor.parameters, "inputGain", 50.0f);          // unity
+        setParameter(processor.parameters, "outputGain", 50.0f);         // unity
+        setParameter(processor.parameters, "lfoEnabled", 0.0f);
+        setParameter(processor.parameters, "globalMix", globalMixPct);
+    }
+
+    // Run blocks of a continuous sine wave through the processor so smoothing
+    // settles. The generator keeps phase across blocks so the signal is truly
+    // continuous (no discontinuities at block boundaries that would smear RMS).
+    inline void warmUp(PluginProcessor& processor, double sampleRate, int blockSize,
+                       double frequency, int numBlocks, double& phaseInOut)
+    {
+        juce::MidiBuffer midi;
+        const double phaseInc = juce::MathConstants<double>::twoPi * frequency / sampleRate;
+
+        for (int b = 0; b < numBlocks; ++b)
+        {
+            juce::AudioBuffer<float> buffer(2, blockSize);
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                auto* data = buffer.getWritePointer(ch);
+                double phase = phaseInOut;
+                for (int s = 0; s < blockSize; ++s)
+                {
+                    data[s] = 0.3f * static_cast<float>(std::sin(phase));
+                    phase += phaseInc;
+                }
+            }
+            phaseInOut += phaseInc * blockSize;
+            phaseInOut = std::fmod(phaseInOut, juce::MathConstants<double>::twoPi);
+            processor.processBlock(buffer, midi);
+        }
+    }
+}
+
+void DryWetAlignmentTests::runTest()
+{
+    beginTest("Dry-only path latency matches reported latency");
+    testDryOnlyLatency();
+
+    beginTest("No comb filtering at 50% mix");
+    testNoCombFiltering();
+
+    beginTest("Fully wet path unaffected by new code");
+    testFullyWetPathUnaffected();
+
+    beginTest("State valid across oversampling reinit");
+    testOversamplingReinit();
+}
+
+void DryWetAlignmentTests::testDryOnlyLatency()
+{
+    // At 0% global mix the output should be a delayed copy of the input. With
+    // the fractional-delay fix, that delay equals the oversampler's reported
+    // latency. We verify by measuring cross-correlation against input at the
+    // reported lag.
+    PluginProcessor processor;
+    const double sr = 44100.0;
+    const int blockSize = 512;
+    processor.prepareToPlay(sr, blockSize);
+    configureForAlignmentTest(processor, 0.0f);
+
+    const int latency = processor.getLatencySamples();
+    expect(latency > 0, "Oversampler should report non-zero latency at default settings");
+
+    const double testFreq = 1000.0;
+    double phase = 0.0;
+    warmUp(processor, sr, blockSize, testFreq, 8, phase);
+
+    // Capture a long continuous segment of input and output
+    const int numBlocks = 8;
+    const int totalSamples = blockSize * numBlocks;
+    juce::AudioBuffer<float> inputCapture(2, totalSamples);
+    juce::AudioBuffer<float> outputCapture(2, totalSamples);
+    juce::MidiBuffer midi;
+
+    const double phaseInc = juce::MathConstants<double>::twoPi * testFreq / sr;
+    for (int b = 0; b < numBlocks; ++b)
+    {
+        juce::AudioBuffer<float> block(2, blockSize);
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            auto* data = block.getWritePointer(ch);
+            double p = phase;
+            for (int s = 0; s < blockSize; ++s)
+            {
+                data[s] = 0.3f * static_cast<float>(std::sin(p));
+                p += phaseInc;
+            }
+        }
+
+        // Copy input before processing
+        for (int ch = 0; ch < 2; ++ch)
+            inputCapture.copyFrom(ch, b * blockSize, block, ch, 0, blockSize);
+
+        processor.processBlock(block, midi);
+
+        for (int ch = 0; ch < 2; ++ch)
+            outputCapture.copyFrom(ch, b * blockSize, block, ch, 0, blockSize);
+
+        phase += phaseInc * blockSize;
+        phase = std::fmod(phase, juce::MathConstants<double>::twoPi);
+    }
+
+    expect(!containsInvalidSamples(outputCapture), "Output must not contain NaN/Inf");
+
+    // Compute aligned correlation: output[n] vs input[n - latency] for n >= latency
+    const int alignedLen = totalSamples - latency;
+    juce::AudioBuffer<float> inAligned(1, alignedLen);
+    juce::AudioBuffer<float> outAligned(1, alignedLen);
+    for (int n = 0; n < alignedLen; ++n)
+    {
+        inAligned.setSample(0, n, inputCapture.getSample(0, n));
+        outAligned.setSample(0, n, outputCapture.getSample(0, n + latency));
+    }
+
+    const float correlation = calculateCorrelation(inAligned, outAligned);
+    expect(correlation > 0.99f,
+           "Dry-only output must correlate strongly with delayed input at reported latency. Got: "
+           + juce::String(correlation));
+
+    // Sanity: output RMS at 100% dry should be close to input RMS (small filter
+    // losses from linear interpolation and the 20Hz hi-pass are tolerable).
+    const float inRms = calculateRMS(inputCapture);
+    const float outRms = calculateRMS(outputCapture);
+    const float rmsRatioDb = juce::Decibels::gainToDecibels(outRms / juce::jmax(inRms, 1.0e-9f));
+    expect(std::abs(rmsRatioDb) < 0.5f,
+           "Dry-only RMS should match input within 0.5dB. Got: " + juce::String(rmsRatioDb) + " dB");
+}
+
+void DryWetAlignmentTests::testNoCombFiltering()
+{
+    // At 50% global mix, both halves are near-identical (distortion near-linear)
+    // so the summed output should preserve the signal at full amplitude. Without
+    // the dry-delay fix, dry + delayed_wet sums would produce comb-filter notches
+    // at f = Fs/(2*latency), roughly 2 kHz for a 4x polyphase IIR at 44.1kHz.
+    PluginProcessor processor;
+    const double sr = 44100.0;
+    const int blockSize = 512;
+    processor.prepareToPlay(sr, blockSize);
+    configureForAlignmentTest(processor, 50.0f);
+
+    const int latency = processor.getLatencySamples();
+    expect(latency > 0, "Test requires non-zero oversampler latency");
+
+    // Probe at the exact notch frequency of an un-aligned 50/50 sum: Fs/(2*D).
+    const double notchFreq = sr / (2.0 * static_cast<double>(latency));
+
+    // Also probe at 1 kHz (safe passband) for a baseline.
+    const double freqs[] = { 1000.0, notchFreq };
+    const char* labels[] = { "1 kHz passband", "un-aligned notch freq" };
+
+    for (int f = 0; f < 2; ++f)
+    {
+        // Fresh warmup per frequency so smoothing and filter state settle
+        double phase = 0.0;
+        warmUp(processor, sr, blockSize, freqs[f], 8, phase);
+
+        const int numBlocks = 8;
+        const int totalSamples = blockSize * numBlocks;
+        juce::AudioBuffer<float> inputCapture(2, totalSamples);
+        juce::AudioBuffer<float> outputCapture(2, totalSamples);
+        juce::MidiBuffer midi;
+
+        const double phaseInc = juce::MathConstants<double>::twoPi * freqs[f] / sr;
+        for (int b = 0; b < numBlocks; ++b)
+        {
+            juce::AudioBuffer<float> block(2, blockSize);
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                auto* data = block.getWritePointer(ch);
+                double p = phase;
+                for (int s = 0; s < blockSize; ++s)
+                {
+                    data[s] = 0.3f * static_cast<float>(std::sin(p));
+                    p += phaseInc;
+                }
+            }
+            for (int ch = 0; ch < 2; ++ch)
+                inputCapture.copyFrom(ch, b * blockSize, block, ch, 0, blockSize);
+
+            processor.processBlock(block, midi);
+
+            for (int ch = 0; ch < 2; ++ch)
+                outputCapture.copyFrom(ch, b * blockSize, block, ch, 0, blockSize);
+
+            phase += phaseInc * blockSize;
+            phase = std::fmod(phase, juce::MathConstants<double>::twoPi);
+        }
+
+        expect(!containsInvalidSamples(outputCapture),
+               juce::String("Output NaN/Inf at ") + labels[f]);
+
+        const float inRms = calculateRMS(inputCapture);
+        const float outRms = calculateRMS(outputCapture);
+        const float ratioDb = juce::Decibels::gainToDecibels(outRms / juce::jmax(inRms, 1.0e-9f));
+
+        // Without the fix, the notch probe would lose ~40-60 dB. With the fix,
+        // both probes should stay within ~1 dB of unity.
+        expect(ratioDb > -2.0f,
+               juce::String("Comb-filter attenuation at ") + labels[f]
+               + " (f=" + juce::String(freqs[f]) + " Hz): " + juce::String(ratioDb) + " dB");
+    }
+}
+
+void DryWetAlignmentTests::testFullyWetPathUnaffected()
+{
+    // 100% wet skips the dry read entirely (fast path via needsGlobalMix = false).
+    // This is a sanity check that the new code doesn't break the common case.
+    PluginProcessor processor;
+    const double sr = 44100.0;
+    const int blockSize = 512;
+    processor.prepareToPlay(sr, blockSize);
+    configureForAlignmentTest(processor, 100.0f);
+
+    double phase = 0.0;
+    warmUp(processor, sr, blockSize, 1000.0, 4, phase);
+
+    auto buffer = generateSineWave(1000.0, sr, blockSize, 0.3f);
+    juce::MidiBuffer midi;
+    processor.processBlock(buffer, midi);
+
+    expect(!containsInvalidSamples(buffer), "100% wet output must not contain NaN/Inf");
+    expect(calculatePeak(buffer) > 0.01f, "100% wet output must not be silent");
+}
+
+void DryWetAlignmentTests::testOversamplingReinit()
+{
+    // Changing oversampling stages triggers reinitializeOversampling, which
+    // must reallocate dryDelayState to the new latency. Process under two
+    // different oversampling factors and confirm no invalid samples.
+    PluginProcessor processor;
+    const double sr = 44100.0;
+    const int blockSize = 512;
+    processor.prepareToPlay(sr, blockSize);
+    configureForAlignmentTest(processor, 40.0f);  // mid mix — forces dry path
+
+    juce::MidiBuffer midi;
+
+    // Run at default (4x) for a while
+    double phase = 0.0;
+    warmUp(processor, sr, blockSize, 1000.0, 4, phase);
+
+    {
+        auto buffer = generateSineWave(1000.0, sr, blockSize, 0.3f);
+        processor.processBlock(buffer, midi);
+        expect(!containsInvalidSamples(buffer), "Output invalid before reinit");
+    }
+
+    // Request a different oversampling factor (2x stages = 1) on the message thread.
+    processor.requestOversamplingRebuild(1);
+    processor.handleAsyncUpdate();
+
+    // Process several blocks to drive the reinit and then settle.
+    warmUp(processor, sr, blockSize, 1000.0, 8, phase);
+
+    {
+        auto buffer = generateSineWave(1000.0, sr, blockSize, 0.3f);
+        processor.processBlock(buffer, midi);
+        expect(!containsInvalidSamples(buffer), "Output invalid after oversampling reinit");
+        expect(calculatePeak(buffer) > 0.01f, "Output must not be silent after reinit");
+    }
+
+    // And flip to off (stages = 0): latency becomes 0 → fast path engaged.
+    processor.requestOversamplingRebuild(0);
+    processor.handleAsyncUpdate();
+    warmUp(processor, sr, blockSize, 1000.0, 8, phase);
+
+    {
+        auto buffer = generateSineWave(1000.0, sr, blockSize, 0.3f);
+        processor.processBlock(buffer, midi);
+        expect(!containsInvalidSamples(buffer), "Output invalid with oversampling off");
+    }
+}
+
+//==============================================================================
 // ParameterTests Implementation
 //==============================================================================
 
@@ -2061,5 +2357,633 @@ void StatefulDistortionTests::testTapeHysteresis()
 
 // Static test registration moved to registerAllTests() in DistortionTests.h
 // to ensure tests are registered before they're run
+
+//==============================================================================
+// RTAllocationGuardTest Implementation (PR-0)
+//
+// Verifies that the debug RT-allocation guard correctly counts global
+// operator new / new[] invocations that occur inside a ScopedRTAssert scope
+// on the current thread, and ignores allocations outside any scope. This
+// test does NOT assert that processBlock is allocation-free today - that
+// property is established piecewise by the later RT-1..RT-5 PRs.
+//
+// IMPORTANT: GCC/Clang at -O2+ are permitted by [expr.new] / CWG2511 to
+// elide paired new/delete (heap-allocation DCE) even when operator new is
+// replaced. That elision wipes the test allocations before our override can
+// count them, producing 4 spurious failures on Linux Release CI ("Actual
+// value: 0"). Disabling optimisation on this single function preserves the
+// new/delete calls so the override observes them. Windows / MSVC does not
+// perform this optimisation, so the attribute is GCC/Clang only.
+//==============================================================================
+
+#if defined(__clang__)
+[[clang::optnone]]
+#elif defined(__GNUC__)
+__attribute__((optimize("O0")))
+#endif
+void RTAllocationGuardTest::runTest()
+{
+#if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD
+    beginTest("Counter increments inside scope");
+    {
+        rt_guard::resetAllocationCounter();
+        {
+            RT_ASSERT_SCOPE();
+            // Force an allocation that must go through operator new.
+            auto* p = new int (42);
+            delete p;
+        }
+        expect(rt_guard::getAllocationCount() >= 1,
+               "Guard did not count operator new inside an active scope");
+    }
+
+    beginTest("Counter stays at zero outside scope");
+    {
+        rt_guard::resetAllocationCounter();
+        {
+            auto* p = new int (42);
+            delete p;
+        }
+        expectEquals(rt_guard::getAllocationCount(), 0,
+                     "Guard counted an allocation outside any scope");
+    }
+
+    beginTest("Stack-only path does not trip guard");
+    {
+        rt_guard::resetAllocationCounter();
+        {
+            RT_ASSERT_SCOPE();
+            volatile int stackOnly = 7;
+            juce::ignoreUnused (stackOnly);
+        }
+        expectEquals(rt_guard::getAllocationCount(), 0,
+                     "Guard false-positive on pure stack path");
+    }
+
+    beginTest("Counter reset works");
+    {
+        rt_guard::resetAllocationCounter();
+        {
+            RT_ASSERT_SCOPE();
+            delete (new int (1));
+            delete (new int (2));
+        }
+        expect(rt_guard::getAllocationCount() >= 2, "Pre-reset count should be >=2");
+        rt_guard::resetAllocationCounter();
+        expectEquals(rt_guard::getAllocationCount(), 0, "Reset did not zero the counter");
+    }
+
+    // Proves the depth-counter fix: an inner scope exiting must not turn off
+    // counting for the still-live outer scope.
+    beginTest("Nested scopes remain active after inner exits");
+    {
+        rt_guard::resetAllocationCounter();
+        {
+            RT_ASSERT_SCOPE();          // outer
+            delete (new int (1));       // counted
+            {
+                RT_ASSERT_SCOPE();      // inner
+                delete (new int (2));   // counted
+            }                            // inner dtor: depth 2 -> 1 (still active)
+            delete (new int (3));       // must still be counted
+        }                                // outer dtor: depth 1 -> 0
+        delete (new int (4));           // must NOT be counted
+        expectEquals(rt_guard::getAllocationCount(), 3,
+                     "Nested-scope handling is incorrect");
+    }
+
+    // Proves per-thread semantics: a scope active on thread A must not count
+    // allocations that occur on thread B (which is itself not in a scope).
+    beginTest("Active scope on one thread does not count another thread's allocs");
+    {
+        rt_guard::resetAllocationCounter();
+
+        std::atomic<bool> scopeReady   { false };
+        std::atomic<bool> workerDone   { false };
+
+        std::thread worker ([&]
+        {
+            // Spin (no heap alloc) until main opens its scope.
+            while (! scopeReady.load (std::memory_order_acquire))
+                std::this_thread::yield();
+
+            // Main has a scope active; this worker has none. This alloc must
+            // NOT be counted.
+            auto* p = new int (99);
+            delete p;
+
+            workerDone.store (true, std::memory_order_release);
+        });
+
+        {
+            RT_ASSERT_SCOPE();
+            scopeReady.store (true, std::memory_order_release);
+            while (! workerDone.load (std::memory_order_acquire))
+                std::this_thread::yield();
+        }
+
+        worker.join();
+        expectEquals(rt_guard::getAllocationCount(), 0,
+                     "Main-thread scope incorrectly counted another thread's alloc");
+    }
+
+    // Proves a worker thread can own its own scope and count its own allocs
+    // without any scope being active on main.
+    beginTest("Worker thread counts allocations inside its own scope");
+    {
+        rt_guard::resetAllocationCounter();
+
+        std::thread worker ([]
+        {
+            RT_ASSERT_SCOPE();
+            auto* p = new int (100);
+            delete p;
+        });
+        worker.join();
+
+        expect(rt_guard::getAllocationCount() >= 1,
+               "Worker-thread scope failed to count its own allocation");
+    }
+#else
+    beginTest("RT guard disabled in this build");
+    expect(true, "DISTORTION_RT_GUARD not defined; skipping.");
+#endif
+}
+
+void RTBufferPreallocTest::runTest()
+{
+#if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD
+    beginTest("No allocation on prepared-size block with pre-sized scratch buffers");
+    {
+        PluginProcessor processor;
+        processor.prepareToPlay(48000.0, 512);
+
+        auto* distortionAmount = processor.parameters.getParameter("distortionAmount");
+        auto* subGuardFreq = processor.parameters.getParameter("subGuardFreq");
+        auto* globalMix = processor.parameters.getParameter("globalMix");
+        auto* subGuardFreqFloat = dynamic_cast<juce::AudioParameterFloat*>(subGuardFreq);
+
+        expect(distortionAmount != nullptr, "distortionAmount parameter not found");
+        expect(subGuardFreq != nullptr, "subGuardFreq parameter not found");
+        expect(globalMix != nullptr, "globalMix parameter not found");
+        expect(subGuardFreqFloat != nullptr, "subGuardFreq parameter type mismatch");
+
+        if (distortionAmount == nullptr || subGuardFreq == nullptr || globalMix == nullptr || subGuardFreqFloat == nullptr)
+            return;
+
+        distortionAmount->setValueNotifyingHost(0.5f);
+        subGuardFreq->setValueNotifyingHost(subGuardFreqFloat->convertTo0to1(100.0f));
+        globalMix->setValueNotifyingHost(0.7f);
+
+        juce::MidiBuffer midi;
+        auto warmupBuffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+        processor.processBlock(warmupBuffer, midi);
+
+        auto measuredBuffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+        rt_guard::resetAllocationCounter();
+        processor.processBlock(measuredBuffer, midi);
+
+        expectEquals(rt_guard::getAllocationCount(), 0,
+                     "Prepared-size processBlock should not allocate from scratch-buffer resizing");
+    }
+#else
+    beginTest("RT guard disabled in this build");
+    expect(true, "DISTORTION_RT_GUARD not defined; skipping.");
+#endif
+}
+
+void RTCleanPreHighPassTest::runTest()
+{
+#if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD
+    beginTest("No allocation during 100-block high-pass sweep");
+    {
+        PluginProcessor processor;
+        processor.prepareToPlay(48000.0, 512);
+
+        auto* distortionAmount = processor.parameters.getParameter("distortionAmount");
+        auto* subGuardFreq = processor.parameters.getParameter("subGuardFreq");
+        auto* highPassFreq = processor.parameters.getParameter("highPassFreq");
+        auto* highPassFreqFloat = dynamic_cast<juce::AudioParameterFloat*>(highPassFreq);
+
+        expect(distortionAmount != nullptr, "distortionAmount parameter not found");
+        expect(subGuardFreq != nullptr, "subGuardFreq parameter not found");
+        expect(highPassFreq != nullptr, "highPassFreq parameter not found");
+        expect(highPassFreqFloat != nullptr, "highPassFreq parameter type mismatch");
+
+        if (distortionAmount == nullptr || subGuardFreq == nullptr || highPassFreq == nullptr || highPassFreqFloat == nullptr)
+            return;
+
+        distortionAmount->setValueNotifyingHost(0.5f);
+        subGuardFreq->setValueNotifyingHost(0.0f);
+        highPassFreq->setValueNotifyingHost(highPassFreqFloat->convertTo0to1(20.0f));
+
+        juce::MidiBuffer midi;
+        auto warmupBuffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+        processor.processBlock(warmupBuffer, midi);
+
+        rt_guard::resetAllocationCounter();
+
+        for (int i = 0; i < 100; ++i)
+        {
+            const float cutoffHz = 20.0f + (480.0f * static_cast<float>(i) / 99.0f);
+            highPassFreq->setValueNotifyingHost(highPassFreqFloat->convertTo0to1(cutoffHz));
+
+            auto buffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+            processor.processBlock(buffer, midi);
+        }
+
+        expectEquals(rt_guard::getAllocationCount(), 0,
+                     "High-pass coefficient updates should not allocate on the audio thread");
+    }
+#else
+    beginTest("RT guard disabled in this build");
+    expect(true, "DISTORTION_RT_GUARD not defined; skipping.");
+#endif
+}
+
+void RTCleanSubGuardTest::runTest()
+{
+#if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD
+    beginTest("No allocation during 200-block Sub Guard sweep");
+    {
+        PluginProcessor processor;
+        processor.prepareToPlay(48000.0, 512);
+
+        setParameter(processor.parameters, "distortionAmount", 50.0f);
+        setParameter(processor.parameters, "highPassFreq", 20.0f);
+        setParameter(processor.parameters, "globalMix", 100.0f);
+        setParameter(processor.parameters, "subGuardFreq", 0.0f);
+
+        juce::MidiBuffer midi;
+        auto warmupBuffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+        processor.processBlock(warmupBuffer, midi);
+
+        rt_guard::resetAllocationCounter();
+
+        for (int i = 0; i < 200; ++i)
+        {
+            const float sweepHz = 200.0f * static_cast<float>(i) / 199.0f;
+            setParameter(processor.parameters, "subGuardFreq", sweepHz);
+
+            auto buffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+            processor.processBlock(buffer, midi);
+        }
+
+        expectEquals(rt_guard::getAllocationCount(), 0,
+                     "Sub Guard coefficient updates should not allocate on the audio thread");
+    }
+#else
+    beginTest("RT guard disabled in this build");
+    expect(true, "DISTORTION_RT_GUARD not defined; skipping.");
+#endif
+}
+
+void RTCleanOversamplingTest::runTest()
+{
+#if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD
+    beginTest("No allocation in processBlock while oversampling rebuild is deferred");
+    {
+        PluginProcessor processor;
+        processor.prepareToPlay(48000.0, 512);
+
+        setParameter(processor.parameters, "distortionAmount", 50.0f);
+        setParameter(processor.parameters, "subGuardFreq", 0.0f);
+        setParameter(processor.parameters, "highPassFreq", 20.0f);
+
+        juce::MidiBuffer midi;
+        auto warmupBuffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+        processor.processBlock(warmupBuffer, midi);
+
+        processor.requestOversamplingRebuild(1);
+
+        auto pendingBuffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+        rt_guard::resetAllocationCounter();
+        processor.processBlock(pendingBuffer, midi);
+        expectEquals(rt_guard::getAllocationCount(), 0,
+                     "processBlock should not allocate while oversampling rebuild is pending");
+
+        processor.handleAsyncUpdate();
+
+        auto rebuiltBuffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+        rt_guard::resetAllocationCounter();
+        processor.processBlock(rebuiltBuffer, midi);
+        expectEquals(rt_guard::getAllocationCount(), 0,
+                     "processBlock should not allocate after deferred oversampling rebuild");
+        expect(!containsInvalidSamples(rebuiltBuffer),
+               "Output must remain valid after deferred oversampling rebuild");
+    }
+#else
+    beginTest("RT guard disabled in this build");
+    expect(true, "DISTORTION_RT_GUARD not defined; skipping.");
+#endif
+}
+
+void RTCleanToneSweepTest::runTest()
+{
+#if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD
+    beginTest("No allocation during 100-block tone frequency sweep (PR-10)");
+    {
+        PluginProcessor processor;
+        processor.prepareToPlay(48000.0, 512);
+
+        auto* distortionAmount = processor.parameters.getParameter("distortionAmount");
+        auto* subGuardFreq = processor.parameters.getParameter("subGuardFreq");
+        auto* subGuardFreqFloat = dynamic_cast<juce::AudioParameterFloat*>(subGuardFreq);
+        auto* tone = processor.parameters.getParameter("tone");
+        auto* toneFloat = dynamic_cast<juce::AudioParameterFloat*>(tone);
+
+        expect(distortionAmount != nullptr, "distortionAmount parameter not found");
+        expect(subGuardFreqFloat != nullptr, "subGuardFreq parameter not found / type mismatch");
+        expect(toneFloat != nullptr, "tone parameter not found / type mismatch");
+        if (distortionAmount == nullptr || subGuardFreqFloat == nullptr || toneFloat == nullptr)
+            return;
+
+        // Distortion ON so the tone filter is actually in the signal path.
+        // Sub Guard OFF for this sweep (sub guard ON tested separately below).
+        distortionAmount->setValueNotifyingHost(0.5f);
+        subGuardFreq->setValueNotifyingHost(subGuardFreqFloat->convertTo0to1(0.0f));
+        tone->setValueNotifyingHost(toneFloat->convertTo0to1(20000.0f));
+
+        juce::MidiBuffer midi;
+        auto warmupBuffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+        processor.processBlock(warmupBuffer, midi);
+
+        rt_guard::resetAllocationCounter();
+
+        for (int i = 0; i < 100; ++i)
+        {
+            // Sweep from 2 kHz to 20 kHz (full parameter range)
+            const float toneHz = 2000.0f + (18000.0f * static_cast<float>(i) / 99.0f);
+            tone->setValueNotifyingHost(toneFloat->convertTo0to1(toneHz));
+
+            auto buffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+            processor.processBlock(buffer, midi);
+        }
+
+        expectEquals(rt_guard::getAllocationCount(), 0,
+                     "Tone filter coefficient updates should not allocate on the audio thread");
+    }
+
+    beginTest("Tone filter coefficient update actually affects audio output (correctness)");
+    {
+        // Regression test: changing the tone parameter must audibly change the tone filter
+        // output. The in-place write through .state aliases the object held by each
+        // per-channel Filter.coefficients, so updates take effect on the next process().
+        PluginProcessor processor;
+        processor.prepareToPlay(48000.0, 512);
+
+        auto* distortionAmount = processor.parameters.getParameter("distortionAmount");
+        auto* subGuardFreq = processor.parameters.getParameter("subGuardFreq");
+        auto* subGuardFreqFloat = dynamic_cast<juce::AudioParameterFloat*>(subGuardFreq);
+        auto* tone = processor.parameters.getParameter("tone");
+        auto* toneFloat = dynamic_cast<juce::AudioParameterFloat*>(tone);
+
+        if (distortionAmount == nullptr || subGuardFreqFloat == nullptr || toneFloat == nullptr)
+            return;
+
+        // Distortion ON so tone filter is active. Sub Guard OFF to isolate tone filter only.
+        distortionAmount->setValueNotifyingHost(0.5f);
+        subGuardFreq->setValueNotifyingHost(subGuardFreqFloat->convertTo0to1(0.0f));
+
+        juce::MidiBuffer midi;
+        const int blocksToSettle = 16;  // enough for any parameter smoothing
+
+        // Measure output at tone = 20kHz (effectively bypassed) with 8 kHz input
+        tone->setValueNotifyingHost(toneFloat->convertTo0to1(20000.0f));
+        for (int b = 0; b < blocksToSettle; ++b)
+        {
+            auto warm = generateSineWave(8000.0, 48000.0, 512, 0.3f);
+            processor.processBlock(warm, midi);
+        }
+        auto measureOpen = generateSineWave(8000.0, 48000.0, 512, 0.3f);
+        processor.processBlock(measureOpen, midi);
+        float peakOpen = 0.0f;
+        for (int i = 256; i < 512; ++i)
+            peakOpen = std::max(peakOpen, std::abs(measureOpen.getSample(0, i)));
+
+        // Now change tone to 2kHz — 8kHz input should be heavily attenuated
+        tone->setValueNotifyingHost(toneFloat->convertTo0to1(2000.0f));
+        for (int b = 0; b < blocksToSettle; ++b)
+        {
+            auto warm = generateSineWave(8000.0, 48000.0, 512, 0.3f);
+            processor.processBlock(warm, midi);
+        }
+        auto measureClosed = generateSineWave(8000.0, 48000.0, 512, 0.3f);
+        processor.processBlock(measureClosed, midi);
+        float peakClosed = 0.0f;
+        for (int i = 256; i < 512; ++i)
+            peakClosed = std::max(peakClosed, std::abs(measureClosed.getSample(0, i)));
+
+        // 8kHz through a 2kHz LP (2nd-order) is attenuated by ~24 dB vs open tone.
+        // Require at least 6 dB difference (factor of 2) — weaker criterion, avoids
+        // false positives from limiter / auto-gain compensation.
+        expect(peakClosed < peakOpen * 0.6f,
+               "Closing tone filter to 2kHz must attenuate 8kHz input more than open @ 20kHz "
+               "(peakOpen=" + juce::String(peakOpen) + " peakClosed=" + juce::String(peakClosed) + ")");
+    }
+
+    beginTest("No allocation during tone sweep with Sub Guard engaged (toneFilterLow path)");
+    {
+        PluginProcessor processor;
+        processor.prepareToPlay(48000.0, 512);
+
+        auto* distortionAmount = processor.parameters.getParameter("distortionAmount");
+        auto* subGuardFreq = processor.parameters.getParameter("subGuardFreq");
+        auto* subGuardFreqFloat = dynamic_cast<juce::AudioParameterFloat*>(subGuardFreq);
+        auto* tone = processor.parameters.getParameter("tone");
+        auto* toneFloat = dynamic_cast<juce::AudioParameterFloat*>(tone);
+
+        if (distortionAmount == nullptr || subGuardFreqFloat == nullptr || toneFloat == nullptr)
+            return;
+
+        distortionAmount->setValueNotifyingHost(0.5f);
+        subGuardFreq->setValueNotifyingHost(subGuardFreqFloat->convertTo0to1(100.0f));
+        tone->setValueNotifyingHost(toneFloat->convertTo0to1(20000.0f));
+
+        juce::MidiBuffer midi;
+        auto warmupBuffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+        processor.processBlock(warmupBuffer, midi);
+
+        rt_guard::resetAllocationCounter();
+
+        for (int i = 0; i < 100; ++i)
+        {
+            const float toneHz = 2000.0f + (18000.0f * static_cast<float>(i) / 99.0f);
+            tone->setValueNotifyingHost(toneFloat->convertTo0to1(toneHz));
+
+            auto buffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+            processor.processBlock(buffer, midi);
+        }
+
+        expectEquals(rt_guard::getAllocationCount(), 0,
+                     "Tone filter (including low mirror) must not allocate on the audio thread");
+    }
+#else
+    beginTest("RT guard disabled in this build");
+    expect(true, "DISTORTION_RT_GUARD not defined; skipping.");
+#endif
+}
+
+void RTCleanSampleRateDriftTest::runTest()
+{
+#if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD
+    beginTest("No allocation when SR drift branch fires inside processBlock (PR-12)");
+    {
+        PluginProcessor processor;
+        processor.prepareToPlay(48000.0, 512);
+
+        setParameter(processor.parameters, "distortionAmount", 50.0f);
+        setParameter(processor.parameters, "subGuardFreq", 0.0f);
+
+        juce::MidiBuffer midi;
+        auto warmupBuffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+        processor.processBlock(warmupBuffer, midi);
+
+        // Force a sample-rate drift WITHOUT calling prepareToPlay, so the SR-drift
+        // branch inside processBlock runs. Use the same block size the processor was
+        // prepared for (512); only the sample rate changes.
+        processor.setRateAndBufferSizeDetails(44100.0, 512);
+
+        rt_guard::resetAllocationCounter();
+
+        auto driftBuffer = generateSineWave(1000.0, 44100.0, 512, 0.25f);
+        processor.processBlock(driftBuffer, midi);
+
+        expectEquals(rt_guard::getAllocationCount(), 0,
+                     "Sample-rate drift branch must not allocate on the audio thread");
+
+        // Subsequent blocks at the new rate: still zero allocations.
+        rt_guard::resetAllocationCounter();
+        for (int i = 0; i < 4; ++i)
+        {
+            auto b = generateSineWave(1000.0, 44100.0, 512, 0.25f);
+            processor.processBlock(b, midi);
+        }
+        expectEquals(rt_guard::getAllocationCount(), 0,
+                     "Post-drift blocks at the new sample rate must not allocate");
+    }
+#else
+    beginTest("RT guard disabled in this build");
+    expect(true, "DISTORTION_RT_GUARD not defined; skipping.");
+#endif
+}
+
+// PR-14 regression tests: prove that changing subGuardFreq / highPassFreq
+// actually affects the audio output (i.e. coefficient updates reach every
+// per-channel Filter). Before PR-14 these would have failed because the
+// standby-swap pattern left Filter.coefficients pointing at stale objects.
+void CoefficientPropagationTest::runTest()
+{
+    beginTest("Sub Guard: filter coefficients actually update when freq changes");
+    {
+        // Direct verification: write changes through .state must mutate the
+        // Coefficients object the per-channel Filter is bound to. Inspect raw
+        // coefficients on lowPassFilter1 (LR24 mode @ 60 Hz) and confirm they
+        // differ from the same filter rewritten for a different frequency.
+        // Bypass the parameter smoother (via friend access) so the coefficient
+        // update fires on the first block at the new target frequency.
+        PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(48000.0, 512);
+        processor.prepareToPlay(48000.0, 512);
+
+        auto* subGuardFreq = processor.parameters.getParameter("subGuardFreq");
+        auto* subGuardFreqFloat = dynamic_cast<juce::AudioParameterFloat*>(subGuardFreq);
+        if (subGuardFreqFloat == nullptr) return;
+
+        setParameter(processor.parameters, "distortionAmount", 50.0f);
+        setParameter(processor.parameters, "highPassFreq", 20.0f);
+
+        juce::MidiBuffer midi;
+
+        auto snapshotLP1 = [&](float hz) {
+            subGuardFreq->setValueNotifyingHost(subGuardFreqFloat->convertTo0to1(hz));
+            // Snap the smoother directly to the target so the next processBlock
+            // sees currentSubGuardFreq = hz and triggers updateSubGuardCoefficients.
+            processor.smoothedSubGuardFreq.setCurrentAndTargetValue(hz);
+            // Single processBlock to fire the coefficient update path.
+            auto warm = generateSineWave(1000.0, 48000.0, 512, 0.1f);
+            processor.processBlock(warm, midi);
+            auto* coeffs = processor.lowPassFilter1.state->getRawCoefficients();
+            return std::array<float, 5>{ coeffs[0], coeffs[1], coeffs[2], coeffs[3], coeffs[4] };
+        };
+
+        const auto c60  = snapshotLP1(60.0f);
+        const auto c150 = snapshotLP1(150.0f);
+
+        float maxDiff = 0.0f;
+        for (int i = 0; i < 5; ++i)
+            maxDiff = std::max(maxDiff, std::abs(c60[i] - c150[i]));
+
+        logMessage(juce::String::formatted(
+            "LP1 @60: [%.7f %.7f %.7f %.5f %.5f]", c60[0], c60[1], c60[2], c60[3], c60[4]));
+        logMessage(juce::String::formatted(
+            "LP1 @150:[%.7f %.7f %.7f %.5f %.5f] maxDiff=%.5f",
+            c150[0], c150[1], c150[2], c150[3], c150[4], maxDiff));
+
+        // The denormalised feedback coefficient (a2) carries the most precision
+        // at low fc/SR ratios; require at least a 0.001 difference between
+        // freq=60 and freq=150 to prove the in-place write actually landed.
+        expect(maxDiff > 1e-3f,
+               "Sub Guard LP1 coefficients did not change between SG=60 and SG=150 "
+               "(maxDiff=" + juce::String(maxDiff) + ")");
+    }
+
+    beginTest("Pre-HP filter: 100Hz sine attenuated more at HP=400Hz than at HP=20Hz");
+    {
+        PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(48000.0, 512);
+        processor.prepareToPlay(48000.0, 512);
+
+        auto* highPassFreq = processor.parameters.getParameter("highPassFreq");
+        auto* highPassFreqFloat = dynamic_cast<juce::AudioParameterFloat*>(highPassFreq);
+        if (highPassFreqFloat == nullptr) return;
+
+        // Distortion OFF + comp ON (with peak reduction 0 = no compression, just
+        // a transparent routing trick to exit true-bypass) so the signal passes
+        // through the full chain including the pre-HP filter, but no stage is
+        // actually compressing or distorting. Auto-gain off so it can't hide the
+        // HP attenuation.
+        setParameter(processor.parameters, "distortionAmount", 0.0f);
+        setParameter(processor.parameters, "subGuardFreq", 0.0f);
+        setParameter(processor.parameters, "globalMix", 100.0f);
+        setParameter(processor.parameters, "autoGainEnabled", 0.0f);
+        setParameter(processor.parameters, "inputGain", 50.0f);    // unity
+        setParameter(processor.parameters, "outputGain", 50.0f);   // unity
+        setParameter(processor.parameters, "compEnabled", 1.0f);
+        setParameter(processor.parameters, "compPeakReduction", 0.0f);
+        setParameter(processor.parameters, "compMakeupGain", 50.0f);
+
+        juce::MidiBuffer midi;
+
+        // Use a tiny amplitude so the output limiter and soft clipper don't
+        // compress or normalize the output away from the pre-HP's linear effect.
+        constexpr float amp = 0.05f;
+        auto settleAndMeasure = [&](float hz) {
+            highPassFreq->setValueNotifyingHost(highPassFreqFloat->convertTo0to1(hz));
+            for (int b = 0; b < 64; ++b) {
+                auto warm = generateSineWave(100.0, 48000.0, 512, amp);
+                processor.processBlock(warm, midi);
+            }
+            auto m = generateSineWave(100.0, 48000.0, 512, amp);
+            processor.processBlock(m, midi);
+            float peak = 0.0f;
+            for (int i = 256; i < 512; ++i)
+                peak = std::max(peak, std::abs(m.getSample(0, i)));
+            logMessage("HP=" + juce::String(hz) + "Hz @ 100Hz, amp=" + juce::String(amp) + ", peak=" + juce::String(peak));
+            return peak;
+        };
+
+        const float peakOpen   = settleAndMeasure(20.0f);
+        const float peakClosed = settleAndMeasure(400.0f);
+
+        // First-order HP at 400Hz attenuates 100Hz by ~12 dB (~0.25x). With the
+        // full chain running (comp enabled), peakClosed should be materially
+        // smaller than peakOpen.
+        expect(peakClosed < peakOpen * 0.8f,
+               "Pre-HP at 400Hz should attenuate 100Hz more than at 20Hz: "
+               "peakOpen=" + juce::String(peakOpen)
+               + " peakClosed=" + juce::String(peakClosed));
+    }
+}
 
 #endif // JUCE_DEBUG

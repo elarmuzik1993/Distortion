@@ -145,9 +145,11 @@ class HarmonicDensityTests;
 class OutputLimiterTests;
 class NormalizationTests;
 class StatefulDistortionTests;
+class DryWetAlignmentTests;
 #endif
 
-class PluginProcessor : public juce::AudioProcessor
+class PluginProcessor : public juce::AudioProcessor,
+                        private juce::AsyncUpdater
 {
 #if JUCE_DEBUG
     // Grant test classes access to private members for unit testing
@@ -164,6 +166,9 @@ class PluginProcessor : public juce::AudioProcessor
     friend class OutputLimiterTests;
     friend class NormalizationTests;
     friend class StatefulDistortionTests;
+    friend class DryWetAlignmentTests;
+    friend class RTCleanOversamplingTest;
+    friend class CoefficientPropagationTest;
 #endif
 
 public:
@@ -214,6 +219,7 @@ public:
         float peakReduction,
         float makeupGain,
         int ratioMode);
+    void requestOversamplingRebuild(int stages);
 
     // Atomic gain reduction for UI meter (in dB) - public for UI access
     std::atomic<float> currentGainReductionDB{ 0.0f };
@@ -224,6 +230,7 @@ public:
     std::atomic<bool> debugHadNaN{false};
     std::atomic<bool> debugHadBufferOverflow{false};
     std::atomic<bool> debugHadDistortionCorruption{false};
+    std::atomic<bool> debugHadUnexpectedSampleRateChange{false};
 
     // Sub Guard filter order enum (public for method signatures)
     enum class SubGuardFilterOrder { LR12, LR18, LR24 };
@@ -245,7 +252,8 @@ private:
     float manualDCBlockerPrevInput[2] = { 0.0f, 0.0f };
     float manualDCBlockerPrevOutput[2] = { 0.0f, 0.0f };
 
-    // Sub Guard LR24 filters (4th order = 2 cascaded 2nd-order stages)
+    // Sub Guard LR24 filters (4th order = 2 cascaded 2nd-order stages).
+    // Coefficient updates mutate .state in place (see updateSubGuardCoefficients).
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> lowPassFilter1;
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
@@ -280,18 +288,23 @@ private:
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> toneFilter;
 
+    // Phase-matching mirror of toneFilter applied to the Sub Guard low branch
+    // before recombine, so both bands share the same magnitude/phase response.
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> toneFilterLow;
+
     juce::AudioBuffer<float> lowBandBuffer;   // For clean low frequencies
     juce::AudioBuffer<float> highBandBuffer;  // For distorted high frequencies
     juce::AudioBuffer<float> dryBuffer;       // For global wet/dry mix
 
-    juce::SmoothedValue<float> smoothedOutputGain;  // Only output gain uses SmoothedValue (normal rate)
-    juce::SmoothedValue<float> bypassRamp;  // Bypass crossfade to prevent clicks (10ms)
-    bool wasBypassed = true;  // Track bypass state for crossfade detection
+    // Fractional dry-path delay to compensate for oversampler latency before the
+    // global wet/dry mix. Without this, the dry sums against a delayed wet signal
+    // and produces comb filtering. State holds the tail of the previous block's
+    // dry samples for negative-index reads during interpolation.
+    float dryDelaySamples = 0.0f;
+    juce::AudioBuffer<float> dryDelayState;
 
-    // Smoothed parameters for automation (prevent zipper noise)
-    juce::SmoothedValue<float> smoothedLfoDepth;
-    juce::SmoothedValue<float> smoothedDistMix;
-    juce::SmoothedValue<float> smoothedToneParam;
+    juce::SmoothedValue<float> smoothedOutputGain;  // Only output gain uses SmoothedValue (normal rate)
     juce::SmoothedValue<float> smoothedGlobalMix;
 
     // Thread safety for state persistence
@@ -300,11 +313,11 @@ private:
 public:
     // Oversampling runtime control (set by editor, read by audio thread)
     std::atomic<int> requestedOversamplingStages{2};     // 0=Off, 1=2x, 2=4x
-    std::atomic<bool> oversamplingNeedsRecreate{false};  // Trigger flag
 
 private:
     int currentOversamplingStages = 2;  // Track current stages for comparison
-    void reinitializeOversampling();    // Called from audio thread when oversampling changes
+    void rebuildOversampling(double sampleRate, int samplesPerBlock);
+    void handleAsyncUpdate() override;
 
     std::atomic<float>* inputGainParam = nullptr;
     std::atomic<float>* outputGainParam = nullptr;
@@ -334,14 +347,11 @@ private:
 
     // Compressor state variables (LA-2A optical cell simulation)
     // Optical cell envelope follower (T4 cell)
-    float compEnvelopeState = 0.0f;
+    float compEnvelopeState = 1.0f;
 
 
     // RMS detection for program-dependent behavior
     float compRmsHistory = 0.0f;
-
-    // Smoothed gain reduction for visual/smooth compression
-    juce::SmoothedValue<float> smoothedGainReduction;
 
     // Tube harmonic state
     float tubeWarmth = 0.0f;

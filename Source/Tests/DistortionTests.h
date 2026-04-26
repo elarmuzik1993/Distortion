@@ -126,6 +126,20 @@ private:
     void testOutputGain();
 };
 
+/** Tests for dry/wet alignment across the oversampling boundary */
+class DryWetAlignmentTests : public juce::UnitTest
+{
+public:
+    DryWetAlignmentTests() : UnitTest("Dry/Wet Alignment", TestCategories::ProcessBlock) {}
+    void runTest() override;
+
+private:
+    void testDryOnlyLatency();
+    void testNoCombFiltering();
+    void testFullyWetPathUnaffected();
+    void testOversamplingReinit();
+};
+
 /** Tests for all parameters - ranges and smoothing */
 class ParameterTests : public juce::UnitTest
 {
@@ -169,6 +183,64 @@ private:
     void testAtomicGainReduction();
     void testMultiInstanceIndependence();
     void testPerInstanceRandomGenerators();
+};
+
+/** Tests for the debug RT-allocation guard (PR-0 instrumentation). */
+class RTAllocationGuardTest : public juce::UnitTest
+{
+public:
+    RTAllocationGuardTest() : UnitTest("RT Allocation Guard", TestCategories::ThreadSafety) {}
+    void runTest() override;
+};
+
+class RTBufferPreallocTest : public juce::UnitTest
+{
+public:
+    RTBufferPreallocTest() : UnitTest("RT Buffer Preallocation", TestCategories::ThreadSafety) {}
+    void runTest() override;
+};
+
+class RTCleanPreHighPassTest : public juce::UnitTest
+{
+public:
+    RTCleanPreHighPassTest() : UnitTest("RT Clean Pre HighPass", TestCategories::ThreadSafety) {}
+    void runTest() override;
+};
+
+class RTCleanSubGuardTest : public juce::UnitTest
+{
+public:
+    RTCleanSubGuardTest() : UnitTest("RT Clean Sub Guard", TestCategories::ThreadSafety) {}
+    void runTest() override;
+};
+
+class RTCleanOversamplingTest : public juce::UnitTest
+{
+public:
+    RTCleanOversamplingTest() : UnitTest("RT Clean Oversampling", TestCategories::ThreadSafety) {}
+    void runTest() override;
+};
+
+class RTCleanToneSweepTest : public juce::UnitTest
+{
+public:
+    RTCleanToneSweepTest() : UnitTest("RT Clean Tone Sweep", TestCategories::ThreadSafety) {}
+    void runTest() override;
+};
+
+class RTCleanSampleRateDriftTest : public juce::UnitTest
+{
+public:
+    RTCleanSampleRateDriftTest() : UnitTest("RT Clean Sample Rate Drift", TestCategories::ThreadSafety) {}
+    void runTest() override;
+};
+
+// PR-14: verify coefficient updates actually reach the per-channel Filter.
+class CoefficientPropagationTest : public juce::UnitTest
+{
+public:
+    CoefficientPropagationTest() : UnitTest("Coefficient Propagation", TestCategories::DSP) {}
+    void runTest() override;
 };
 
 /** Tests for state save/load */
@@ -334,6 +406,7 @@ inline void registerAllTests()
     static MinimalProcessorTest minimalProcessorTest;
 
     // Working tests
+    static DryWetAlignmentTests dryWetAlignmentTests;
     static DistortionDSPTests distortionDSPTests;
     static CompressionDSPTests compressionDSPTests;
     static PreCompressionTests preCompressionTests;
@@ -345,6 +418,14 @@ inline void registerAllTests()
     static ParameterTests parameterTests;
     static SampleRateTests sampleRateTests;
     static ThreadSafetyTests threadSafetyTests;
+    static RTAllocationGuardTest rtAllocationGuardTest;
+    static RTBufferPreallocTest rtBufferPreallocTest;
+    static RTCleanPreHighPassTest rtCleanPreHighPassTest;
+    static RTCleanSubGuardTest rtCleanSubGuardTest;
+    static RTCleanOversamplingTest rtCleanOversamplingTest;
+    static RTCleanToneSweepTest rtCleanToneSweepTest;
+    static RTCleanSampleRateDriftTest rtCleanSampleRateDriftTest;
+    static CoefficientPropagationTest coefficientPropagationTest;
     static StateIOTests stateIOTests;
     static GoldenAudioTests goldenAudioTests;
     static NormalizationTests normalizationTests;

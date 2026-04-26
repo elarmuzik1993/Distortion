@@ -202,7 +202,8 @@ private:
 
     void drawChannelWithGlow(juce::Graphics& g, int channel, juce::Colour colour)
     {
-        const int numSamples = cachedBuffer.getNumSamples() - triggerOffset;
+        const int numSamples = juce::jmin(DSPConstants::SCOPE_DISPLAY_POINTS,
+                                           cachedBuffer.getNumSamples() - triggerOffset);
         if (numSamples < 2 || channel >= cachedBuffer.getNumChannels()) return;
 
         auto readSample = [&](int idx) {
@@ -214,7 +215,8 @@ private:
 
     void drawMonoWithGlow(juce::Graphics& g, juce::Colour colour)
     {
-        const int numSamples = cachedBuffer.getNumSamples() - triggerOffset;
+        const int numSamples = juce::jmin(DSPConstants::SCOPE_DISPLAY_POINTS,
+                                           cachedBuffer.getNumSamples() - triggerOffset);
         const int numChannels = cachedBuffer.getNumChannels();
         if (numSamples < 2 || numChannels < 1) return;
 
@@ -677,8 +679,7 @@ public:
         oversamplingCombo.onChange = [this]() {
             int mode = oversamplingCombo.getSelectedId() - 1; // 0=Off, 1=2x, 2=4x
             settingsState.oversamplingMode = mode;
-            processor.requestedOversamplingStages.store(mode);
-            processor.oversamplingNeedsRecreate.store(true);
+            processor.requestOversamplingRebuild(mode);
         };
 
         // Auto Gain toggle

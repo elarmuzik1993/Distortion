@@ -311,7 +311,8 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 
             if (presetName == "Default" || presetName == "Warm Tube" ||
                 presetName == "Hard Clip" || presetName == "Soft Saturation" ||
-                presetName == "808 Safe")
+                presetName == "808 Safe" || presetName == "Parallel Grit" ||
+                presetName == "Vocal Warmth" || presetName == "EXTREME")
             {
                 loadFactoryPreset(presetName);
             }
@@ -474,8 +475,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     // Load UI settings
     loadSettings();
     // Sync oversampling setting to processor (in case it was saved as non-default)
-    audioProcessor.requestedOversamplingStages.store(settingsState.oversamplingMode);
-    audioProcessor.oversamplingNeedsRecreate.store(true);
+    audioProcessor.requestOversamplingRebuild(settingsState.oversamplingMode);
     applyOscilloscopeEnabled(settingsState.oscilloscopeEnabled);
     oscilloscope.setStereoMode(settingsState.oscilloscopeStereo);
     oscilloscope.setScopeLength(settingsState.scopeLength);
@@ -1066,8 +1066,8 @@ juce::File PluginEditor::getPresetDirectory()
 {
     // Get user's AppData folder
     auto presetDir = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-        .getChildFile("ElarMusicAudio")
-        .getChildFile("Distortion")
+        .getChildFile("MonolitBeats")
+        .getChildFile("Monolit Distortion")
         .getChildFile("Presets");
 
     // Create directory if it doesn't exist
@@ -1163,6 +1163,9 @@ void PluginEditor::refreshPresetList()
     presetSelector.addItem("Hard Clip", id++);
     presetSelector.addItem("Soft Saturation", id++);
     presetSelector.addItem("808 Safe", id++);
+    presetSelector.addItem("Parallel Grit", id++);
+    presetSelector.addItem("Vocal Warmth", id++);
+    presetSelector.addItem("EXTREME", id++);
     presetSelector.addSeparator();
 
     // Add user presets
@@ -1205,90 +1208,110 @@ void PluginEditor::loadFactoryPreset(const juce::String& presetName)
         }
     };
 
+    // Reset every parameter to a neutral baseline so factory presets load deterministically.
+    setParam("inputGain", 50.0f);
+    setParam("outputGain", 50.0f);
+    setParam("distortionAmount", 0.0f);
+    setParam("highPassFreq", 20.0f);
+    setParam("subGuardFreq", 60.0f);
+    setParam("clipType", 0.0f);
+    setParam("distMix", 100.0f);
+    setParam("tone", 20000.0f);
+    setParam("waveshaperClean", 0.0f);
+    setParam("waveshaperMix", 0.0f);
+    setParam("lfoRate", 0.0f);
+    setParam("lfoDepth", 0.0f);
+    setParam("lfoWaveform", 0.0f);
+    setParam("lfoEnabled", 0.0f);
+    setParam("lfoDestination", 0.0f);
+    setParam("compPeakReduction", 0.0f);
+    setParam("compMakeupGain", 50.0f);
+    setParam("compRatio", 0.0f);
+    setParam("compEnabled", 0.0f);
+    setParam("autoGainEnabled", 1.0f);
+    setParam("extremeEnabled", 0.0f);
+    setParam("globalMix", 100.0f);
+
     if (presetName == "Default")
     {
-        // Default preset - neutral settings
-        setParam("inputGain", 50.0f);
-        setParam("outputGain", 50.0f);
-        setParam("distortionAmount", 0.0f);
-        setParam("highPassFreq", 20.0f);
-        setParam("subGuardFreq", 60.0f);  // PRESERVE mode (default)
-        setParam("clipType", 0.0f);
-        setParam("distMix", 100.0f);
-        setParam("lfoRate", 0.0f);
-        setParam("lfoDepth", 0.0f);
-        setParam("compPeakReduction", 0.0f);
-        setParam("compMakeupGain", 50.0f);
-        setParam("compRatio", 0.0f);
-        setParam("compEnabled", 0.0f);
+        // Baseline already applied above — nothing to override.
     }
     else if (presetName == "Warm Tube")
     {
-        // Warm tube-like saturation
         setParam("inputGain", 60.0f);
         setParam("outputGain", 45.0f);
         setParam("distortionAmount", 30.0f);
         setParam("highPassFreq", 80.0f);
-        setParam("subGuardFreq", 60.0f);  // PRESERVE mode
-        setParam("clipType", 4.0f);  // Harmonic
+        setParam("clipType", 1.0f);  // Tube Overdrive
         setParam("distMix", 70.0f);
-        setParam("lfoRate", 0.0f);
-        setParam("lfoDepth", 0.0f);
-        setParam("compPeakReduction", 0.0f);
-        setParam("compMakeupGain", 50.0f);
-        setParam("compRatio", 0.0f);
-        setParam("compEnabled", 0.0f);
     }
     else if (presetName == "Hard Clip")
     {
-        // Aggressive hard clipping
         setParam("inputGain", 70.0f);
         setParam("outputGain", 40.0f);
         setParam("distortionAmount", 70.0f);
         setParam("highPassFreq", 100.0f);
-        setParam("subGuardFreq", 150.0f);  // AGGRESSIVE mode (808-safe)
-        setParam("clipType", 6.0f);  // Hard Limit
-        setParam("distMix", 100.0f);
-        setParam("lfoRate", 0.0f);
-        setParam("lfoDepth", 0.0f);
+        setParam("subGuardFreq", 150.0f);
+        setParam("clipType", 0.0f);  // Brutal Fuzz (closest to hard clipping)
         setParam("compPeakReduction", 30.0f);
         setParam("compMakeupGain", 60.0f);
-        setParam("compRatio", 0.0f);
         setParam("compEnabled", 1.0f);
     }
     else if (presetName == "Soft Saturation")
     {
-        // Subtle soft saturation
         setParam("inputGain", 55.0f);
         setParam("outputGain", 48.0f);
         setParam("distortionAmount", 20.0f);
         setParam("highPassFreq", 40.0f);
-        setParam("subGuardFreq", 60.0f);  // PRESERVE mode
-        setParam("clipType", 1.0f);  // Soft Knee
-        setParam("distMix", 50.0f);  // Parallel blend
-        setParam("lfoRate", 0.0f);
-        setParam("lfoDepth", 0.0f);
-        setParam("compPeakReduction", 0.0f);
-        setParam("compMakeupGain", 50.0f);
-        setParam("compRatio", 0.0f);
-        setParam("compEnabled", 0.0f);
+        setParam("clipType", 3.0f);  // Tape Saturation
+        setParam("distMix", 50.0f);
     }
     else if (presetName == "808 Safe")
     {
-        // Clean sub, aggressive highs
         setParam("inputGain", 65.0f);
         setParam("outputGain", 45.0f);
         setParam("distortionAmount", 60.0f);
         setParam("highPassFreq", 150.0f);
-        setParam("subGuardFreq", 150.0f);  // AGGRESSIVE mode (808-safe)
-        setParam("clipType", 3.0f);  // Multi-Stage
-        setParam("distMix", 100.0f);
-        setParam("lfoRate", 0.0f);
-        setParam("lfoDepth", 0.0f);
-        setParam("compPeakReduction", 0.0f);
-        setParam("compMakeupGain", 50.0f);
-        setParam("compRatio", 0.0f);
-        setParam("compEnabled", 0.0f);
+        setParam("subGuardFreq", 150.0f);
+        setParam("clipType", 3.0f);  // Tape Saturation (sub-friendly)
+    }
+    else if (presetName == "Parallel Grit")
+    {
+        // Heavy distortion blended in parallel via global mix
+        setParam("inputGain", 58.0f);
+        setParam("distortionAmount", 85.0f);
+        setParam("highPassFreq", 60.0f);
+        setParam("clipType", 5.0f);  // Diode Clipper
+        setParam("globalMix", 35.0f);
+        setParam("compPeakReduction", 20.0f);
+        setParam("compEnabled", 1.0f);
+    }
+    else if (presetName == "Vocal Warmth")
+    {
+        // Tube warmth with slow LFO tone sweep
+        setParam("distortionAmount", 25.0f);
+        setParam("highPassFreq", 100.0f);
+        setParam("clipType", 1.0f);       // Tube Overdrive
+        setParam("tone", 6000.0f);
+        setParam("distMix", 60.0f);
+        setParam("lfoEnabled", 1.0f);
+        setParam("lfoDestination", 1.0f); // Tone Filter
+        setParam("lfoRate", 0.3f);
+        setParam("lfoDepth", 30.0f);
+    }
+    else if (presetName == "EXTREME")
+    {
+        // Over-the-top saturation using EXTREME toggle + limiter compression
+        setParam("inputGain", 75.0f);
+        setParam("outputGain", 35.0f);
+        setParam("distortionAmount", 90.0f);
+        setParam("highPassFreq", 120.0f);
+        setParam("subGuardFreq", 100.0f);
+        setParam("clipType", 6.0f);      // Decimator
+        setParam("extremeEnabled", 1.0f);
+        setParam("compPeakReduction", 40.0f);
+        setParam("compRatio", 1.0f);     // Limit mode
+        setParam("compEnabled", 1.0f);
     }
 }
 

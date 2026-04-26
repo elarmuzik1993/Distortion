@@ -8,7 +8,74 @@
 
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "RTAllocationGuard.h"
 #include <memory>
+
+namespace
+{
+void writeFirstOrderHighPassCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
+                                   const double sampleRate,
+                                   const double cutoffHz) noexcept
+{
+    const auto n = std::tan(juce::MathConstants<double>::pi * cutoffHz / sampleRate);
+    const auto invA0 = 1.0 / (n + 1.0);
+    auto* coeffs = dest.getRawCoefficients();
+
+    coeffs[0] = static_cast<float>(invA0);
+    coeffs[1] = static_cast<float>(-invA0);
+    coeffs[2] = static_cast<float>((n - 1.0) * invA0);
+}
+
+void writeFirstOrderLowPassCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
+                                  const double sampleRate,
+                                  const double cutoffHz) noexcept
+{
+    const auto n = std::tan(juce::MathConstants<double>::pi * cutoffHz / sampleRate);
+    const auto invA0 = 1.0 / (n + 1.0);
+    auto* coeffs = dest.getRawCoefficients();
+
+    coeffs[0] = static_cast<float>(n * invA0);
+    coeffs[1] = static_cast<float>(n * invA0);
+    coeffs[2] = static_cast<float>((n - 1.0) * invA0);
+}
+
+void writeSecondOrderLowPassCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
+                                   const double sampleRate,
+                                   const double cutoffHz,
+                                   const double q) noexcept
+{
+    const auto n = 1.0 / std::tan(juce::MathConstants<double>::pi * cutoffHz / sampleRate);
+    const auto nSquared = n * n;
+    const auto invQ = 1.0 / q;
+    const auto c1 = 1.0 / (1.0 + invQ * n + nSquared);
+    auto* coeffs = dest.getRawCoefficients();
+
+    coeffs[0] = static_cast<float>(c1);
+    coeffs[1] = static_cast<float>(c1 * 2.0);
+    coeffs[2] = static_cast<float>(c1);
+    coeffs[3] = static_cast<float>(c1 * 2.0 * (1.0 - nSquared));
+    coeffs[4] = static_cast<float>(c1 * (1.0 - invQ * n + nSquared));
+}
+
+void writeSecondOrderHighPassCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
+                                    const double sampleRate,
+                                    const double cutoffHz,
+                                    const double q) noexcept
+{
+    const auto n = std::tan(juce::MathConstants<double>::pi * cutoffHz / sampleRate);
+    const auto nSquared = n * n;
+    const auto invQ = 1.0 / q;
+    const auto c1 = 1.0 / (1.0 + invQ * n + nSquared);
+    auto* coeffs = dest.getRawCoefficients();
+
+    coeffs[0] = static_cast<float>(c1);
+    coeffs[1] = static_cast<float>(c1 * -2.0);
+    coeffs[2] = static_cast<float>(c1);
+    coeffs[3] = static_cast<float>(c1 * 2.0 * (nSquared - 1.0));
+    coeffs[4] = static_cast<float>(c1 * (1.0 - invQ * n + nSquared));
+}
+
+}
 
 // Include test header in debug builds (tests run from separate test runner)
 #if JUCE_DEBUG
@@ -64,18 +131,8 @@ PluginProcessor::PluginProcessor()
     const double defaultSampleRate = 44100.0;
     smoothedOutputGain.reset(defaultSampleRate, DSPConstants::GAIN_SMOOTH_TIME_S);
     smoothedOutputGain.setCurrentAndTargetValue(1.0f);
-    bypassRamp.reset(defaultSampleRate, 0.01);
-    bypassRamp.setCurrentAndTargetValue(0.0f);
-    smoothedLfoDepth.reset(defaultSampleRate, 0.02);
-    smoothedLfoDepth.setCurrentAndTargetValue(0.0f);
-    smoothedDistMix.reset(defaultSampleRate, 0.02);
-    smoothedDistMix.setCurrentAndTargetValue(1.0f);
-    smoothedToneParam.reset(defaultSampleRate, 0.02);
-    smoothedToneParam.setCurrentAndTargetValue(20000.0f);
     smoothedGlobalMix.reset(defaultSampleRate, 0.02);
     smoothedGlobalMix.setCurrentAndTargetValue(1.0f);
-    smoothedGainReduction.reset(defaultSampleRate, DSPConstants::COMP_GR_SMOOTH_TIME_S);
-    smoothedGainReduction.setCurrentAndTargetValue(1.0f);
     smoothedSubGuardFreq.reset(defaultSampleRate, DSPConstants::SUBGUARD_FREQ_SMOOTH_TIME_S);
     smoothedSubGuardFreq.setCurrentAndTargetValue(DSPConstants::SUBGUARD_FREQ_DEFAULT);
 }
@@ -160,8 +217,8 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
 
         y = x * drive * 1.6f;
 
-        // Bit crushing
-        y = std::floor(y * maxValue) / maxValue;
+        // Bit crushing (truncate-toward-zero to avoid the DC offset that std::floor introduces)
+        y = (float)(int)(y * maxValue) / maxValue;
 
         // Add aliasing character
         y = std::tanh(y * 2.5f);
@@ -221,7 +278,7 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
         const float fundamental = y;
         const float harmonic2 = (0.25f * harmonicScale) * fundamental * fundamental * (fundamental > 0.0f ? 1.0f : -1.0f);
         const float harmonic3 = (0.15f * harmonicScale) * fundamental * fundamental * fundamental;
-        const float harmonic5 = (0.08f * harmonicScale) * std::pow(std::abs(fundamental), 5.0f) * (fundamental > 0.0f ? 1.0f : -1.0f);
+        const float harmonic5 = (0.08f * harmonicScale) * fundamental * fundamental * fundamental * fundamental * fundamental;
 
         y = fundamental + harmonic2 + harmonic3 + harmonic5;
 
@@ -483,24 +540,14 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     smoothedOutputGain.reset(sampleRate, DSPConstants::GAIN_SMOOTH_TIME_S);
     smoothedOutputGain.setCurrentAndTargetValue(1.0f);  // Initialize to unity gain
 
-    // Bypass crossfade (10ms to prevent clicks)
-    bypassRamp.reset(sampleRate, 0.01);
-    bypassRamp.setCurrentAndTargetValue(0.0f);  // Start in bypass
-    wasBypassed = true;
-
-    // Smoothed parameters for automation (20ms smoothing)
-    smoothedLfoDepth.reset(sampleRate, 0.02);
-    smoothedLfoDepth.setCurrentAndTargetValue(lfoDepthParam ? lfoDepthParam->load() : 0.0f);
-    smoothedDistMix.reset(sampleRate, 0.02);
-    smoothedDistMix.setCurrentAndTargetValue(distMixParam ? distMixParam->load() / 100.0f : 1.0f);
-    smoothedToneParam.reset(sampleRate, 0.02);
-    smoothedToneParam.setCurrentAndTargetValue(toneParam ? toneParam->load() : 20000.0f);
+    // Global mix smoothing (for wet/dry crossfade during automation)
     smoothedGlobalMix.reset(sampleRate, 0.02);
     smoothedGlobalMix.setCurrentAndTargetValue(globalMixParam ? globalMixParam->load() / 100.0f : 1.0f);
 
-    compEnvelopeState = 0.0f;
+    compEnvelopeState = 1.0f;
     compRmsHistory = 0.0f;
     tubeWarmth = 0.0f;
+    outputLimiterEnvelope = 1.0f;
 
     // Reset manual DC blocker state
     for (int ch = 0; ch < 2; ++ch)
@@ -519,44 +566,19 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // Update all sample-rate-dependent coefficients (DC blocking, compression, etc.)
     updateSampleRateDependentCoefficients(sampleRate);
 
-    // Initialize smoothed gain reduction with slow release (LA-2A style)
-    smoothedGainReduction.reset(sampleRate, DSPConstants::COMP_GR_SMOOTH_TIME_S);
-    smoothedGainReduction.setCurrentAndTargetValue(1.0f);  // Start at unity (no reduction)
-
-
     scopeBuffer.setSize(2, DSPConstants::SCOPE_BUFFER_SIZE);
     scopeBuffer.clear();
     scopeFifo.setTotalSize(DSPConstants::SCOPE_BUFFER_SIZE);
 
-
-
-    // Oversampling — use requestedOversamplingStages atomic (0=Off, 1=2x, 2=4x)
-    const int stages = requestedOversamplingStages.load();
-    currentOversamplingStages = stages;
-
-    if (stages == 0) {
-        // No oversampling — null out the object, factor = 1
-        oversampling.reset();
-        oversamplingFactor = 1;
-    } else {
-        if (!oversampling || currentNumChannels != numChannels
-            || static_cast<int>(oversampling->getOversamplingFactor()) != (1 << stages)) {
-            oversampling = std::make_unique<juce::dsp::Oversampling<float>>(
-                numChannels, stages,
-                juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR,
-                false, false
-            );
-        }
-        oversampling->initProcessing(static_cast<size_t>(samplesPerBlock));
-        oversamplingFactor = oversampling->getOversamplingFactor();
-    }
-    currentNumChannels = numChannels;
+    rebuildOversampling(sampleRate, samplesPerBlock);
 
     // Prepare DSP filters with oversampled sample rate & block size
     juce::dsp::ProcessSpec spec;
     spec.sampleRate = sampleRate * oversamplingFactor;
     spec.maximumBlockSize = static_cast<juce::uint32>(samplesPerBlock * oversamplingFactor);
     spec.numChannels = static_cast<juce::uint32>(numChannels);
+
+    const int worstCaseOversampledBlockSize = (samplesPerBlock * oversamplingFactor) + 64;
 
     // CRITICAL: For JUCE IIR ProcessorDuplicator filters, the order MUST be:
     // 1. prepare() - creates the internal state
@@ -585,6 +607,11 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     *toneFilter.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, initialToneFreq);
     toneFilter.reset();
     lastToneFreq = initialToneFreq;
+
+    // Phase-match mirror of the tone LP for the Sub Guard low branch (same coeffs, own state)
+    toneFilterLow.prepare(spec);
+    *toneFilterLow.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, initialToneFreq);
+    toneFilterLow.reset();
 
     // Sub Guard variable-slope crossover filters (oversampled domain)
     const float sgFreq = subGuardFreqParam ? subGuardFreqParam->load() : DSPConstants::SUBGUARD_FREQ_DEFAULT;
@@ -690,18 +717,23 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // 1. Internal filter latency compensation
     // 2. Sample rate (44.1kHz vs 48kHz have different characteristics)
     // 3. Block size alignment requirements
-    // SOLUTION: Allocate 2x the expected size to handle all edge cases safely
-    const size_t expectedOversampledSize = static_cast<size_t>(samplesPerBlock) * oversamplingFactor;
     const size_t oversamplingLatencySamples = oversampling
         ? static_cast<size_t>(oversampling->getLatencyInSamples()) : 0;
 
     // Report latency to host for proper delay compensation
     setLatencySamples(static_cast<int>(oversamplingLatencySamples));
 
-    // Use 2x multiplier + latency + 128 sample safety margin for absolute safety
-    const int oversampledBlockSize = static_cast<int>((expectedOversampledSize + oversamplingLatencySamples) * 2 + 128);
-    lowBandBuffer.setSize(numChannels, oversampledBlockSize, false, false, true);
-    highBandBuffer.setSize(numChannels, oversampledBlockSize, false, false, true);
+    // Capture fractional latency for internal dry-path alignment (compensates the
+    // global wet/dry mix; host compensation above remains integer-only).
+    dryDelaySamples = oversampling ? oversampling->getLatencyInSamples() : 0.0f;
+    if (! std::isfinite(dryDelaySamples) || dryDelaySamples < 0.0f)
+        dryDelaySamples = 0.0f;
+    const int dryStateLen = static_cast<int>(std::ceil(dryDelaySamples)) + 2;
+    dryDelayState.setSize(numChannels, dryStateLen, false, false, true);
+    dryDelayState.clear();
+
+    lowBandBuffer.setSize(numChannels, worstCaseOversampledBlockSize, false, false, true);
+    highBandBuffer.setSize(numChannels, worstCaseOversampledBlockSize, false, false, true);
     dryBuffer.setSize(numChannels, samplesPerBlock + 64, false, false, true);
 }
 
@@ -709,9 +741,11 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 
 void PluginProcessor::releaseResources()
 {
+    cancelPendingUpdate();
     oversampling.reset();
     preHighPassFilter.reset();
     toneFilter.reset();
+    toneFilterLow.reset();
 
     // Reset manual DC blocker state
     for (int ch = 0; ch < 2; ++ch)
@@ -883,31 +917,57 @@ void PluginProcessor::applyLA2ACompression(juce::AudioBuffer<float>& buffer,
     currentGainReductionDB.store(maxGainReductionDB, std::memory_order_relaxed);
 }
 
-void PluginProcessor::reinitializeOversampling()
+void PluginProcessor::requestOversamplingRebuild(int stages)
 {
-    const int stages = requestedOversamplingStages.load();
-    if (stages == currentOversamplingStages)
+    requestedOversamplingStages.store(stages, std::memory_order_release);
+    triggerAsyncUpdate();
+}
+
+void PluginProcessor::handleAsyncUpdate()
+{
+    const double sampleRate = getSampleRate();
+    const int samplesPerBlock = getBlockSize();
+    if (sampleRate <= 0.0 || samplesPerBlock <= 0)
         return;
 
-    currentOversamplingStages = stages;
-    const int numChannels = std::max(1, getTotalNumInputChannels());
-    const double sr = getSampleRate();
-    const int currentBlockSize = getBlockSize();
+    const juce::ScopedLock callbackLockGuard(getCallbackLock());
+    rebuildOversampling(sampleRate, samplesPerBlock);
+}
 
-    if (stages == 0)
+void PluginProcessor::rebuildOversampling(double sampleRate, int samplesPerBlock)
+{
+    const int stages = requestedOversamplingStages.load(std::memory_order_acquire);
+    const int numChannels = std::max(1, getTotalNumInputChannels());
+    const double sr = sampleRate;
+    const int currentBlockSize = samplesPerBlock;
+    const bool needsRebuild = stages != currentOversamplingStages
+        || currentNumChannels != numChannels
+        || (stages > 0 && !oversampling);
+
+    if (needsRebuild)
     {
-        oversampling.reset();
-        oversamplingFactor = 1;
+        currentOversamplingStages = stages;
+
+        if (stages == 0)
+        {
+            oversampling.reset();
+            oversamplingFactor = 1;
+        }
+        else
+        {
+            oversampling = std::make_unique<juce::dsp::Oversampling<float>>(
+                numChannels, stages,
+                juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR,
+                false, false
+            );
+            oversampling->initProcessing(static_cast<size_t>(currentBlockSize));
+            oversamplingFactor = oversampling->getOversamplingFactor();
+        }
     }
-    else
+    else if (oversampling)
     {
-        oversampling = std::make_unique<juce::dsp::Oversampling<float>>(
-            numChannels, stages,
-            juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR,
-            false, false
-        );
+        oversampling->reset();
         oversampling->initProcessing(static_cast<size_t>(currentBlockSize));
-        oversamplingFactor = oversampling->getOversamplingFactor();
     }
     currentNumChannels = numChannels;
 
@@ -938,6 +998,10 @@ void PluginProcessor::reinitializeOversampling()
     *toneFilter.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, toneFreq);
     toneFilter.reset();
     lastToneFreq = toneFreq;
+
+    toneFilterLow.prepare(spec);
+    *toneFilterLow.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, toneFreq);
+    toneFilterLow.reset();
 
     // Re-prepare sub guard filters
     const float sgFreq = subGuardFreqParam ? subGuardFreqParam->load() : DSPConstants::SUBGUARD_FREQ_DEFAULT;
@@ -988,12 +1052,21 @@ void PluginProcessor::reinitializeOversampling()
     // Report updated latency
     setLatencySamples(static_cast<int>(latSamples));
 
+    // Refresh fractional dry-delay state for the new oversampling factor
+    dryDelaySamples = oversampling ? oversampling->getLatencyInSamples() : 0.0f;
+    if (! std::isfinite(dryDelaySamples) || dryDelaySamples < 0.0f)
+        dryDelaySamples = 0.0f;
+    const int dryStateLen = static_cast<int>(std::ceil(dryDelaySamples)) + 2;
+    dryDelayState.setSize(numChannels, dryStateLen, false, false, true);
+    dryDelayState.clear();
+
     // Reset all DSP state
     resetDSPState();
 }
 
 void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
+    RT_ASSERT_SCOPE();
     juce::ignoreUnused(midiMessages);
 
     // CRITICAL: Enable flush-to-zero and denormals-are-zero to prevent denormal issues at 44.1kHz
@@ -1010,18 +1083,22 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         resetDSPState();
     }
 
-    // Runtime oversampling reconfiguration (triggered by settings overlay)
-    if (oversamplingNeedsRecreate.exchange(false, std::memory_order_acquire))
-    {
-        reinitializeOversampling();
-    }
-
     // CRITICAL: Detect sample rate changes and update coefficients
-    // Some DAWs can change sample rate without calling prepareToPlay
-    // This ensures all sample-rate-dependent processing works correctly at any rate (44.1, 48, 88.2, 96, 192 kHz)
+    // Belt-and-suspenders catch for non-compliant hosts that change sample rate without
+    // calling prepareToPlay. Standard DAWs (Reaper, Ableton, FL, Bitwig, Cubase, Pro Tools)
+    // always call prepareToPlay on SR change, so in normal operation this branch is
+    // skipped. Everything below must stay allocation-free for RT safety:
+    //   - updateSampleRateDependentCoefficients: only std::exp, no allocation.
+    //   - SmoothedValue::reset(double, double) is noexcept and allocation-free in JUCE 7.
+    // The branch does NOT rebuild the oversampler or re-prepare filters; that is deferred
+    // to a proper prepareToPlay or handleAsyncUpdate on the message thread. Block-size
+    // changes without prepareToPlay are NOT supported: the dryBuffer jassert below will
+    // fire in debug, and release builds have undefined behaviour if the block grows beyond
+    // the last prepared size. No supported DAW exhibits that pattern.
     const double currentSR = getSampleRate();
     if (currentSR > 0 && std::abs(currentSR - lastSampleRate) > 0.1)
     {
+        debugHadUnexpectedSampleRateChange.store(true, std::memory_order_relaxed);
         currentSampleRate = static_cast<float>(currentSR);
 
         // Update time-constant coefficients (DC blocking, compression envelope)
@@ -1031,26 +1108,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         auto tempOutputGain = smoothedOutputGain.getCurrentValue();
         smoothedOutputGain.reset(currentSR, DSPConstants::GAIN_SMOOTH_TIME_S);
         smoothedOutputGain.setCurrentAndTargetValue(tempOutputGain);
-
-        auto tempGainReduction = smoothedGainReduction.getCurrentValue();
-        smoothedGainReduction.reset(currentSR, DSPConstants::COMP_GR_SMOOTH_TIME_S);
-        smoothedGainReduction.setCurrentAndTargetValue(tempGainReduction);
-
-        auto tempBypassRamp = bypassRamp.getCurrentValue();
-        bypassRamp.reset(currentSR, 0.01);
-        bypassRamp.setCurrentAndTargetValue(tempBypassRamp);
-
-        auto tempLfoDepth = smoothedLfoDepth.getCurrentValue();
-        smoothedLfoDepth.reset(currentSR, 0.02);
-        smoothedLfoDepth.setCurrentAndTargetValue(tempLfoDepth);
-
-        auto tempDistMix = smoothedDistMix.getCurrentValue();
-        smoothedDistMix.reset(currentSR, 0.02);
-        smoothedDistMix.setCurrentAndTargetValue(tempDistMix);
-
-        auto tempToneParam = smoothedToneParam.getCurrentValue();
-        smoothedToneParam.reset(currentSR, 0.02);
-        smoothedToneParam.setCurrentAndTargetValue(tempToneParam);
 
         auto tempGlobalMix = smoothedGlobalMix.getCurrentValue();
         smoothedGlobalMix.reset(currentSR, 0.02);
@@ -1098,7 +1155,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     if (std::isnan(globalMix)) globalMix = 100.0f;
 
     // Set targets for smoothed parameters (prevent zipper noise from automation)
-    smoothedLfoDepth.setTargetValue(lfoDepth);
     smoothedGlobalMix.setTargetValue(globalMix / 100.0f);
 
     // LFO modulation for dynamic distortion effects
@@ -1170,9 +1226,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         }
     }
 
-    // Update dist mix smoothed value (for state tracking, not consumed per-sample)
-    smoothedDistMix.setTargetValue(distMix / 100.0f);
-
     // Calculate distortion drive from modulated parameter
     float distortionDrive = 1.0f + (modulatedDistortionParam / 100.0f) * 3.0f;
 
@@ -1193,37 +1246,24 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
     // ========== SAVE DRY BUFFER FOR GLOBAL MIX ==========
     const float globalMixAmount = smoothedGlobalMix.getCurrentValue();
-    const bool needsGlobalMix = globalMixAmount < 0.999f;
+    // Capture dry buffer if mix is not 100% wet OR if it is currently transitioning (to avoid a one-block glitch)
+    const bool needsGlobalMix = globalMixAmount < 0.999f || smoothedGlobalMix.isSmoothing();
     if (needsGlobalMix)
     {
-        if (dryBuffer.getNumSamples() < buffer.getNumSamples())
-            dryBuffer.setSize(buffer.getNumChannels(), buffer.getNumSamples() + 64, false, false, true);
+        jassert(dryBuffer.getNumSamples() >= buffer.getNumSamples());
         for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
             dryBuffer.copyFrom(ch, 0, buffer, ch, 0, buffer.getNumSamples());
     }
 
-    // Bypass state detection with crossfade (prevent clicks)
+    // Bypass state detection
     const bool bypassed = (modulatedDistortionParam < 0.5f && !compEnabled);
-    if (bypassed && !wasBypassed)
-    {
-        // Entering bypass - fade out wet signal
-        bypassRamp.setTargetValue(0.0f);
-    }
-    else if (!bypassed && wasBypassed)
-    {
-        // Exiting bypass - fade in wet signal
-        bypassRamp.setTargetValue(1.0f);
-    }
-    wasBypassed = bypassed;
 
-    // TRUE BYPASS MODE: Skip processing but consume ramp for state tracking
+    // TRUE BYPASS MODE: Pass through with output gain only
     if (bypassed)
     {
-        // Apply output gain and consume bypass ramp to keep in sync
         for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
         {
             const float currentOutputGain = smoothedOutputGain.getNextValue();
-            bypassRamp.getNextValue();  // Consume ramp to keep state in sync
             for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
             {
                 // Simple pass-through with output gain
@@ -1331,15 +1371,19 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
     // ========== PRE-HIGHPASS FILTER (BEFORE upsampling for efficiency) ==========
     // Update filter coefficients if frequency changed (at BASE sample rate)
-    // Use modulated frequency for LFO-controlled filter sweeps
+    // Use modulated frequency for LFO-controlled filter sweeps.
+    // In-place write through .state mutates the Coefficients object that every
+    // per-channel IIR::Filter was bound to at prepare() time, so the new values
+    // are visible on the next process() call. See docs/Architecture Contract.md
+    // "RT-safety" for why the standby-swap pattern does not propagate here.
     const double baseSampleRate = getSampleRate();
     if (std::abs(modulatedHighPassFreq - lastHighPassFreq) > 0.5f)  // Only update if changed
     {
         if (baseSampleRate >= 1000.0 && baseSampleRate <= 500000.0 &&
             modulatedHighPassFreq >= 1.0f && modulatedHighPassFreq <= (baseSampleRate / 2.0f) &&
-            preHighPassFilter.state)
+            preHighPassFilter.state != nullptr)
         {
-            *preHighPassFilter.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(baseSampleRate, modulatedHighPassFreq);
+            writeFirstOrderHighPassCoeffs(*preHighPassFilter.state, baseSampleRate, modulatedHighPassFreq);
             lastHighPassFreq = modulatedHighPassFreq;
         }
     }
@@ -1377,13 +1421,9 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     if (actualOversampledSamples > static_cast<size_t>(lowBandBuffer.getNumSamples()))
     {
         debugHadBufferOverflow.store(true, std::memory_order_relaxed);
-
-        // Emergency resize to prevent crash (this should never happen after fix)
-        lowBandBuffer.setSize(buffer.getNumChannels(), static_cast<int>(actualOversampledSamples + 64),
-                              false, false, true);
-        highBandBuffer.setSize(buffer.getNumChannels(), static_cast<int>(actualOversampledSamples + 64),
-                               false, false, true);
     }
+    jassert(actualOversampledSamples <= static_cast<size_t>(lowBandBuffer.getNumSamples()));
+    jassert(actualOversampledSamples <= static_cast<size_t>(highBandBuffer.getNumSamples()));
 
     // Get the actual oversampled sample rate
     const double oversampledSR = getSampleRate() * oversamplingFactor;
@@ -1819,13 +1859,24 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const float toneFreq = modulatedToneFreq;
     const float waveshaperMix = *waveshaperMixParam;
 
-    // Update tone filter coefficients if frequency changed
+    // Update tone filter coefficients if frequency changed (RT-safe in-place write)
     if (std::abs(toneFreq - lastToneFreq) > 1.0f && toneFilter.state != nullptr)
     {
         const double toneSampleRate = currentSampleRate * oversamplingFactor;
         // Clamp frequency to valid range (well below Nyquist)
         const float clampedToneFreq = juce::jlimit(2000.0f, std::min(20000.0f, (float)(toneSampleRate * 0.45)), toneFreq);
-        *toneFilter.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(toneSampleRate, clampedToneFreq);
+        // Butterworth Q matches JUCE's default inverseRootTwo used by makeLowPass(sr, freq).
+        constexpr double butterworthQ = 0.7071067811865476;
+        // In-place write into the Coefficients object. ProcessorDuplicator's per-channel
+        // IIR::Filter holds its own CoefficientsPtr that was initialised from .state in
+        // prepare() and aliases the same object — so writing through .state here updates
+        // the coefficients read by every channel's Filter on the next process() call.
+        // No standby-swap is used for the tone filter: the swap exchanges only .state's
+        // pointer, which the per-channel Filter does not track. Audio thread is the sole
+        // writer and reader, sequenced, so no torn reads are possible.
+        writeSecondOrderLowPassCoeffs(*toneFilter.state, toneSampleRate, clampedToneFreq, butterworthQ);
+        if (toneFilterLow.state != nullptr)
+            writeSecondOrderLowPassCoeffs(*toneFilterLow.state, toneSampleRate, clampedToneFreq, butterworthQ);
         lastToneFreq = toneFreq;
     }
 
@@ -2053,8 +2104,19 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         }
     }
 
+    // ========== SUB GUARD: Phase-match low branch to the high branch's tone filter ==========
+    // Apply an identical tone LP (with its own state) to the clean low band so both
+    // bands share the same magnitude/phase response at the recombine sum. Gated on the
+    // same bypass condition as the high-branch tone filter.
+    if (subGuardActive && toneFreq < 19500.0f && toneFilterLow.state != nullptr)
+    {
+        auto lowBlockTone = juce::dsp::AudioBlock<float>(lowBandBuffer).getSubBlock(0, numSamples);
+        toneFilterLow.process(juce::dsp::ProcessContextReplacing<float>(lowBlockTone));
+    }
+
     // ========== SUB GUARD: Add clean low band back after all nonlinear processing ==========
-    // The clean sub bypasses: auto-gain, tone filter, waveshaper, compressor, and soft clipper
+    // The clean sub bypasses: auto-gain, waveshaper, compressor, and soft clipper
+    // (tone filter is mirrored above for phase coherence at recombine)
     if (subGuardActive)
     {
         for (size_t channel = 0; channel < numChannels; ++channel)
@@ -2210,16 +2272,77 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     }
 
     // ========== GLOBAL MIX (Active path) ==========
+    // Delay the dry path by the oversampler's (fractional) latency so it aligns
+    // with the wet path at the mix point. Without this, non-zero oversampling
+    // latency causes comb filtering at any mix < 100% wet.
     if (needsGlobalMix)
     {
-        for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+        const float delay = dryDelaySamples;
+        const int numSamp = buffer.getNumSamples();
+        const int numCh = buffer.getNumChannels();
+
+        if (delay < 1.0e-4f)
         {
-            const float currentMix = smoothedGlobalMix.getNextValue();
-            for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+            // No oversampling latency — direct mix, no interpolation needed.
+            for (int sample = 0; sample < numSamp; ++sample)
             {
-                auto* channelData = buffer.getWritePointer(channel);
-                const float drySample = dryBuffer.getSample(channel, sample);
-                channelData[sample] = drySample * (1.0f - currentMix) + channelData[sample] * currentMix;
+                const float currentMix = smoothedGlobalMix.getNextValue();
+                for (int channel = 0; channel < numCh; ++channel)
+                {
+                    auto* channelData = buffer.getWritePointer(channel);
+                    const float drySample = dryBuffer.getSample(channel, sample);
+                    channelData[sample] = drySample * (1.0f - currentMix) + channelData[sample] * currentMix;
+                }
+            }
+        }
+        else
+        {
+            const float intPart = std::floor(delay);
+            const float frac = delay - intPart;
+            const int intDelay = static_cast<int>(intPart);
+            const int stateLen = dryDelayState.getNumSamples();
+
+            // Linear interpolation between the integer-delay sample and the one
+            // before it. Negative positions read from dryDelayState (the tail of
+            // the previous block's dry signal).
+            for (int sample = 0; sample < numSamp; ++sample)
+            {
+                const float currentMix = smoothedGlobalMix.getNextValue();
+                const int readBase = sample - intDelay;
+
+                for (int channel = 0; channel < numCh; ++channel)
+                {
+                    auto* channelData = buffer.getWritePointer(channel);
+
+                    auto readDry = [&] (int pos) -> float
+                    {
+                        if (pos >= 0)
+                            return dryBuffer.getSample(channel, pos);
+                        const int statePos = stateLen + pos;
+                        return (statePos >= 0) ? dryDelayState.getSample(channel, statePos) : 0.0f;
+                    };
+
+                    const float s0 = readDry(readBase);
+                    const float sM1 = readDry(readBase - 1);
+                    const float drySample = s0 * (1.0f - frac) + sM1 * frac;
+
+                    channelData[sample] = drySample * (1.0f - currentMix) + channelData[sample] * currentMix;
+                }
+            }
+
+            // Update dry-delay state with the last `stateLen` samples of the dry
+            // signal so the next block can read across the boundary.
+            const int srcStart = numSamp - stateLen;
+            for (int channel = 0; channel < numCh; ++channel)
+            {
+                for (int i = 0; i < stateLen; ++i)
+                {
+                    const int src = srcStart + i;
+                    const float v = (src >= 0)
+                        ? dryBuffer.getSample(channel, src)
+                        : dryDelayState.getSample(channel, stateLen + src);
+                    dryDelayState.setSample(channel, i, v);
+                }
             }
         }
     }
@@ -2280,49 +2403,62 @@ void PluginProcessor::pushSampleToScope(float left, float right)
 }
 void PluginProcessor::fillScopeBuffer(juce::AudioBuffer<float>& destBuffer)
 {
-    const int numSamples = destBuffer.getNumSamples();
-    const int availableSamples = scopeFifo.getNumReady();
+    // Sliding-window scope: destBuffer is a persistent rolling buffer owned
+    // by the Oscilloscope. Each frame we shift existing samples left and
+    // append newly-arrived FIFO samples on the right. This guarantees the
+    // buffer always holds a contiguous stream of the most recent audio at
+    // any sample rate / block size / oversampling combo, with no seams or
+    // padding artifacts on the right edge.
 
-    if (availableSamples == 0)
+    const int bufferSize = destBuffer.getNumSamples();
+    const int numChannels = destBuffer.getNumChannels();
+    const int available = scopeFifo.getNumReady();
+
+    if (available <= 0 || bufferSize <= 0)
         return;
 
-    // Drain excess so we always display the most recent audio
-    const int excess = availableSamples - numSamples;
-    if (excess > 0)
+    // Drain any samples beyond what we can display in one frame so the
+    // FIFO doesn't lag behind real time.
+    if (available > bufferSize)
     {
-        int start1, size1, start2, size2;
-        scopeFifo.prepareToRead(excess, start1, size1, start2, size2);
-        scopeFifo.finishedRead(size1 + size2);
+        const int excess = available - bufferSize;
+        int s1, sz1, s2, sz2;
+        scopeFifo.prepareToRead(excess, s1, sz1, s2, sz2);
+        scopeFifo.finishedRead(sz1 + sz2);
     }
 
-    // Read the latest samples
-    const int samplesToRead = juce::jmin(numSamples, scopeFifo.getNumReady());
-    if (samplesToRead == 0)
+    const int toRead = juce::jmin(bufferSize, scopeFifo.getNumReady());
+    if (toRead <= 0)
         return;
+
+    // Shift existing samples left by `toRead` so new samples land flush
+    // against the right edge.
+    const int keep = bufferSize - toRead;
+    if (keep > 0)
+    {
+        for (int ch = 0; ch < numChannels; ++ch)
+        {
+            float* data = destBuffer.getWritePointer(ch);
+            std::memmove(data, data + toRead, (size_t) keep * sizeof(float));
+        }
+    }
 
     int start1, size1, start2, size2;
-    scopeFifo.prepareToRead(samplesToRead, start1, size1, start2, size2);
+    scopeFifo.prepareToRead(toRead, start1, size1, start2, size2);
 
+    const int writeOffset = keep;
     if (size1 > 0)
     {
-        for (int ch = 0; ch < destBuffer.getNumChannels(); ++ch)
-            destBuffer.copyFrom(ch, 0, scopeBuffer, ch, start1, size1);
+        for (int ch = 0; ch < numChannels; ++ch)
+            destBuffer.copyFrom(ch, writeOffset, scopeBuffer, ch, start1, size1);
     }
-
     if (size2 > 0)
     {
-        for (int ch = 0; ch < destBuffer.getNumChannels(); ++ch)
-            destBuffer.copyFrom(ch, size1, scopeBuffer, ch, start2, size2);
+        for (int ch = 0; ch < numChannels; ++ch)
+            destBuffer.copyFrom(ch, writeOffset + size1, scopeBuffer, ch, start2, size2);
     }
 
-    if (samplesToRead < numSamples)
-    {
-        const int remaining = numSamples - samplesToRead;
-        for (int ch = 0; ch < destBuffer.getNumChannels(); ++ch)
-            destBuffer.clear(ch, samplesToRead, remaining);
-    }
-
-    scopeFifo.finishedRead(samplesToRead);
+    scopeFifo.finishedRead(toRead);
 }
 //==============================================================================
 bool PluginProcessor::hasEditor() const
@@ -2387,6 +2523,8 @@ void PluginProcessor::resetDSPState()
         highPassFilter2.reset();
     if (toneFilter.state)
         toneFilter.reset();
+    if (toneFilterLow.state)
+        toneFilterLow.reset();
 
     // Reset envelope states
     preCompEnvelope[0] = 1.0f;
@@ -2397,7 +2535,7 @@ void PluginProcessor::resetDSPState()
     tubeBiasEnvelope[1] = 0.0f;
     tapeSaturationEnvelope[0] = 0.0f;
     tapeSaturationEnvelope[1] = 0.0f;
-    compEnvelopeState = 0.0f;
+    compEnvelopeState = 1.0f;
     compRmsHistory = 0.0f;
     tubeWarmth = 0.0f;
 
@@ -2415,6 +2553,10 @@ void PluginProcessor::resetDSPState()
         manualDCBlockerPrevInput[ch] = 0.0f;
         manualDCBlockerPrevOutput[ch] = 0.0f;
     }
+
+    // Clear fractional dry-delay history to avoid replaying stale samples
+    if (dryDelayState.getNumSamples() > 0)
+        dryDelayState.clear();
 
     // Force filter coefficient update on next processBlock by invalidating cache
     lastHighPassFreq = -1.0f;
@@ -2450,36 +2592,40 @@ PluginProcessor::SubGuardFilterOrder PluginProcessor::determineSubGuardFilterOrd
 
 void PluginProcessor::updateSubGuardCoefficients(float freq, double sampleRate)
 {
-    // Update all filter bank coefficients at the new frequency
-    // Only the active bank will be used in processBlock
+    // RT-safe in-place coefficient update. Every per-channel IIR::Filter was
+    // bound to the Coefficients object pointed to by .state at prepare() time,
+    // so writing through .state here updates what each channel's process()
+    // reads on the next block. No allocation; no standby swap. See
+    // docs/Architecture Contract.md "RT-safety" for the rationale.
+    constexpr double butterworthQ = 0.7071067811865476;
 
     // LR24 filters (2 cascaded 2nd-order stages)
-    if (lowPassFilter1.state)
-        *lowPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(sampleRate, freq);
-    if (lowPassFilter2.state)
-        *lowPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(sampleRate, freq);
-    if (highPassFilter1.state)
-        *highPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(sampleRate, freq);
-    if (highPassFilter2.state)
-        *highPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(sampleRate, freq);
+    if (lowPassFilter1.state != nullptr)
+        writeSecondOrderLowPassCoeffs(*lowPassFilter1.state, sampleRate, freq, butterworthQ);
+    if (lowPassFilter2.state != nullptr)
+        writeSecondOrderLowPassCoeffs(*lowPassFilter2.state, sampleRate, freq, butterworthQ);
+    if (highPassFilter1.state != nullptr)
+        writeSecondOrderHighPassCoeffs(*highPassFilter1.state, sampleRate, freq, butterworthQ);
+    if (highPassFilter2.state != nullptr)
+        writeSecondOrderHighPassCoeffs(*highPassFilter2.state, sampleRate, freq, butterworthQ);
 
     // LR12 filters (single 2nd-order stage with Q=0.5 for true Linkwitz-Riley 2)
     // Default Butterworth Q=0.707 causes +3dB boost at crossover; LR2 Q=0.5 sums flat
     constexpr float lr2Q = 0.5f;
-    if (subGuardLP12.state)
-        *subGuardLP12.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(sampleRate, freq, lr2Q);
-    if (subGuardHP12.state)
-        *subGuardHP12.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(sampleRate, freq, lr2Q);
+    if (subGuardLP12.state != nullptr)
+        writeSecondOrderLowPassCoeffs(*subGuardLP12.state, sampleRate, freq, lr2Q);
+    if (subGuardHP12.state != nullptr)
+        writeSecondOrderHighPassCoeffs(*subGuardHP12.state, sampleRate, freq, lr2Q);
 
     // LR18 filters (1st + 2nd order cascaded, Q=0.5 on 2nd-order stage for flat sum)
-    if (subGuardLP18_1.state)
-        *subGuardLP18_1.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderLowPass(sampleRate, freq);
-    if (subGuardLP18_2.state)
-        *subGuardLP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(sampleRate, freq, lr2Q);
-    if (subGuardHP18_1.state)
-        *subGuardHP18_1.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(sampleRate, freq);
-    if (subGuardHP18_2.state)
-        *subGuardHP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(sampleRate, freq, lr2Q);
+    if (subGuardLP18_1.state != nullptr)
+        writeFirstOrderLowPassCoeffs(*subGuardLP18_1.state, sampleRate, freq);
+    if (subGuardLP18_2.state != nullptr)
+        writeSecondOrderLowPassCoeffs(*subGuardLP18_2.state, sampleRate, freq, lr2Q);
+    if (subGuardHP18_1.state != nullptr)
+        writeFirstOrderHighPassCoeffs(*subGuardHP18_1.state, sampleRate, freq);
+    if (subGuardHP18_2.state != nullptr)
+        writeSecondOrderHighPassCoeffs(*subGuardHP18_2.state, sampleRate, freq, lr2Q);
 }
 
 //Add Parameter Definition Here
@@ -2528,13 +2674,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         juce::ParameterID{ "clipType", 1 },
         "Clip Type",
         juce::StringArray{
-            "Studio Tanh",           // 0: Enhanced Tanh with asymmetric bias
-            "Soft Knee",             // 1: Soft knee with compression
-            "Dynamic Compress",      // 2: Dynamic ratio compression
-            "Multi-Stage",           // 3: Multi-stage hard clipping
-            "Harmonic",              // 4: Tanh with 2nd harmonic boost
-            "Asymmetric",            // 5: Asymmetric clipping
-            "Hard Limit"             // 6: Hard limiting
+            "Brutal Fuzz",            // 0: Aggressive hard clipping with analog noise
+            "Tube Overdrive",         // 1: Asymmetric tube saturation with harmonics
+            "Bit Crusher",            // 2: Digital destruction with sample rate reduction
+            "Tape Saturation",        // 3: Analog tape with hysteresis
+            "Transformer Saturation", // 4: Heavy harmonic distortion
+            "Diode Clipper",          // 5: Asymmetric diode clipping with grit
+            "Decimator"               // 6: Extreme digital destruction
         },
         0));
 
@@ -2542,7 +2688,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "lfoRate", 1 },
         "LFO Rate",
-        juce::NormalisableRange<float>(0.1f, 10.0f, 0.01f, 0.35f),  // 0.1-10Hz, log skew for more control at low rates
+        // Range starts at 0.0 so the default "off" (0.0) is inside the layout. The LFO is
+        // gated by lfoEnabled + lfoRate > 0.0f, so any rate > 0 engages it.
+        juce::NormalisableRange<float>(0.0f, 10.0f, 0.01f, 0.35f),
         0.0f));  // Default 0 = LFO off
 
     params.push_back(std::make_unique<juce::AudioParameterFloat>(

@@ -10,7 +10,7 @@ on:
 
 env:
   BUILD_TYPE: Release
-  PLUGIN_NAME: Distortion
+  PLUGIN_NAME: "Monolit Distortion"
 
 jobs:
   build-windows:
@@ -47,7 +47,6 @@ jobs:
     - name: Run Tests
       run: |
         build/DistortionTests_artefacts/${{ env.BUILD_TYPE }}/DistortionTests.exe
-      continue-on-error: true
 
     - name: Prepare Windows Artifact
       shell: bash
@@ -55,13 +54,13 @@ jobs:
         mkdir -p artifact/Windows
         echo "=== Distortion_artefacts contents ==="
         find build/Distortion_artefacts -type d | head -30
-        cp -r build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Distortion.vst3 artifact/Windows/
+        cp -r "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Monolit Distortion.vst3" artifact/Windows/
 
     - name: Upload Windows VST3
       uses: actions/upload-artifact@v4
       with:
-        name: Distortion-VST3-Windows
-        path: artifact/Windows/Distortion.vst3
+        name: MonolitDistortion-VST3-Windows
+        path: artifact/Windows/Monolit Distortion.vst3
         retention-days: 30
 
   build-linux:
@@ -119,18 +118,17 @@ jobs:
     - name: Run Tests
       run: |
         ./build/DistortionTests_artefacts/${{ env.BUILD_TYPE }}/DistortionTests
-      continue-on-error: true
 
     - name: Prepare Linux Artifact
       run: |
         mkdir -p artifact/Linux
-        cp -r build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Distortion.vst3 artifact/Linux/
+        cp -r "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Monolit Distortion.vst3" artifact/Linux/
 
     - name: Upload Linux VST3
       uses: actions/upload-artifact@v4
       with:
-        name: Distortion-VST3-Linux
-        path: artifact/Linux/Distortion.vst3
+        name: MonolitDistortion-VST3-Linux
+        path: artifact/Linux/Monolit Distortion.vst3
         retention-days: 30
 
   # Create release when a tag is pushed
@@ -143,26 +141,26 @@ jobs:
     - name: Download Windows Artifact
       uses: actions/download-artifact@v4
       with:
-        name: Distortion-VST3-Windows
+        name: MonolitDistortion-VST3-Windows
         path: windows
 
     - name: Download Linux Artifact
       uses: actions/download-artifact@v4
       with:
-        name: Distortion-VST3-Linux
+        name: MonolitDistortion-VST3-Linux
         path: linux
 
     - name: Create ZIP archives
       run: |
-        cd windows && zip -r ../Distortion-VST3-Windows.zip Distortion.vst3
-        cd ../linux && zip -r ../Distortion-VST3-Linux.zip Distortion.vst3
+        cd windows && zip -r "../MonolitDistortion-VST3-Windows.zip" "Monolit Distortion.vst3"
+        cd ../linux && zip -r "../MonolitDistortion-VST3-Linux.zip" "Monolit Distortion.vst3"
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          Distortion-VST3-Windows.zip
-          Distortion-VST3-Linux.zip
+          MonolitDistortion-VST3-Windows.zip
+          MonolitDistortion-VST3-Linux.zip
         generate_release_notes: true
         draft: false
       env:
