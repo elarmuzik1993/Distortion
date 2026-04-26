@@ -2366,8 +2366,21 @@ void StatefulDistortionTests::testTapeHysteresis()
 // on the current thread, and ignores allocations outside any scope. This
 // test does NOT assert that processBlock is allocation-free today - that
 // property is established piecewise by the later RT-1..RT-5 PRs.
+//
+// IMPORTANT: GCC/Clang at -O2+ are permitted by [expr.new] / CWG2511 to
+// elide paired new/delete (heap-allocation DCE) even when operator new is
+// replaced. That elision wipes the test allocations before our override can
+// count them, producing 4 spurious failures on Linux Release CI ("Actual
+// value: 0"). Disabling optimisation on this single function preserves the
+// new/delete calls so the override observes them. Windows / MSVC does not
+// perform this optimisation, so the attribute is GCC/Clang only.
 //==============================================================================
 
+#if defined(__clang__)
+[[clang::optnone]]
+#elif defined(__GNUC__)
+__attribute__((optimize("O0")))
+#endif
 void RTAllocationGuardTest::runTest()
 {
 #if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD
