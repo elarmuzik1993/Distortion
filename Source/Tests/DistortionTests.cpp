@@ -2855,4 +2855,122 @@ void RTCleanSampleRateDriftTest::runTest()
 #endif
 }
 
+// PR-14 regression tests: prove that changing subGuardFreq / highPassFreq
+// actually affects the audio output (i.e. coefficient updates reach every
+// per-channel Filter). Before PR-14 these would have failed because the
+// standby-swap pattern left Filter.coefficients pointing at stale objects.
+void CoefficientPropagationTest::runTest()
+{
+    beginTest("Sub Guard: filter coefficients actually update when freq changes");
+    {
+        // Direct verification: write changes through .state must mutate the
+        // Coefficients object the per-channel Filter is bound to. Inspect raw
+        // coefficients on lowPassFilter1 (LR24 mode @ 60 Hz) and confirm they
+        // differ from the same filter rewritten for a different frequency.
+        // Bypass the parameter smoother (via friend access) so the coefficient
+        // update fires on the first block at the new target frequency.
+        PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(48000.0, 512);
+        processor.prepareToPlay(48000.0, 512);
+
+        auto* subGuardFreq = processor.parameters.getParameter("subGuardFreq");
+        auto* subGuardFreqFloat = dynamic_cast<juce::AudioParameterFloat*>(subGuardFreq);
+        if (subGuardFreqFloat == nullptr) return;
+
+        setParameter(processor.parameters, "distortionAmount", 50.0f);
+        setParameter(processor.parameters, "highPassFreq", 20.0f);
+
+        juce::MidiBuffer midi;
+
+        auto snapshotLP1 = [&](float hz) {
+            subGuardFreq->setValueNotifyingHost(subGuardFreqFloat->convertTo0to1(hz));
+            // Snap the smoother directly to the target so the next processBlock
+            // sees currentSubGuardFreq = hz and triggers updateSubGuardCoefficients.
+            processor.smoothedSubGuardFreq.setCurrentAndTargetValue(hz);
+            // Single processBlock to fire the coefficient update path.
+            auto warm = generateSineWave(1000.0, 48000.0, 512, 0.1f);
+            processor.processBlock(warm, midi);
+            auto* coeffs = processor.lowPassFilter1.state->getRawCoefficients();
+            return std::array<float, 5>{ coeffs[0], coeffs[1], coeffs[2], coeffs[3], coeffs[4] };
+        };
+
+        const auto c60  = snapshotLP1(60.0f);
+        const auto c150 = snapshotLP1(150.0f);
+
+        float maxDiff = 0.0f;
+        for (int i = 0; i < 5; ++i)
+            maxDiff = std::max(maxDiff, std::abs(c60[i] - c150[i]));
+
+        logMessage(juce::String::formatted(
+            "LP1 @60: [%.7f %.7f %.7f %.5f %.5f]", c60[0], c60[1], c60[2], c60[3], c60[4]));
+        logMessage(juce::String::formatted(
+            "LP1 @150:[%.7f %.7f %.7f %.5f %.5f] maxDiff=%.5f",
+            c150[0], c150[1], c150[2], c150[3], c150[4], maxDiff));
+
+        // The denormalised feedback coefficient (a2) carries the most precision
+        // at low fc/SR ratios; require at least a 0.001 difference between
+        // freq=60 and freq=150 to prove the in-place write actually landed.
+        expect(maxDiff > 1e-3f,
+               "Sub Guard LP1 coefficients did not change between SG=60 and SG=150 "
+               "(maxDiff=" + juce::String(maxDiff) + ")");
+    }
+
+    beginTest("Pre-HP filter: 100Hz sine attenuated more at HP=400Hz than at HP=20Hz");
+    {
+        PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(48000.0, 512);
+        processor.prepareToPlay(48000.0, 512);
+
+        auto* highPassFreq = processor.parameters.getParameter("highPassFreq");
+        auto* highPassFreqFloat = dynamic_cast<juce::AudioParameterFloat*>(highPassFreq);
+        if (highPassFreqFloat == nullptr) return;
+
+        // Distortion OFF + comp ON (with peak reduction 0 = no compression, just
+        // a transparent routing trick to exit true-bypass) so the signal passes
+        // through the full chain including the pre-HP filter, but no stage is
+        // actually compressing or distorting. Auto-gain off so it can't hide the
+        // HP attenuation.
+        setParameter(processor.parameters, "distortionAmount", 0.0f);
+        setParameter(processor.parameters, "subGuardFreq", 0.0f);
+        setParameter(processor.parameters, "globalMix", 100.0f);
+        setParameter(processor.parameters, "autoGainEnabled", 0.0f);
+        setParameter(processor.parameters, "inputGain", 50.0f);    // unity
+        setParameter(processor.parameters, "outputGain", 50.0f);   // unity
+        setParameter(processor.parameters, "compEnabled", 1.0f);
+        setParameter(processor.parameters, "compPeakReduction", 0.0f);
+        setParameter(processor.parameters, "compMakeupGain", 50.0f);
+
+        juce::MidiBuffer midi;
+
+        // Use a tiny amplitude so the output limiter and soft clipper don't
+        // compress or normalize the output away from the pre-HP's linear effect.
+        constexpr float amp = 0.05f;
+        auto settleAndMeasure = [&](float hz) {
+            highPassFreq->setValueNotifyingHost(highPassFreqFloat->convertTo0to1(hz));
+            for (int b = 0; b < 64; ++b) {
+                auto warm = generateSineWave(100.0, 48000.0, 512, amp);
+                processor.processBlock(warm, midi);
+            }
+            auto m = generateSineWave(100.0, 48000.0, 512, amp);
+            processor.processBlock(m, midi);
+            float peak = 0.0f;
+            for (int i = 256; i < 512; ++i)
+                peak = std::max(peak, std::abs(m.getSample(0, i)));
+            logMessage("HP=" + juce::String(hz) + "Hz @ 100Hz, amp=" + juce::String(amp) + ", peak=" + juce::String(peak));
+            return peak;
+        };
+
+        const float peakOpen   = settleAndMeasure(20.0f);
+        const float peakClosed = settleAndMeasure(400.0f);
+
+        // First-order HP at 400Hz attenuates 100Hz by ~12 dB (~0.25x). With the
+        // full chain running (comp enabled), peakClosed should be materially
+        // smaller than peakOpen.
+        expect(peakClosed < peakOpen * 0.8f,
+               "Pre-HP at 400Hz should attenuate 100Hz more than at 20Hz: "
+               "peakOpen=" + juce::String(peakOpen)
+               + " peakClosed=" + juce::String(peakClosed));
+    }
+}
+
 #endif // JUCE_DEBUG

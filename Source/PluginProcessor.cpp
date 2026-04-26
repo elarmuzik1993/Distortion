@@ -75,13 +75,6 @@ void writeSecondOrderHighPassCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
     coeffs[4] = static_cast<float>(c1 * (1.0 - invQ * n + nSquared));
 }
 
-void swapActiveWithStandby(juce::dsp::IIR::Coefficients<float>::Ptr& active,
-                           juce::dsp::IIR::Coefficients<float>::Ptr& standby) noexcept
-{
-    auto previousActive = active;
-    active = standby;
-    standby = previousActive;
-}
 }
 
 // Include test header in debug builds (tests run from separate test runner)
@@ -603,7 +596,6 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // CRITICAL: Use first-order filter for numerical stability at low frequencies
     preHighPassFilter.prepare(baseSpec);
     *preHighPassFilter.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(baseSpec.sampleRate, DSPConstants::DEFAULT_HIPASS_FREQ);
-    preHighPassStandby = juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(baseSpec.sampleRate, DSPConstants::DEFAULT_HIPASS_FREQ);
     preHighPassFilter.reset();
 
     // Force filter update on first processBlock (especially important for DAW state restoration)
@@ -629,55 +621,45 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // LR24 filters (4th order = 2 cascaded 2nd-order stages) - PRESERVE mode
     lowPassFilter1.prepare(spec);
     *lowPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq);
-    lowPassFilter1Standby = juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq);
     lowPassFilter1.reset();
 
     lowPassFilter2.prepare(spec);
     *lowPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq);
-    lowPassFilter2Standby = juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq);
     lowPassFilter2.reset();
 
     highPassFilter1.prepare(spec);
     *highPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq);
-    highPassFilter1Standby = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq);
     highPassFilter1.reset();
 
     highPassFilter2.prepare(spec);
     *highPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq);
-    highPassFilter2Standby = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq);
     highPassFilter2.reset();
 
     // LR12 filters (2nd order = single stage, Q=0.5 for true Linkwitz-Riley 2) - AGGRESSIVE mode
     constexpr float lr2Q = 0.5f;
     subGuardLP12.prepare(spec);
     *subGuardLP12.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr2Q);
-    subGuardLP12Standby = juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr2Q);
     subGuardLP12.reset();
 
     subGuardHP12.prepare(spec);
     *subGuardHP12.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
-    subGuardHP12Standby = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
     subGuardHP12.reset();
 
     // LR18 filters (1st + 2nd order = 3rd order approximation, Q=0.5 on 2nd-order) - CONTROL mode
     subGuardLP18_1.prepare(spec);
     *subGuardLP18_1.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderLowPass(spec.sampleRate, filterInitFreq);
-    subGuardLP18_1Standby = juce::dsp::IIR::Coefficients<float>::makeFirstOrderLowPass(spec.sampleRate, filterInitFreq);
     subGuardLP18_1.reset();
 
     subGuardLP18_2.prepare(spec);
     *subGuardLP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr2Q);
-    subGuardLP18_2Standby = juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr2Q);
     subGuardLP18_2.reset();
 
     subGuardHP18_1.prepare(spec);
     *subGuardHP18_1.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(spec.sampleRate, filterInitFreq);
-    subGuardHP18_1Standby = juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(spec.sampleRate, filterInitFreq);
     subGuardHP18_1.reset();
 
     subGuardHP18_2.prepare(spec);
     *subGuardHP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
-    subGuardHP18_2Standby = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
     subGuardHP18_2.reset();
 
     // Initialize Sub Guard smoothing (use actual parameter value, not filterInitFreq)
@@ -1028,43 +1010,33 @@ void PluginProcessor::rebuildOversampling(double sampleRate, int samplesPerBlock
 
     lowPassFilter1.prepare(spec);
     *lowPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq);
-    lowPassFilter1Standby = juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq);
     lowPassFilter1.reset();
     lowPassFilter2.prepare(spec);
     *lowPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq);
-    lowPassFilter2Standby = juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq);
     lowPassFilter2.reset();
     highPassFilter1.prepare(spec);
     *highPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq);
-    highPassFilter1Standby = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq);
     highPassFilter1.reset();
     highPassFilter2.prepare(spec);
     *highPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq);
-    highPassFilter2Standby = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq);
     highPassFilter2.reset();
     subGuardLP12.prepare(spec);
     *subGuardLP12.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr2Q);
-    subGuardLP12Standby = juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr2Q);
     subGuardLP12.reset();
     subGuardHP12.prepare(spec);
     *subGuardHP12.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
-    subGuardHP12Standby = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
     subGuardHP12.reset();
     subGuardLP18_1.prepare(spec);
     *subGuardLP18_1.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderLowPass(spec.sampleRate, filterInitFreq);
-    subGuardLP18_1Standby = juce::dsp::IIR::Coefficients<float>::makeFirstOrderLowPass(spec.sampleRate, filterInitFreq);
     subGuardLP18_1.reset();
     subGuardLP18_2.prepare(spec);
     *subGuardLP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr2Q);
-    subGuardLP18_2Standby = juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr2Q);
     subGuardLP18_2.reset();
     subGuardHP18_1.prepare(spec);
     *subGuardHP18_1.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(spec.sampleRate, filterInitFreq);
-    subGuardHP18_1Standby = juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(spec.sampleRate, filterInitFreq);
     subGuardHP18_1.reset();
     subGuardHP18_2.prepare(spec);
     *subGuardHP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
-    subGuardHP18_2Standby = juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
     subGuardHP18_2.reset();
 
     lastOversampledSampleRate = spec.sampleRate;
@@ -1399,18 +1371,19 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
     // ========== PRE-HIGHPASS FILTER (BEFORE upsampling for efficiency) ==========
     // Update filter coefficients if frequency changed (at BASE sample rate)
-    // Use modulated frequency for LFO-controlled filter sweeps
+    // Use modulated frequency for LFO-controlled filter sweeps.
+    // In-place write through .state mutates the Coefficients object that every
+    // per-channel IIR::Filter was bound to at prepare() time, so the new values
+    // are visible on the next process() call. See docs/Architecture Contract.md
+    // "RT-safety" for why the standby-swap pattern does not propagate here.
     const double baseSampleRate = getSampleRate();
     if (std::abs(modulatedHighPassFreq - lastHighPassFreq) > 0.5f)  // Only update if changed
     {
         if (baseSampleRate >= 1000.0 && baseSampleRate <= 500000.0 &&
             modulatedHighPassFreq >= 1.0f && modulatedHighPassFreq <= (baseSampleRate / 2.0f) &&
-            preHighPassFilter.state && preHighPassStandby != nullptr)
+            preHighPassFilter.state != nullptr)
         {
-            writeFirstOrderHighPassCoeffs(*preHighPassStandby, baseSampleRate, modulatedHighPassFreq);
-            auto previousActive = preHighPassFilter.state;
-            preHighPassFilter.state = preHighPassStandby;
-            preHighPassStandby = previousActive;
+            writeFirstOrderHighPassCoeffs(*preHighPassFilter.state, baseSampleRate, modulatedHighPassFreq);
             lastHighPassFreq = modulatedHighPassFreq;
         }
     }
@@ -2619,67 +2592,40 @@ PluginProcessor::SubGuardFilterOrder PluginProcessor::determineSubGuardFilterOrd
 
 void PluginProcessor::updateSubGuardCoefficients(float freq, double sampleRate)
 {
-    // Update all filter bank coefficients at the new frequency
-    // Only the active bank will be used in processBlock
+    // RT-safe in-place coefficient update. Every per-channel IIR::Filter was
+    // bound to the Coefficients object pointed to by .state at prepare() time,
+    // so writing through .state here updates what each channel's process()
+    // reads on the next block. No allocation; no standby swap. See
+    // docs/Architecture Contract.md "RT-safety" for the rationale.
     constexpr double butterworthQ = 0.7071067811865476;
 
     // LR24 filters (2 cascaded 2nd-order stages)
-    if (lowPassFilter1.state && lowPassFilter1Standby != nullptr)
-    {
-        writeSecondOrderLowPassCoeffs(*lowPassFilter1Standby, sampleRate, freq, butterworthQ);
-        swapActiveWithStandby(lowPassFilter1.state, lowPassFilter1Standby);
-    }
-    if (lowPassFilter2.state && lowPassFilter2Standby != nullptr)
-    {
-        writeSecondOrderLowPassCoeffs(*lowPassFilter2Standby, sampleRate, freq, butterworthQ);
-        swapActiveWithStandby(lowPassFilter2.state, lowPassFilter2Standby);
-    }
-    if (highPassFilter1.state && highPassFilter1Standby != nullptr)
-    {
-        writeSecondOrderHighPassCoeffs(*highPassFilter1Standby, sampleRate, freq, butterworthQ);
-        swapActiveWithStandby(highPassFilter1.state, highPassFilter1Standby);
-    }
-    if (highPassFilter2.state && highPassFilter2Standby != nullptr)
-    {
-        writeSecondOrderHighPassCoeffs(*highPassFilter2Standby, sampleRate, freq, butterworthQ);
-        swapActiveWithStandby(highPassFilter2.state, highPassFilter2Standby);
-    }
+    if (lowPassFilter1.state != nullptr)
+        writeSecondOrderLowPassCoeffs(*lowPassFilter1.state, sampleRate, freq, butterworthQ);
+    if (lowPassFilter2.state != nullptr)
+        writeSecondOrderLowPassCoeffs(*lowPassFilter2.state, sampleRate, freq, butterworthQ);
+    if (highPassFilter1.state != nullptr)
+        writeSecondOrderHighPassCoeffs(*highPassFilter1.state, sampleRate, freq, butterworthQ);
+    if (highPassFilter2.state != nullptr)
+        writeSecondOrderHighPassCoeffs(*highPassFilter2.state, sampleRate, freq, butterworthQ);
 
     // LR12 filters (single 2nd-order stage with Q=0.5 for true Linkwitz-Riley 2)
     // Default Butterworth Q=0.707 causes +3dB boost at crossover; LR2 Q=0.5 sums flat
     constexpr float lr2Q = 0.5f;
-    if (subGuardLP12.state && subGuardLP12Standby != nullptr)
-    {
-        writeSecondOrderLowPassCoeffs(*subGuardLP12Standby, sampleRate, freq, lr2Q);
-        swapActiveWithStandby(subGuardLP12.state, subGuardLP12Standby);
-    }
-    if (subGuardHP12.state && subGuardHP12Standby != nullptr)
-    {
-        writeSecondOrderHighPassCoeffs(*subGuardHP12Standby, sampleRate, freq, lr2Q);
-        swapActiveWithStandby(subGuardHP12.state, subGuardHP12Standby);
-    }
+    if (subGuardLP12.state != nullptr)
+        writeSecondOrderLowPassCoeffs(*subGuardLP12.state, sampleRate, freq, lr2Q);
+    if (subGuardHP12.state != nullptr)
+        writeSecondOrderHighPassCoeffs(*subGuardHP12.state, sampleRate, freq, lr2Q);
 
     // LR18 filters (1st + 2nd order cascaded, Q=0.5 on 2nd-order stage for flat sum)
-    if (subGuardLP18_1.state && subGuardLP18_1Standby != nullptr)
-    {
-        writeFirstOrderLowPassCoeffs(*subGuardLP18_1Standby, sampleRate, freq);
-        swapActiveWithStandby(subGuardLP18_1.state, subGuardLP18_1Standby);
-    }
-    if (subGuardLP18_2.state && subGuardLP18_2Standby != nullptr)
-    {
-        writeSecondOrderLowPassCoeffs(*subGuardLP18_2Standby, sampleRate, freq, lr2Q);
-        swapActiveWithStandby(subGuardLP18_2.state, subGuardLP18_2Standby);
-    }
-    if (subGuardHP18_1.state && subGuardHP18_1Standby != nullptr)
-    {
-        writeFirstOrderHighPassCoeffs(*subGuardHP18_1Standby, sampleRate, freq);
-        swapActiveWithStandby(subGuardHP18_1.state, subGuardHP18_1Standby);
-    }
-    if (subGuardHP18_2.state && subGuardHP18_2Standby != nullptr)
-    {
-        writeSecondOrderHighPassCoeffs(*subGuardHP18_2Standby, sampleRate, freq, lr2Q);
-        swapActiveWithStandby(subGuardHP18_2.state, subGuardHP18_2Standby);
-    }
+    if (subGuardLP18_1.state != nullptr)
+        writeFirstOrderLowPassCoeffs(*subGuardLP18_1.state, sampleRate, freq);
+    if (subGuardLP18_2.state != nullptr)
+        writeSecondOrderLowPassCoeffs(*subGuardLP18_2.state, sampleRate, freq, lr2Q);
+    if (subGuardHP18_1.state != nullptr)
+        writeFirstOrderHighPassCoeffs(*subGuardHP18_1.state, sampleRate, freq);
+    if (subGuardHP18_2.state != nullptr)
+        writeSecondOrderHighPassCoeffs(*subGuardHP18_2.state, sampleRate, freq, lr2Q);
 }
 
 //Add Parameter Definition Here

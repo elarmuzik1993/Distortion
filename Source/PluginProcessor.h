@@ -168,6 +168,7 @@ class PluginProcessor : public juce::AudioProcessor,
     friend class StatefulDistortionTests;
     friend class DryWetAlignmentTests;
     friend class RTCleanOversamplingTest;
+    friend class CoefficientPropagationTest;
 #endif
 
 public:
@@ -245,48 +246,38 @@ private:
 
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
     juce::dsp::IIR::Coefficients<float>> preHighPassFilter;
-    juce::dsp::IIR::Coefficients<float>::Ptr preHighPassStandby;
 
     // Manual DC blocker state (simple one-pole, extremely stable)
     // y[n] = x[n] - x[n-1] + R * y[n-1], where R ≈ 0.9995 for ~3.5Hz cutoff at 44.1kHz
     float manualDCBlockerPrevInput[2] = { 0.0f, 0.0f };
     float manualDCBlockerPrevOutput[2] = { 0.0f, 0.0f };
 
-    // Sub Guard LR24 filters (4th order = 2 cascaded 2nd-order stages)
+    // Sub Guard LR24 filters (4th order = 2 cascaded 2nd-order stages).
+    // Coefficient updates mutate .state in place (see updateSubGuardCoefficients).
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> lowPassFilter1;
-    juce::dsp::IIR::Coefficients<float>::Ptr lowPassFilter1Standby;
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> lowPassFilter2;
-    juce::dsp::IIR::Coefficients<float>::Ptr lowPassFilter2Standby;
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> highPassFilter1;
-    juce::dsp::IIR::Coefficients<float>::Ptr highPassFilter1Standby;
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> highPassFilter2;
-    juce::dsp::IIR::Coefficients<float>::Ptr highPassFilter2Standby;
 
     // Sub Guard LR12 filters (2nd order = single stage)
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> subGuardLP12;
-    juce::dsp::IIR::Coefficients<float>::Ptr subGuardLP12Standby;
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> subGuardHP12;
-    juce::dsp::IIR::Coefficients<float>::Ptr subGuardHP12Standby;
 
     // Sub Guard LR18 filters (1st + 2nd order cascaded = 3rd order approximation)
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> subGuardLP18_1;  // First order
-    juce::dsp::IIR::Coefficients<float>::Ptr subGuardLP18_1Standby;
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> subGuardLP18_2;  // Second order
-    juce::dsp::IIR::Coefficients<float>::Ptr subGuardLP18_2Standby;
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> subGuardHP18_1;  // First order
-    juce::dsp::IIR::Coefficients<float>::Ptr subGuardHP18_1Standby;
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> subGuardHP18_2;  // Second order
-    juce::dsp::IIR::Coefficients<float>::Ptr subGuardHP18_2Standby;
 
     // Sub Guard state tracking
     SubGuardFilterOrder currentSubGuardOrder = SubGuardFilterOrder::LR24;

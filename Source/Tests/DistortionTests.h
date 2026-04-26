@@ -235,6 +235,14 @@ public:
     void runTest() override;
 };
 
+// PR-14: verify coefficient updates actually reach the per-channel Filter.
+class CoefficientPropagationTest : public juce::UnitTest
+{
+public:
+    CoefficientPropagationTest() : UnitTest("Coefficient Propagation", TestCategories::DSP) {}
+    void runTest() override;
+};
+
 /** Tests for state save/load */
 class StateIOTests : public juce::UnitTest
 {
@@ -417,6 +425,7 @@ inline void registerAllTests()
     static RTCleanOversamplingTest rtCleanOversamplingTest;
     static RTCleanToneSweepTest rtCleanToneSweepTest;
     static RTCleanSampleRateDriftTest rtCleanSampleRateDriftTest;
+    static CoefficientPropagationTest coefficientPropagationTest;
     static StateIOTests stateIOTests;
     static GoldenAudioTests goldenAudioTests;
     static NormalizationTests normalizationTests;
