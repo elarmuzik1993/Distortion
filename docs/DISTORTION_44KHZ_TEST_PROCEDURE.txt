@@ -1,3 +1,8 @@
+LEGACY — This procedure was written during an early debugging session that relied on
+juce::Logger::writeToLog() calls inside processBlock(). Those calls were removed in the
+v1.3 RT-Safety Audit (all blocking I/O eliminated from the audio thread). The procedure
+is no longer applicable to the current codebase; it is kept here for historical reference only.
+
 ═══════════════════════════════════════════════════════════════════════════
   DISTORTION PLUGIN - 44.1kHz DEBUG TEST PROCEDURE
 ═══════════════════════════════════════════════════════════════════════════
