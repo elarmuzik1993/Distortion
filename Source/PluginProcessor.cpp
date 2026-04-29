@@ -498,7 +498,7 @@ double PluginProcessor::getTailLengthSeconds() const
 
 int PluginProcessor::getNumPrograms()
 {
-    return 1;   
+    return 1;
 }
 
 int PluginProcessor::getCurrentProgram()
@@ -731,7 +731,6 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     highBandBuffer.setSize(numChannels, worstCaseOversampledBlockSize, false, false, true);
     dryBuffer.setSize(numChannels, samplesPerBlock + 64, false, false, true);
 }
-
 
 
 void PluginProcessor::releaseResources()
@@ -2628,7 +2627,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
-    
+
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "inputGain", 1 },
         "Input Gain",

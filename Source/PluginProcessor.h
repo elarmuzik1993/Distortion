@@ -338,7 +338,7 @@ private:
     // Compressor parameters
     std::atomic<float>* compPeakReductionParam = nullptr;
     std::atomic<float>* compMakeupGainParam = nullptr;
-    std::atomic<float>* compRatioParam = nullptr;  
+    std::atomic<float>* compRatioParam = nullptr;
     std::atomic<float>* compEnabledParam = nullptr;
     std::atomic<float>* autoGainEnabledParam = nullptr;
     std::atomic<float>* extremeEnabledParam = nullptr;

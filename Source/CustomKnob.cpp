@@ -7,7 +7,7 @@
 */
 #include "CustomKnob.h"
 
-// Display for digits 
+// Display for digits
 CustomKnob::CustomKnob()
 {
     setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);

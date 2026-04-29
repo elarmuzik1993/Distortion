@@ -1290,7 +1290,7 @@ public:
     void mouseUp(const juce::MouseEvent& e) override;
 
 private:
-    
+
     PluginProcessor& audioProcessor;
     Oscilloscope oscilloscope;
     XYMorphPad xyMorphPad;  // Invisible XY pad overlay on oscilloscope
@@ -1304,7 +1304,7 @@ private:
     // UI Components
     CustomKnob inputGainSlider, distortionAmountSlider, outputGainSlider, highPassFreqSlider, distMixSlider, toneSlider;
     juce::Label inputGainLabel, distortionAmountLabel, outputGainLabel, highPassFreqLabel, distMixLabel, toneLabel;
-    
+
     CustomKnob lfoRateSlider, lfoDepthSlider;
     juce::Label lfoRateLabel, lfoDepthLabel;
     juce::ComboBox lfoWaveformComboBox;

@@ -507,13 +507,13 @@ PluginEditor::~PluginEditor()
 }
 
 //==============================================================================
-void PluginEditor::setupSlider(CustomKnob& slider,  
+void PluginEditor::setupSlider(CustomKnob& slider,
     juce::Label& label,
     const juce::String& text,
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>& attachment,
     const juce::String& paramID)
 {
-    
+
     // Add mouse wheel and double-click sensitivity
     slider.setMouseDragSensitivity(150);
     slider.setDoubleClickReturnValue(true, 50.0f); // Double-click returns to 50
