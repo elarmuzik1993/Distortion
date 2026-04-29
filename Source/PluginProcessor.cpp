@@ -525,11 +525,6 @@ void PluginProcessor::changeProgramName(int index, const juce::String& newName)
 //==============================================================================
 void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
-    // Log sample rate initialization for diagnostics
-    juce::Logger::writeToLog("=== prepareToPlay called ===");
-    juce::Logger::writeToLog("Sample rate: " + juce::String(sampleRate) + " Hz");
-    juce::Logger::writeToLog("Samples per block: " + juce::String(samplesPerBlock));
-
     // Store sample rate for LFO calculations
     currentSampleRate = static_cast<float>(sampleRate);
     lfoPhase = 0.0f;  // Reset LFO phase
@@ -1824,7 +1819,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     lastDistortionDrive = currentDrive;
     lastDistMix = currentMixAmount;
 
-    // DEBUG: Check for corruption AFTER our processing, BEFORE downsampling
+    // Check for corruption after distortion processing, before downsampling
     bool hasNaN = false;
     bool hasInf = false;
     float maxSample = 0.0f;

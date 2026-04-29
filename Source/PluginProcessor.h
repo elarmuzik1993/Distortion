@@ -8,9 +8,10 @@
 
 #pragma once
 
+#include <memory>
+
 #include <JuceHeader.h>
 #include <juce_dsp/juce_dsp.h>
-#include <memory>
 
 //==============================================================================
 // DSP Constants - Centralized configuration for audio processing algorithms
@@ -146,6 +147,8 @@ class OutputLimiterTests;
 class NormalizationTests;
 class StatefulDistortionTests;
 class DryWetAlignmentTests;
+class RTCleanOversamplingTest;
+class CoefficientPropagationTest;
 #endif
 
 class PluginProcessor : public juce::AudioProcessor,

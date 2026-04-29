@@ -12,7 +12,6 @@
 #include "CustomKnob.h"
 #include "FontHelper.h"
 #include "PluginProcessor.h"
-class PluginProcessor;
 
 //==============================================================================
 /**
