@@ -53,6 +53,7 @@ set(PLUGIN_SOURCES
     Source/PluginEditor.h
     Source/CustomKnob.cpp
     Source/CustomKnob.h
+    Source/LinearRamp.h
 )
 
 # Test sources

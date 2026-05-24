@@ -556,9 +556,10 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // Initialize parameter interpolation state to current parameter values
     const auto inGainParam = inputGainParam ? inputGainParam->load() : 50.0f;
     const auto distParam = distortionAmountParam ? distortionAmountParam->load() : 0.0f;
-    lastInputGain = std::pow(inGainParam / 50.0f, 1.5f);  // Match processBlock calculation
-    lastDistortionDrive = 1.0f + (distParam / 100.0f) * 3.0f;  // Match processBlock calculation (reduced range)
-    lastDistMix = distMixParam ? distMixParam->load() / 100.0f : 1.0f;  // Match processBlock calculation
+    // Seed per-sample ramps to match what processBlock will compute on the first call.
+    inputGainRamp.reset(std::pow(inGainParam / 50.0f, 1.5f));
+    driveRamp.reset(1.0f + (distParam / 100.0f) * 3.0f);
+    distMixRamp.reset(distMixParam ? distMixParam->load() / 100.0f : 1.0f);
 
     // Update all sample-rate-dependent coefficients (DC blocking, compression, etc.)
     updateSampleRateDependentCoefficients(sampleRate);
@@ -1398,12 +1399,12 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         return;
     }
 
-    // CRITICAL FIX: Manual linear interpolation for parameters consumed in oversampled domain
-    // Calculate step size from LAST block's final value to THIS block's target value
-    const float gainDelta = (inputGain - lastInputGain) / static_cast<float>(actualOversampledSamples);
-    const float driveDelta = (distortionDrive - lastDistortionDrive) / static_cast<float>(actualOversampledSamples);
-    const float targetMixAmount = modulatedDistMix / 100.0f;  // 0.0 to 1.0
-    const float mixDelta = (targetMixAmount - lastDistMix) / static_cast<float>(actualOversampledSamples);
+    // Configure per-sample ramps for the oversampled domain. Each ramp interpolates
+    // from the previous block's final value to this block's target across N samples.
+    const float targetMixAmount = modulatedDistMix / 100.0f;
+    inputGainRamp.rampTo(inputGain,       actualOversampledSamples);
+    driveRamp    .rampTo(distortionDrive, actualOversampledSamples);
+    distMixRamp  .rampTo(targetMixAmount, actualOversampledSamples);
 
     if (actualOversampledSamples > static_cast<size_t>(lowBandBuffer.getNumSamples()))
     {
@@ -1416,17 +1417,11 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const double oversampledSR = getSampleRate() * oversamplingFactor;
 
     // Publish oversampled-domain context to block-scope members for stage helpers.
-    // Per-sample interpolated params (currentInputGain/Drive/MixAmount) are mutated
-    // inside applySubGuardSplit; their final values feed lastInputGain/etc. below.
+    // Per-sample interpolated params are owned by inputGainRamp/driveRamp/distMixRamp
+    // and advanced inside applySubGuardSplit; no snapshot needed.
     pb_numSamples       = actualOversampledSamples;
     pb_numChannels      = pb_oversampledBlock.getNumChannels();
     pb_oversampledSR    = oversampledSR;
-    pb_gainDelta        = gainDelta;
-    pb_driveDelta       = driveDelta;
-    pb_mixDelta         = mixDelta;
-    pb_currentInputGain = lastInputGain;
-    pb_currentDrive     = lastDistortionDrive;
-    pb_currentMixAmount = lastDistMix;
 
     // Sub Guard filter coefficients are updated dynamically in the processing block below
     // No need for static sample rate change detection
@@ -1860,8 +1855,8 @@ void PluginProcessor::applyPreCompression()
 }
 
 float PluginProcessor::applyDistortionStage(float inputSample, int channel,
-                                            float sampleDrive, float sampleMixAmount,
-                                            float sampleDistortionParam)
+                                            float currentGain, float sampleDrive,
+                                            float sampleMixAmount, float sampleDistortionParam)
 {
     // Bypass when distortion amount is negligible (< 0.5%)
     if (sampleDistortionParam < 0.5f)
@@ -1880,7 +1875,7 @@ float PluginProcessor::applyDistortionStage(float inputSample, int channel,
     const float harmonicScale = juce::jlimit(DSPConstants::HARMONIC_DENSITY_MIN_SCALE, 1.0f,
                                              1.0f / (1.0f + std::sqrt(clampedEnv)));
 
-    const float distorted = applyStudioDistortion(inputSample, pb_currentInputGain, sampleDrive,
+    const float distorted = applyStudioDistortion(inputSample, currentGain, sampleDrive,
         pb_clipType, pb_extremeEnabled ? 1.0f : harmonicScale, channel);
 
     // Wet/dry mix (per-sample interpolated to prevent zipper noise)
@@ -1899,8 +1894,9 @@ bool PluginProcessor::applySubGuardSplit()
 
         for (size_t sample = 0; sample < pb_numSamples; ++sample)
         {
-            float sampleDrive = pb_currentDrive;
-            float sampleMixAmount = pb_currentMixAmount;
+            const float currentGain = inputGainRamp.advance();
+            float sampleDrive       = driveRamp.advance();
+            float sampleMixAmount   = distMixRamp.advance();
             float sampleDistortionParam = pb_modulatedDistortionParam;
 
             if (pb_perSampleLFO && pb_lfoEnabled && pb_lfoPhaseIncrement > 0.0f)
@@ -1933,12 +1929,9 @@ bool PluginProcessor::applySubGuardSplit()
             {
                 auto* channelData = pb_oversampledBlock.getChannelPointer(channel);
                 channelData[sample] = applyDistortionStage(channelData[sample],
-                    static_cast<int>(channel), sampleDrive, sampleMixAmount, sampleDistortionParam);
+                    static_cast<int>(channel), currentGain, sampleDrive,
+                    sampleMixAmount, sampleDistortionParam);
             }
-
-            pb_currentInputGain += pb_gainDelta;
-            pb_currentDrive     += pb_driveDelta;
-            pb_currentMixAmount += pb_mixDelta;
         }
         return true;
     }
@@ -2006,8 +1999,9 @@ bool PluginProcessor::applySubGuardSplit()
 
     for (size_t sample = 0; sample < pb_numSamples; ++sample)
     {
-        float sampleDrive = pb_currentDrive;
-        float sampleMixAmount = pb_currentMixAmount;
+        const float currentGain = inputGainRamp.advance();
+        float sampleDrive       = driveRamp.advance();
+        float sampleMixAmount   = distMixRamp.advance();
         float sampleDistortionParam = pb_modulatedDistortionParam;
 
         if (pb_perSampleLFO && pb_lfoEnabled && pb_lfoPhaseIncrement > 0.0f)
@@ -2040,12 +2034,9 @@ bool PluginProcessor::applySubGuardSplit()
         {
             auto* highBandData = highBandBuffer.getWritePointer(static_cast<int>(channel));
             highBandData[sample] = applyDistortionStage(highBandData[sample],
-                static_cast<int>(channel), sampleDrive, sampleMixAmount, sampleDistortionParam);
+                static_cast<int>(channel), currentGain, sampleDrive,
+                sampleMixAmount, sampleDistortionParam);
         }
-
-        pb_currentInputGain += pb_gainDelta;
-        pb_currentDrive     += pb_driveDelta;
-        pb_currentMixAmount += pb_mixDelta;
     }
 
     // Recombine: Clean low + Distorted high
@@ -2210,9 +2201,7 @@ void PluginProcessor::applyAutoGainAndISP(juce::AudioBuffer<float>& buffer)
     }
 
     // Store final parameter values for next block's interpolation
-    lastInputGain = pb_currentInputGain;
-    lastDistortionDrive = pb_currentDrive;
-    lastDistMix = pb_currentMixAmount;
+    // (Ramps retain their final values automatically — no manual writeback needed.)
 
     // Check for corruption after distortion processing, before downsampling
     bool hasNaN = false;
