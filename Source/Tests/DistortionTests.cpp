@@ -2359,6 +2359,85 @@ void StatefulDistortionTests::testTapeHysteresis()
 // to ensure tests are registered before they're run
 
 //==============================================================================
+// LinearPhaseDryTest Implementation (PR-6)
+//
+// Verifies:
+//  1. FIR path is RT-clean (zero allocations during processBlock).
+//  2. State round-trip: linearPhaseDry=true survives getState/setState.
+//  3. IIR baseline (toggle OFF) still passes existing behaviour.
+//==============================================================================
+void LinearPhaseDryTest::runTest()
+{
+    // Helper: prepare a processor with a specific linearPhaseDry value and 4x oversampling.
+    auto prepareProcessor = [](PluginProcessor& p, bool linearPhase)
+    {
+        p.setRateAndBufferSizeDetails(48000.0, 512);
+        // Set linearPhaseDry before prepareToPlay so rebuildOversampling picks it up.
+        if (auto* param = p.parameters.getParameter("linearPhaseDry"))
+            param->setValueNotifyingHost(linearPhase ? 1.0f : 0.0f);
+        p.prepareToPlay(48000.0, 512);
+    };
+
+    // ---- Test 1: FIR path is RT-allocation-free --------------------------------
+    beginTest("No allocation in processBlock with FIR oversampling");
+    {
+        PluginProcessor processor;
+        prepareProcessor(processor, true);
+
+        juce::AudioBuffer<float> buffer(2, 512);
+        juce::MidiBuffer midi;
+        buffer.clear();
+
+        // Warm-up block (filter settle, don't count)
+        processor.processBlock(buffer, midi);
+        buffer.clear();
+
+        rt_guard::resetAllocationCounter();
+        processor.processBlock(buffer, midi);
+        expectEquals(rt_guard::getAllocationCount(), 0,
+            "processBlock with FIR oversampling allocated on the audio thread");
+    }
+
+    // ---- Test 2: IIR path is still RT-allocation-free (regression guard) ------
+    beginTest("No allocation in processBlock with IIR oversampling (baseline)");
+    {
+        PluginProcessor processor;
+        prepareProcessor(processor, false);
+
+        juce::AudioBuffer<float> buffer(2, 512);
+        juce::MidiBuffer midi;
+        buffer.clear();
+
+        processor.processBlock(buffer, midi);
+        buffer.clear();
+
+        rt_guard::resetAllocationCounter();
+        processor.processBlock(buffer, midi);
+        expectEquals(rt_guard::getAllocationCount(), 0,
+            "processBlock with IIR oversampling allocated on the audio thread");
+    }
+
+    // ---- Test 3: State round-trip (linearPhaseDry=true survives save/restore) --
+    beginTest("linearPhaseDry state round-trip");
+    {
+        PluginProcessor src;
+        prepareProcessor(src, true);
+
+        juce::MemoryBlock saved;
+        src.getStateInformation(saved);
+
+        PluginProcessor dst;
+        dst.setRateAndBufferSizeDetails(48000.0, 512);
+        dst.setStateInformation(saved.getData(), (int) saved.getSize());
+
+        auto* p = dst.parameters.getRawParameterValue("linearPhaseDry");
+        expect(p != nullptr, "linearPhaseDry parameter missing after restore");
+        if (p)
+            expect(p->load() > 0.5f, "linearPhaseDry should be true after state round-trip");
+    }
+}
+
+//==============================================================================
 // RTAllocationGuardTest Implementation (PR-0)
 //
 // Verifies that the debug RT-allocation guard correctly counts global

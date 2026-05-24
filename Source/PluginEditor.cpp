@@ -255,6 +255,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
                     if (presetName.isNotEmpty())
                     {
                         savePreset(presetName);
+                        audioProcessor.parameters.state.setProperty("currentPresetName", presetName, nullptr);
                         refreshPresetList();
                     }
                 }
@@ -320,6 +321,9 @@ PluginEditor::PluginEditor(PluginProcessor& p)
             {
                 loadPreset(presetName);
             }
+
+            // Persist the selected preset name so the DAW session can restore it
+            audioProcessor.parameters.state.setProperty("currentPresetName", presetName, nullptr);
         }
     };
 
@@ -1186,8 +1190,21 @@ void PluginEditor::refreshPresetList()
     presetSelector.addItem("Save Preset...", 9990);
     presetSelector.addItem("Delete Preset...", 9991);
 
-    // Select "Default" preset by default (ID = 1)
-    presetSelector.setSelectedId(1, juce::dontSendNotification);
+    // Restore the last selected preset name; fall back to "Default" if not found
+    juce::String savedName = audioProcessor.parameters.state
+        .getProperty("currentPresetName", "Default").toString();
+    bool found = false;
+    for (int i = 0; i < presetSelector.getNumItems(); ++i)
+    {
+        if (presetSelector.getItemText(i) == savedName)
+        {
+            presetSelector.setSelectedItemIndex(i, juce::dontSendNotification);
+            found = true;
+            break;
+        }
+    }
+    if (!found)
+        presetSelector.setSelectedId(1, juce::dontSendNotification);
 }
 
 void PluginEditor::loadFactoryPreset(const juce::String& presetName)
