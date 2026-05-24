@@ -461,6 +461,7 @@ private:
     int   pb_lfoDestination           = 0;
     int   pb_clipType                 = 0;
     float pb_subGuardFreq             = 0.0f;
+    float pb_outGainParam             = 50.0f;  // raw, for output gain LFO modulation
     bool  pb_subGuardActive           = false;  // set by applySubGuardSplit
     float pb_currentInputGain         = 1.0f;
     float pb_gainDelta                = 0.0f;
@@ -477,7 +478,7 @@ private:
     // Called from both applySubGuardSplit branches (OFF: full-range; ACTIVE: high band only).
     float applyDistortionStage(float inputSample, int channel,
                                float sampleDrive, float sampleMixAmount, float sampleDistortionParam);
-    void applyAutoGainAndISP();
+    void applyAutoGainAndISP(juce::AudioBuffer<float>& buffer);
     void applyLA2A();
 
     // Helper methods for studio distortion DSP

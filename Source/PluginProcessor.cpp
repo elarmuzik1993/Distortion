@@ -1246,6 +1246,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     pb_lfoDestination           = lfoDestination;
     pb_clipType                 = clipType;
     pb_subGuardFreq             = subGuardFreq;
+    pb_outGainParam             = outGainParam;
 
     // Calculate distortion drive from modulated parameter
     float distortionDrive = 1.0f + (modulatedDistortionParam / 100.0f) * 3.0f;
@@ -1478,435 +1479,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         }
     }
 
-    // ========== AUTO-GAIN COMPENSATION: Measure output RMS and apply compensation ==========
-    if (autoGainEnabled)
-    {
-        // Calculate output RMS for auto-gain compensation (after distortion)
-        float outputSumSquares = 0.0f;
-        for (size_t ch = 0; ch < numChannels; ++ch)
-        {
-            const float* data = pb_oversampledBlock.getChannelPointer(ch);
-            for (size_t i = 0; i < numSamples; ++i)
-                outputSumSquares += data[i] * data[i];
-        }
-        const float outputRms = std::sqrt(outputSumSquares / (numSamples * numChannels));
-
-        // Update output envelope (one-pole filter with asymmetric attack/release)
-        if (outputRms > autoGainOutputEnvelope)
-            autoGainOutputEnvelope = autoGainAttackCoeff * autoGainOutputEnvelope + (1.0f - autoGainAttackCoeff) * outputRms;
-        else
-            autoGainOutputEnvelope = autoGainReleaseCoeff * autoGainOutputEnvelope + (1.0f - autoGainReleaseCoeff) * outputRms;
-
-        // Calculate compensation gain (input/output ratio with safety limits)
-        if (autoGainOutputEnvelope > 0.0001f)  // Avoid division by near-zero
-        {
-            const float rawCompensation = autoGainInputEnvelope / autoGainOutputEnvelope;
-            autoGainCompensation = juce::jlimit(DSPConstants::AUTO_GAIN_MIN, DSPConstants::AUTO_GAIN_MAX, rawCompensation);
-        }
-        else
-        {
-            autoGainCompensation = 1.0f;  // No signal = no compensation
-        }
-
-        // Apply auto-gain compensation to oversampled block
-        for (size_t ch = 0; ch < numChannels; ++ch)
-        {
-            float* data = pb_oversampledBlock.getChannelPointer(ch);
-            for (size_t i = 0; i < numSamples; ++i)
-                data[i] *= autoGainCompensation;
-        }
-    }
-    else
-    {
-        // Reset state so re-enabling doesn't cause jumps
-        autoGainCompensation = 1.0f;
-    }
-
-    // Store final parameter values for next block's interpolation
-    lastInputGain = pb_currentInputGain;
-    lastDistortionDrive = pb_currentDrive;
-    lastDistMix = pb_currentMixAmount;
-
-    // Check for corruption after distortion processing, before downsampling
-    bool hasNaN = false;
-    bool hasInf = false;
-    float maxSample = 0.0f;
-    const size_t numSamplesCheck = pb_oversampledBlock.getNumSamples();
-    const size_t numChannelsCheck = pb_oversampledBlock.getNumChannels();
-    for (size_t ch = 0; ch < numChannelsCheck && !hasNaN && !hasInf; ++ch)
-    {
-        const float* channelData = pb_oversampledBlock.getChannelPointer(ch);
-        for (size_t i = 0; i < numSamplesCheck; ++i)
-        {
-            const float sample = channelData[i];
-            if (std::isnan(sample)) hasNaN = true;
-            if (std::isinf(sample)) hasInf = true;
-            maxSample = std::max(maxSample, std::abs(sample));
-        }
-    }
-
-    if (hasNaN || hasInf || maxSample > 10.0f)
-    {
-        debugHadDistortionCorruption.store(true, std::memory_order_relaxed);
-    }
-
-    // REMOVED: DC blocking before downsampling causes instability at 44.1kHz
-    // The DC blocking filter at 5Hz with 176.4kHz oversampled rate creates
-    // extremely resonant poles that interact badly with the downsampler
-    // DC blocking is applied AFTER downsampling via manual one-pole DC blocker
-
-    // ========== TONE FILTER & WAVESHAPER (oversampled domain) ==========
-    // Order controlled by Clean Mode toggle to optimize aliasing vs character
-    const bool cleanMode = waveshaperCleanParam ? (waveshaperCleanParam->load() > 0.5f) : false;
-    // Use modulated frequency for LFO-controlled tone sweeps
-    const float toneFreq = modulatedToneFreq;
-    const float waveshaperMix = *waveshaperMixParam;
-
-    // Update tone filter coefficients if frequency changed (RT-safe in-place write)
-    if (std::abs(toneFreq - lastToneFreq) > 1.0f && toneFilter.state != nullptr)
-    {
-        const double toneSampleRate = currentSampleRate * oversamplingFactor;
-        // Clamp frequency to valid range (well below Nyquist)
-        const float clampedToneFreq = juce::jlimit(2000.0f, std::min(20000.0f, (float)(toneSampleRate * 0.45)), toneFreq);
-        // Butterworth Q matches JUCE's default inverseRootTwo used by makeLowPass(sr, freq).
-        constexpr double butterworthQ = 0.7071067811865476;
-        // In-place write into the Coefficients object. ProcessorDuplicator's per-channel
-        // IIR::Filter holds its own CoefficientsPtr that was initialised from .state in
-        // prepare() and aliases the same object — so writing through .state here updates
-        // the coefficients read by every channel's Filter on the next process() call.
-        // No standby-swap is used for the tone filter: the swap exchanges only .state's
-        // pointer, which the per-channel Filter does not track. Audio thread is the sole
-        // writer and reader, sequenced, so no torn reads are possible.
-        writeSecondOrderLowPassCoeffs(*toneFilter.state, toneSampleRate, clampedToneFreq, butterworthQ);
-        if (toneFilterLow.state != nullptr)
-            writeSecondOrderLowPassCoeffs(*toneFilterLow.state, toneSampleRate, clampedToneFreq, butterworthQ);
-        lastToneFreq = toneFreq;
-    }
-
-    // Lambda for tone filter processing
-    auto applyToneFilter = [&]() {
-        if (toneFreq < 19500.0f && toneFilter.state != nullptr)
-        {
-            toneFilter.process(juce::dsp::ProcessContextReplacing<float>(pb_oversampledBlock));
-        }
-    };
-
-    // Lambda for waveshaper processing
-    auto applyWaveshaper = [&]() {
-        if (waveshaperMix > 0.0f)
-    {
-        const float wetAmountWS = waveshaperMix / 100.0f;  // 0.0 to 1.0
-        const float dryAmountWS = 1.0f - wetAmountWS;
-
-        const size_t wsNumChannels = pb_oversampledBlock.getNumChannels();
-        const size_t wsNumSamples = pb_oversampledBlock.getNumSamples();
-
-        for (size_t channel = 0; channel < wsNumChannels; ++channel)
-        {
-            auto* channelData = pb_oversampledBlock.getChannelPointer(channel);
-            for (size_t sample = 0; sample < wsNumSamples; ++sample)
-            {
-                const float dry = channelData[sample];
-                float wet = dry;
-
-                // Stage 1: Gentle pre-emphasis for detail (3x instead of 8x)
-                wet *= 3.0f;
-
-                // Stage 2: Smooth tube-like saturation with even harmonics
-                const float x2 = wet * wet;  // 2nd harmonic
-                wet = wet + (x2 * 0.15f * juce::dsp::FastMathApproximations::tanh(wet));
-
-                // Stage 3: Buttery soft-knee saturation
-                const float absWet = std::abs(wet);
-                if (absWet > 0.4f)
-                {
-                    const float excess = absWet - 0.4f;
-                    const float compressed = 0.4f + FastMath::tanh(excess * 1.2f) * 0.4f;
-                    wet = (wet > 0.0f ? compressed : -compressed);
-                }
-
-                // Stage 4: Add smooth 3rd harmonic for richness
-                wet = wet + std::sin(wet * 3.0f) * 0.08f;
-
-                // Stage 5: Pleasant tape-like hiss (subtle high-frequency enhancement)
-                const float hiss = waveshaperRandom.nextFloat() * 0.003f - 0.0015f;
-                wet += hiss * absWet;
-
-                // Stage 6: Gentle wave folding for silky harmonics
-                wet = wet + std::sin(wet * 1.5f) * 0.12f;
-
-                // Stage 7: Final smooth saturation
-                wet = FastMath::tanh(wet * 0.85f);
-
-                // Stage 8: Subtle asymmetry for analog character
-                if (wet > 0.0f)
-                    wet *= 0.98f;
-
-                // Blend dry and wet signals
-                channelData[sample] = dryAmountWS * dry + wetAmountWS * wet;
-            }
-        }
-        }
-    };
-
-    // Apply processing in order based on Clean Mode toggle
-    if (cleanMode)
-    {
-        // CLEAN MODE: Waveshaper → Tone Filter
-        // Reduces aliasing by generating harmonics before filtering
-        applyWaveshaper();
-        applyToneFilter();
-    }
-    else
-    {
-        // GRITTY MODE: Tone Filter → Waveshaper (original order)
-        // Creates edgier character by adding harmonics after darkening
-        applyToneFilter();
-        applyWaveshaper();
-    }
-
-    // ========== LA-2A FULL-BAND COMPRESSION (oversampled domain) ==========
-    // Simple full-band compression without crossover or wet/dry blend
-    if (compEnabled && compPeakReduction > 0.0f)
-    {
-        const size_t oversampledNumSamples = pb_oversampledBlock.getNumSamples();
-        const int compNumChannels = static_cast<int>(pb_oversampledBlock.getNumChannels());
-        const int compNumSamples = static_cast<int>(oversampledNumSamples);
-
-        // Map peak reduction (0-100) to threshold in dB
-        const float threshold = DSPConstants::COMP_THRESHOLD_MIN_DB +
-                              (compPeakReduction * DSPConstants::COMP_THRESHOLD_RANGE_DB / 100.0f);
-
-        // Ratio: Compress mode = 3:1, Limit mode = 12:1
-        const float ratio = (compRatioMode == 0) ? DSPConstants::COMP_RATIO_COMPRESS : DSPConstants::COMP_RATIO_LIMIT;
-
-        // Map makeup gain
-        const float makeupGainDB = (compMakeupGain - 50.0f) * (DSPConstants::COMP_MAKEUP_RANGE_DB / 50.0f);
-        const float makeupGainLinear = juce::Decibels::decibelsToGain(makeupGainDB);
-
-        // Use OVERSAMPLED coefficients
-        const float attackCoeff = compAttackCoeffOversampled;
-        const float releaseCoeff = compReleaseCoeffOversampled;
-
-        float maxGainReductionDB = 0.0f;
-
-        for (int sampleIdx = 0; sampleIdx < compNumSamples; ++sampleIdx)
-        {
-            // Calculate RMS across channels for detection
-            float sumSquares = 0.0f;
-            for (int ch = 0; ch < compNumChannels; ++ch)
-            {
-                const float sampleValue = pb_oversampledBlock.getChannelPointer(static_cast<size_t>(ch))[sampleIdx];
-                sumSquares += sampleValue * sampleValue;
-            }
-
-            const float rms = std::sqrt(sumSquares / compNumChannels);
-
-            // Update RMS history with OVERSAMPLED coefficient
-            compRmsHistory = compRmsHistoryCoeffOversampled * compRmsHistory +
-                            (1.0f - compRmsHistoryCoeffOversampled) * rms;
-
-            // Convert to dB
-            const float inputLevelDB = juce::Decibels::gainToDecibels(rms + 0.00001f);
-
-            // Calculate gain reduction needed
-            float gainReductionDB = 0.0f;
-            if (inputLevelDB > threshold)
-            {
-                const float overThresholdDB = inputLevelDB - threshold;
-
-                // Soft knee for smooth LA-2A character
-                const float kneeWidth = DSPConstants::COMP_KNEE_WIDTH_DB;
-                if (overThresholdDB < kneeWidth)
-                {
-                    const float kneeRatio = overThresholdDB / kneeWidth;
-                    gainReductionDB = overThresholdDB * kneeRatio * (1.0f - 1.0f / ratio);
-                }
-                else
-                {
-                    gainReductionDB = kneeWidth * (1.0f - 1.0f / ratio) +
-                        (overThresholdDB - kneeWidth) * (1.0f - 1.0f / ratio);
-                }
-            }
-
-            // Optical cell envelope follower
-            const float targetGainReduction = juce::Decibels::decibelsToGain(-gainReductionDB);
-
-            if (targetGainReduction < compEnvelopeState)
-            {
-                compEnvelopeState = attackCoeff * compEnvelopeState + (1.0f - attackCoeff) * targetGainReduction;
-            }
-            else
-            {
-                compEnvelopeState = releaseCoeff * compEnvelopeState + (1.0f - releaseCoeff) * targetGainReduction;
-            }
-
-            maxGainReductionDB = juce::jmax(maxGainReductionDB, gainReductionDB);
-
-            // Apply compression and makeup gain to all channels
-            for (int ch = 0; ch < compNumChannels; ++ch)
-            {
-                auto* channelData = pb_oversampledBlock.getChannelPointer(static_cast<size_t>(ch));
-                float sampleValue = channelData[sampleIdx];
-
-                // Apply compression
-                sampleValue *= compEnvelopeState;
-
-                // Tube harmonic generation
-                const float tubeInput = sampleValue * DSPConstants::COMP_TUBE_DRIVE;
-                const float tubeSaturation = FastMath::tanh(tubeInput);
-
-                sampleValue = sampleValue * (1.0f - DSPConstants::COMP_TUBE_BLEND) +
-                             tubeSaturation * DSPConstants::COMP_TUBE_BLEND;
-
-                sampleValue *= makeupGainLinear;
-
-                // Conditional soft clip (transparent below -1dBFS, prevents overs above)
-                {
-                    const float absSample = std::abs(sampleValue);
-                    if (absSample > DSPConstants::COMP_SOFT_CLIP_THRESHOLD)
-                    {
-                        const float sign = (sampleValue > 0.0f) ? 1.0f : -1.0f;
-                        const float excess = absSample - DSPConstants::COMP_SOFT_CLIP_THRESHOLD;
-                        sampleValue = sign * (DSPConstants::COMP_SOFT_CLIP_THRESHOLD
-                                    + FastMath::tanh(excess * 4.0f) * DSPConstants::COMP_SOFT_CLIP_HEADROOM);
-                    }
-                }
-
-                channelData[sampleIdx] = sampleValue;
-            }
-        }
-
-        currentGainReductionDB.store(maxGainReductionDB, std::memory_order_relaxed);
-    }
-
-    // ========== SOFT CLIPPER (ISP Protection) ==========
-    // Gentle ceiling at -0.3 dBFS to prevent inter-sample overs from oversampling collapse
-    {
-        const float thresholdLinear = juce::Decibels::decibelsToGain(DSPConstants::SOFT_CLIP_THRESHOLD_DB);
-        const size_t scNumChannels = pb_oversampledBlock.getNumChannels();
-        const size_t scNumSamples = pb_oversampledBlock.getNumSamples();
-
-        for (size_t channel = 0; channel < scNumChannels; ++channel)
-        {
-            auto* data = pb_oversampledBlock.getChannelPointer(channel);
-            for (size_t sample = 0; sample < scNumSamples; ++sample)
-            {
-                const float input = data[sample];
-                const float absInput = std::abs(input);
-
-                if (absInput > thresholdLinear)
-                {
-                    // Soft saturation above threshold
-                    const float sign = (input > 0.0f) ? 1.0f : -1.0f;
-                    const float excess = absInput - thresholdLinear;
-                    const float compressed = thresholdLinear + FastMath::tanh(excess * 2.0f) * (1.0f - thresholdLinear);
-                    data[sample] = sign * compressed;
-                }
-            }
-        }
-    }
-
-    // ========== SUB GUARD: Phase-match low branch to the high branch's tone filter ==========
-    // Apply an identical tone LP (with its own state) to the clean low band so both
-    // bands share the same magnitude/phase response at the recombine sum. Gated on the
-    // same bypass condition as the high-branch tone filter.
-    if (pb_subGuardActive && toneFreq < 19500.0f && toneFilterLow.state != nullptr)
-    {
-        auto lowBlockTone = juce::dsp::AudioBlock<float>(lowBandBuffer).getSubBlock(0, numSamples);
-        toneFilterLow.process(juce::dsp::ProcessContextReplacing<float>(lowBlockTone));
-    }
-
-    // ========== SUB GUARD: Add clean low band back after all nonlinear processing ==========
-    // The clean sub bypasses: auto-gain, waveshaper, compressor, and soft clipper
-    // (tone filter is mirrored above for phase coherence at recombine)
-    if (pb_subGuardActive)
-    {
-        for (size_t channel = 0; channel < numChannels; ++channel)
-        {
-            auto* outputData = pb_oversampledBlock.getChannelPointer(channel);
-            const auto* lowData = lowBandBuffer.getReadPointer(static_cast<int>(channel));
-
-            for (size_t sample = 0; sample < numSamples; ++sample)
-            {
-                outputData[sample] += lowData[sample];
-            }
-        }
-    }
-
-    // Downsample back into original buffer (skip when oversampling is off)
-    if (oversampling)
-        oversampling->processSamplesDown(pb_inputBlock);
-
-    // NOTE: Waveshaper and LA-2A compression are now in the oversampled domain (before downsampling)
-    // This eliminates aliasing from harmonic generation
-
-    // Manual DC blocker - simple one-pole filter that's extremely stable
-    // y[n] = x[n] - x[n-1] + R * y[n-1], where R ≈ 0.9995 for ~3.5Hz cutoff at 44.1kHz
-    // Previous value 0.995 (~35Hz) was stealing 2.5dB at 40Hz and 1.2dB at 60Hz
-    constexpr float R = 0.9995f;  // ~3.5Hz cutoff: removes DC without touching sub
-    // CRITICAL: Clamp to 2 channels max to prevent array out-of-bounds access
-    // (manualDCBlockerPrevInput/Output arrays are fixed size [2])
-    const int dcBlockerChannels = juce::jmin(buffer.getNumChannels(), 2);
-    for (int ch = 0; ch < dcBlockerChannels; ++ch)
-    {
-        auto* data = buffer.getWritePointer(ch);
-        for (int i = 0; i < buffer.getNumSamples(); ++i)
-        {
-            const float input = data[i];
-            const float output = input - manualDCBlockerPrevInput[ch] + R * manualDCBlockerPrevOutput[ch];
-
-            // Safety check for NaN/Inf (should never happen with this simple filter)
-            if (std::isnan(output) || std::isinf(output))
-            {
-                data[i] = 0.0f;
-                manualDCBlockerPrevOutput[ch] = 0.0f;
-            }
-            else
-            {
-                data[i] = output;
-                manualDCBlockerPrevOutput[ch] = output;
-            }
-            manualDCBlockerPrevInput[ch] = input;
-        }
-    }
-
-    // Apply output gain to the final downsampled result
-    // Per-sample LFO for destination 4 (output gain / tremolo) at base sample rate
-    for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
-    {
-        float currentOutputGain = smoothedOutputGain.getNextValue();
-
-        // Per-sample LFO modulation of output gain (destination 4)
-        if (perSampleLFO && lfoEnabled && lfoPhaseIncrement > 0.0f && lfoDestination == 4)
-        {
-            float sampleLfoValue = generateLFOWaveform(lfoPhase, lfoWaveform);
-            if (std::isnan(sampleLfoValue) || std::isinf(sampleLfoValue))
-                sampleLfoValue = 0.0f;
-            const float sampleLfoMod = sampleLfoValue * lfoDepth / 100.0f;
-
-            // Modulate output gain: ±25% swing (±4.5dB tremolo)
-            const float modOutGainParam = juce::jlimit(0.0f, 100.0f,
-                outGainParam + sampleLfoMod * 25.0f);
-            const float modOutGainDB = (modOutGainParam - 50.0f) * 0.18f;
-            currentOutputGain = juce::Decibels::decibelsToGain(modOutGainDB);
-
-            // Advance LFO phase at base sample rate
-            lfoPhase += lfoPhaseIncrement;
-            if (lfoPhase >= 1.0f)
-                lfoPhase -= 1.0f;
-        }
-
-        for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
-        {
-            auto* channelData = buffer.getWritePointer(channel);
-            channelData[sample] *= currentOutputGain;
-        }
-    }
-
-    // Update LFO phase for UI display (per-sample destinations update phase in loops above)
-    if (perSampleLFO && lfoEnabled)
-        lfoPhaseForUI.store(lfoPhase, std::memory_order_relaxed);
+    applyAutoGainAndISP(buffer);
 
     // ========== OUTPUT LIMITER (Final Safety) ==========
     // Stereo-linked soft limiter at -0.5dBFS to prevent clipping
@@ -2490,6 +2063,440 @@ bool PluginProcessor::applySubGuardSplit()
 }
 
 // Helper method called from audio thread to safely reset DSP state
+
+void PluginProcessor::applyAutoGainAndISP(juce::AudioBuffer<float>& buffer)
+{
+    // ========== AUTO-GAIN COMPENSATION: Measure output RMS and apply compensation ==========
+    if (pb_autoGainEnabled)
+    {
+        // Calculate output RMS for auto-gain compensation (after distortion)
+        float outputSumSquares = 0.0f;
+        for (size_t ch = 0; ch < pb_numChannels; ++ch)
+        {
+            const float* data = pb_oversampledBlock.getChannelPointer(ch);
+            for (size_t i = 0; i < pb_numSamples; ++i)
+                outputSumSquares += data[i] * data[i];
+        }
+        const float outputRms = std::sqrt(outputSumSquares / (pb_numSamples * pb_numChannels));
+
+        // Update output envelope (one-pole filter with asymmetric attack/release)
+        if (outputRms > autoGainOutputEnvelope)
+            autoGainOutputEnvelope = autoGainAttackCoeff * autoGainOutputEnvelope + (1.0f - autoGainAttackCoeff) * outputRms;
+        else
+            autoGainOutputEnvelope = autoGainReleaseCoeff * autoGainOutputEnvelope + (1.0f - autoGainReleaseCoeff) * outputRms;
+
+        // Calculate compensation gain (input/output ratio with safety limits)
+        if (autoGainOutputEnvelope > 0.0001f)  // Avoid division by near-zero
+        {
+            const float rawCompensation = autoGainInputEnvelope / autoGainOutputEnvelope;
+            autoGainCompensation = juce::jlimit(DSPConstants::AUTO_GAIN_MIN, DSPConstants::AUTO_GAIN_MAX, rawCompensation);
+        }
+        else
+        {
+            autoGainCompensation = 1.0f;  // No signal = no compensation
+        }
+
+        // Apply auto-gain compensation to oversampled block
+        for (size_t ch = 0; ch < pb_numChannels; ++ch)
+        {
+            float* data = pb_oversampledBlock.getChannelPointer(ch);
+            for (size_t i = 0; i < pb_numSamples; ++i)
+                data[i] *= autoGainCompensation;
+        }
+    }
+    else
+    {
+        // Reset state so re-enabling doesn't cause jumps
+        autoGainCompensation = 1.0f;
+    }
+
+    // Store final parameter values for next block's interpolation
+    lastInputGain = pb_currentInputGain;
+    lastDistortionDrive = pb_currentDrive;
+    lastDistMix = pb_currentMixAmount;
+
+    // Check for corruption after distortion processing, before downsampling
+    bool hasNaN = false;
+    bool hasInf = false;
+    float maxSample = 0.0f;
+    const size_t numSamplesCheck = pb_oversampledBlock.getNumSamples();
+    const size_t numChannelsCheck = pb_oversampledBlock.getNumChannels();
+    for (size_t ch = 0; ch < numChannelsCheck && !hasNaN && !hasInf; ++ch)
+    {
+        const float* channelData = pb_oversampledBlock.getChannelPointer(ch);
+        for (size_t i = 0; i < numSamplesCheck; ++i)
+        {
+            const float sample = channelData[i];
+            if (std::isnan(sample)) hasNaN = true;
+            if (std::isinf(sample)) hasInf = true;
+            maxSample = std::max(maxSample, std::abs(sample));
+        }
+    }
+
+    if (hasNaN || hasInf || maxSample > 10.0f)
+    {
+        debugHadDistortionCorruption.store(true, std::memory_order_relaxed);
+    }
+
+    // REMOVED: DC blocking before downsampling causes instability at 44.1kHz
+    // The DC blocking filter at 5Hz with 176.4kHz oversampled rate creates
+    // extremely resonant poles that interact badly with the downsampler
+    // DC blocking is applied AFTER downsampling via manual one-pole DC blocker
+
+    // ========== TONE FILTER & WAVESHAPER (oversampled domain) ==========
+    // Order controlled by Clean Mode toggle to optimize aliasing vs character
+    const bool cleanMode = waveshaperCleanParam ? (waveshaperCleanParam->load() > 0.5f) : false;
+    // Use modulated frequency for LFO-controlled tone sweeps
+    const float toneFreq = pb_modulatedToneFreq;
+    const float waveshaperMix = *waveshaperMixParam;
+
+    // Update tone filter coefficients if frequency changed (RT-safe in-place write)
+    if (std::abs(toneFreq - lastToneFreq) > 1.0f && toneFilter.state != nullptr)
+    {
+        const double toneSampleRate = currentSampleRate * oversamplingFactor;
+        // Clamp frequency to valid range (well below Nyquist)
+        const float clampedToneFreq = juce::jlimit(2000.0f, std::min(20000.0f, (float)(toneSampleRate * 0.45)), toneFreq);
+        // Butterworth Q matches JUCE's default inverseRootTwo used by makeLowPass(sr, freq).
+        constexpr double butterworthQ = 0.7071067811865476;
+        // In-place write into the Coefficients object. ProcessorDuplicator's per-channel
+        // IIR::Filter holds its own CoefficientsPtr that was initialised from .state in
+        // prepare() and aliases the same object — so writing through .state here updates
+        // the coefficients read by every channel's Filter on the next process() call.
+        // No standby-swap is used for the tone filter: the swap exchanges only .state's
+        // pointer, which the per-channel Filter does not track. Audio thread is the sole
+        // writer and reader, sequenced, so no torn reads are possible.
+        writeSecondOrderLowPassCoeffs(*toneFilter.state, toneSampleRate, clampedToneFreq, butterworthQ);
+        if (toneFilterLow.state != nullptr)
+            writeSecondOrderLowPassCoeffs(*toneFilterLow.state, toneSampleRate, clampedToneFreq, butterworthQ);
+        lastToneFreq = toneFreq;
+    }
+
+    // Lambda for tone filter processing
+    auto applyToneFilter = [&]() {
+        if (toneFreq < 19500.0f && toneFilter.state != nullptr)
+        {
+            toneFilter.process(juce::dsp::ProcessContextReplacing<float>(pb_oversampledBlock));
+        }
+    };
+
+    // Lambda for waveshaper processing
+    auto applyWaveshaper = [&]() {
+        if (waveshaperMix > 0.0f)
+    {
+        const float wetAmountWS = waveshaperMix / 100.0f;  // 0.0 to 1.0
+        const float dryAmountWS = 1.0f - wetAmountWS;
+
+        const size_t wsNumChannels = pb_oversampledBlock.getNumChannels();
+        const size_t wsNumSamples = pb_oversampledBlock.getNumSamples();
+
+        for (size_t channel = 0; channel < wsNumChannels; ++channel)
+        {
+            auto* channelData = pb_oversampledBlock.getChannelPointer(channel);
+            for (size_t sample = 0; sample < wsNumSamples; ++sample)
+            {
+                const float dry = channelData[sample];
+                float wet = dry;
+
+                // Stage 1: Gentle pre-emphasis for detail (3x instead of 8x)
+                wet *= 3.0f;
+
+                // Stage 2: Smooth tube-like saturation with even harmonics
+                const float x2 = wet * wet;  // 2nd harmonic
+                wet = wet + (x2 * 0.15f * juce::dsp::FastMathApproximations::tanh(wet));
+
+                // Stage 3: Buttery soft-knee saturation
+                const float absWet = std::abs(wet);
+                if (absWet > 0.4f)
+                {
+                    const float excess = absWet - 0.4f;
+                    const float compressed = 0.4f + FastMath::tanh(excess * 1.2f) * 0.4f;
+                    wet = (wet > 0.0f ? compressed : -compressed);
+                }
+
+                // Stage 4: Add smooth 3rd harmonic for richness
+                wet = wet + std::sin(wet * 3.0f) * 0.08f;
+
+                // Stage 5: Pleasant tape-like hiss (subtle high-frequency enhancement)
+                const float hiss = waveshaperRandom.nextFloat() * 0.003f - 0.0015f;
+                wet += hiss * absWet;
+
+                // Stage 6: Gentle wave folding for silky harmonics
+                wet = wet + std::sin(wet * 1.5f) * 0.12f;
+
+                // Stage 7: Final smooth saturation
+                wet = FastMath::tanh(wet * 0.85f);
+
+                // Stage 8: Subtle asymmetry for analog character
+                if (wet > 0.0f)
+                    wet *= 0.98f;
+
+                // Blend dry and wet signals
+                channelData[sample] = dryAmountWS * dry + wetAmountWS * wet;
+            }
+        }
+        }
+    };
+
+    // Apply processing in order based on Clean Mode toggle
+    if (cleanMode)
+    {
+        // CLEAN MODE: Waveshaper → Tone Filter
+        // Reduces aliasing by generating harmonics before filtering
+        applyWaveshaper();
+        applyToneFilter();
+    }
+    else
+    {
+        // GRITTY MODE: Tone Filter → Waveshaper (original order)
+        // Creates edgier character by adding harmonics after darkening
+        applyToneFilter();
+        applyWaveshaper();
+    }
+
+    // ========== LA-2A FULL-BAND COMPRESSION (oversampled domain) ==========
+    // Simple full-band compression without crossover or wet/dry blend
+    if (pb_compEnabled && pb_compPeakReduction > 0.0f)
+    {
+        const size_t oversampledNumSamples = pb_oversampledBlock.getNumSamples();
+        const int compNumChannels = static_cast<int>(pb_oversampledBlock.getNumChannels());
+        const int compNumSamples = static_cast<int>(oversampledNumSamples);
+
+        // Map peak reduction (0-100) to threshold in dB
+        const float threshold = DSPConstants::COMP_THRESHOLD_MIN_DB +
+                              (pb_compPeakReduction * DSPConstants::COMP_THRESHOLD_RANGE_DB / 100.0f);
+
+        // Ratio: Compress mode = 3:1, Limit mode = 12:1
+        const float ratio = (pb_compRatioMode == 0) ? DSPConstants::COMP_RATIO_COMPRESS : DSPConstants::COMP_RATIO_LIMIT;
+
+        // Map makeup gain
+        const float makeupGainDB = (pb_compMakeupGain - 50.0f) * (DSPConstants::COMP_MAKEUP_RANGE_DB / 50.0f);
+        const float makeupGainLinear = juce::Decibels::decibelsToGain(makeupGainDB);
+
+        // Use OVERSAMPLED coefficients
+        const float attackCoeff = compAttackCoeffOversampled;
+        const float releaseCoeff = compReleaseCoeffOversampled;
+
+        float maxGainReductionDB = 0.0f;
+
+        for (int sampleIdx = 0; sampleIdx < compNumSamples; ++sampleIdx)
+        {
+            // Calculate RMS across channels for detection
+            float sumSquares = 0.0f;
+            for (int ch = 0; ch < compNumChannels; ++ch)
+            {
+                const float sampleValue = pb_oversampledBlock.getChannelPointer(static_cast<size_t>(ch))[sampleIdx];
+                sumSquares += sampleValue * sampleValue;
+            }
+
+            const float rms = std::sqrt(sumSquares / compNumChannels);
+
+            // Update RMS history with OVERSAMPLED coefficient
+            compRmsHistory = compRmsHistoryCoeffOversampled * compRmsHistory +
+                            (1.0f - compRmsHistoryCoeffOversampled) * rms;
+
+            // Convert to dB
+            const float inputLevelDB = juce::Decibels::gainToDecibels(rms + 0.00001f);
+
+            // Calculate gain reduction needed
+            float gainReductionDB = 0.0f;
+            if (inputLevelDB > threshold)
+            {
+                const float overThresholdDB = inputLevelDB - threshold;
+
+                // Soft knee for smooth LA-2A character
+                const float kneeWidth = DSPConstants::COMP_KNEE_WIDTH_DB;
+                if (overThresholdDB < kneeWidth)
+                {
+                    const float kneeRatio = overThresholdDB / kneeWidth;
+                    gainReductionDB = overThresholdDB * kneeRatio * (1.0f - 1.0f / ratio);
+                }
+                else
+                {
+                    gainReductionDB = kneeWidth * (1.0f - 1.0f / ratio) +
+                        (overThresholdDB - kneeWidth) * (1.0f - 1.0f / ratio);
+                }
+            }
+
+            // Optical cell envelope follower
+            const float targetGainReduction = juce::Decibels::decibelsToGain(-gainReductionDB);
+
+            if (targetGainReduction < compEnvelopeState)
+            {
+                compEnvelopeState = attackCoeff * compEnvelopeState + (1.0f - attackCoeff) * targetGainReduction;
+            }
+            else
+            {
+                compEnvelopeState = releaseCoeff * compEnvelopeState + (1.0f - releaseCoeff) * targetGainReduction;
+            }
+
+            maxGainReductionDB = juce::jmax(maxGainReductionDB, gainReductionDB);
+
+            // Apply compression and makeup gain to all channels
+            for (int ch = 0; ch < compNumChannels; ++ch)
+            {
+                auto* channelData = pb_oversampledBlock.getChannelPointer(static_cast<size_t>(ch));
+                float sampleValue = channelData[sampleIdx];
+
+                // Apply compression
+                sampleValue *= compEnvelopeState;
+
+                // Tube harmonic generation
+                const float tubeInput = sampleValue * DSPConstants::COMP_TUBE_DRIVE;
+                const float tubeSaturation = FastMath::tanh(tubeInput);
+
+                sampleValue = sampleValue * (1.0f - DSPConstants::COMP_TUBE_BLEND) +
+                             tubeSaturation * DSPConstants::COMP_TUBE_BLEND;
+
+                sampleValue *= makeupGainLinear;
+
+                // Conditional soft clip (transparent below -1dBFS, prevents overs above)
+                {
+                    const float absSample = std::abs(sampleValue);
+                    if (absSample > DSPConstants::COMP_SOFT_CLIP_THRESHOLD)
+                    {
+                        const float sign = (sampleValue > 0.0f) ? 1.0f : -1.0f;
+                        const float excess = absSample - DSPConstants::COMP_SOFT_CLIP_THRESHOLD;
+                        sampleValue = sign * (DSPConstants::COMP_SOFT_CLIP_THRESHOLD
+                                    + FastMath::tanh(excess * 4.0f) * DSPConstants::COMP_SOFT_CLIP_HEADROOM);
+                    }
+                }
+
+                channelData[sampleIdx] = sampleValue;
+            }
+        }
+
+        currentGainReductionDB.store(maxGainReductionDB, std::memory_order_relaxed);
+    }
+
+    // ========== SOFT CLIPPER (ISP Protection) ==========
+    // Gentle ceiling at -0.3 dBFS to prevent inter-sample overs from oversampling collapse
+    {
+        const float thresholdLinear = juce::Decibels::decibelsToGain(DSPConstants::SOFT_CLIP_THRESHOLD_DB);
+        const size_t scNumChannels = pb_oversampledBlock.getNumChannels();
+        const size_t scNumSamples = pb_oversampledBlock.getNumSamples();
+
+        for (size_t channel = 0; channel < scNumChannels; ++channel)
+        {
+            auto* data = pb_oversampledBlock.getChannelPointer(channel);
+            for (size_t sample = 0; sample < scNumSamples; ++sample)
+            {
+                const float input = data[sample];
+                const float absInput = std::abs(input);
+
+                if (absInput > thresholdLinear)
+                {
+                    // Soft saturation above threshold
+                    const float sign = (input > 0.0f) ? 1.0f : -1.0f;
+                    const float excess = absInput - thresholdLinear;
+                    const float compressed = thresholdLinear + FastMath::tanh(excess * 2.0f) * (1.0f - thresholdLinear);
+                    data[sample] = sign * compressed;
+                }
+            }
+        }
+    }
+
+    // ========== SUB GUARD: Phase-match low branch to the high branch's tone filter ==========
+    // Apply an identical tone LP (with its own state) to the clean low band so both
+    // bands share the same magnitude/phase response at the recombine sum. Gated on the
+    // same bypass condition as the high-branch tone filter.
+    if (pb_subGuardActive && toneFreq < 19500.0f && toneFilterLow.state != nullptr)
+    {
+        auto lowBlockTone = juce::dsp::AudioBlock<float>(lowBandBuffer).getSubBlock(0, pb_numSamples);
+        toneFilterLow.process(juce::dsp::ProcessContextReplacing<float>(lowBlockTone));
+    }
+
+    // ========== SUB GUARD: Add clean low band back after all nonlinear processing ==========
+    // The clean sub bypasses: auto-gain, waveshaper, compressor, and soft clipper
+    // (tone filter is mirrored above for phase coherence at recombine)
+    if (pb_subGuardActive)
+    {
+        for (size_t channel = 0; channel < pb_numChannels; ++channel)
+        {
+            auto* outputData = pb_oversampledBlock.getChannelPointer(channel);
+            const auto* lowData = lowBandBuffer.getReadPointer(static_cast<int>(channel));
+
+            for (size_t sample = 0; sample < pb_numSamples; ++sample)
+            {
+                outputData[sample] += lowData[sample];
+            }
+        }
+    }
+
+    // Downsample back into original buffer (skip when oversampling is off)
+    if (oversampling)
+        oversampling->processSamplesDown(pb_inputBlock);
+
+    // NOTE: Waveshaper and LA-2A compression are now in the oversampled domain (before downsampling)
+    // This eliminates aliasing from harmonic generation
+
+    // Manual DC blocker - simple one-pole filter that's extremely stable
+    // y[n] = x[n] - x[n-1] + R * y[n-1], where R ≈ 0.9995 for ~3.5Hz cutoff at 44.1kHz
+    // Previous value 0.995 (~35Hz) was stealing 2.5dB at 40Hz and 1.2dB at 60Hz
+    constexpr float R = 0.9995f;  // ~3.5Hz cutoff: removes DC without touching sub
+    // CRITICAL: Clamp to 2 channels max to prevent array out-of-bounds access
+    // (manualDCBlockerPrevInput/Output arrays are fixed size [2])
+    const int dcBlockerChannels = juce::jmin(buffer.getNumChannels(), 2);
+    for (int ch = 0; ch < dcBlockerChannels; ++ch)
+    {
+        auto* data = buffer.getWritePointer(ch);
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+        {
+            const float input = data[i];
+            const float output = input - manualDCBlockerPrevInput[ch] + R * manualDCBlockerPrevOutput[ch];
+
+            // Safety check for NaN/Inf (should never happen with this simple filter)
+            if (std::isnan(output) || std::isinf(output))
+            {
+                data[i] = 0.0f;
+                manualDCBlockerPrevOutput[ch] = 0.0f;
+            }
+            else
+            {
+                data[i] = output;
+                manualDCBlockerPrevOutput[ch] = output;
+            }
+            manualDCBlockerPrevInput[ch] = input;
+        }
+    }
+
+    // Apply output gain to the final downsampled result
+    // Per-sample LFO for destination 4 (output gain / tremolo) at base sample rate
+    for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+    {
+        float currentOutputGain = smoothedOutputGain.getNextValue();
+
+        // Per-sample LFO modulation of output gain (destination 4)
+        if (pb_perSampleLFO && pb_lfoEnabled && pb_lfoPhaseIncrement > 0.0f && pb_lfoDestination == 4)
+        {
+            float sampleLfoValue = generateLFOWaveform(lfoPhase, pb_lfoWaveform);
+            if (std::isnan(sampleLfoValue) || std::isinf(sampleLfoValue))
+                sampleLfoValue = 0.0f;
+            const float sampleLfoMod = sampleLfoValue * pb_lfoDepth / 100.0f;
+
+            // Modulate output gain: ±25% swing (±4.5dB tremolo)
+            const float modOutGainParam = juce::jlimit(0.0f, 100.0f,
+                pb_outGainParam + sampleLfoMod * 25.0f);
+            const float modOutGainDB = (modOutGainParam - 50.0f) * 0.18f;
+            currentOutputGain = juce::Decibels::decibelsToGain(modOutGainDB);
+
+            // Advance LFO phase at base sample rate
+            lfoPhase += pb_lfoPhaseIncrement;
+            if (lfoPhase >= 1.0f)
+                lfoPhase -= 1.0f;
+        }
+
+        for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+        {
+            auto* channelData = buffer.getWritePointer(channel);
+            channelData[sample] *= currentOutputGain;
+        }
+    }
+
+    // Update LFO phase for UI display (per-sample destinations update phase in loops above)
+    if (pb_perSampleLFO && pb_lfoEnabled)
+        lfoPhaseForUI.store(lfoPhase, std::memory_order_relaxed);
+}
+
 void PluginProcessor::resetDSPState()
 {
     // Reset all filters when loading state to prevent stale coefficients/state
