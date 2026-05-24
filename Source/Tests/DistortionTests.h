@@ -127,6 +127,14 @@ private:
     void testOutputGain();
 };
 
+/** Null-test gate for PR-8 processBlock decomposition — bit-exact determinism check */
+class ProcessBlockDecompTest : public juce::UnitTest
+{
+public:
+    ProcessBlockDecompTest() : UnitTest("ProcessBlock Decomposition", TestCategories::ProcessBlock) {}
+    void runTest() override;
+};
+
 /** Tests for dry/wet alignment across the oversampling boundary */
 class DryWetAlignmentTests : public juce::UnitTest
 {
@@ -445,6 +453,7 @@ inline void registerAllTests()
     static LinearPhaseDryTest linearPhaseDryTest;
     static CoefficientPropagationTest coefficientPropagationTest;
     static FastMathAccuracyTest fastMathAccuracyTest;
+    static ProcessBlockDecompTest processBlockDecompTest;
     static StateIOTests stateIOTests;
     static GoldenAudioTests goldenAudioTests;
     static NormalizationTests normalizationTests;
