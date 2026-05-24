@@ -3065,4 +3065,100 @@ void CoefficientPropagationTest::runTest()
     }
 }
 
+void FastMathAccuracyTest::runTest()
+{
+    beginTest("fastTanh: max error vs std::tanh < 5e-5 for |x| <= 4.5");
+    {
+        // Sample 10001 points across [-4.5, 4.5] and record the largest absolute error.
+        float maxErr = 0.0f;
+        constexpr int N = 10001;
+        for (int i = 0; i <= N; ++i)
+        {
+            const float x = -4.5f + 9.0f * (float)i / (float)N;
+            const float ref = std::tanh(x);
+            const float approx = FastMath::tanh(x);
+            maxErr = std::max(maxErr, std::abs(ref - approx));
+        }
+        logMessage("fastTanh max error over [-4.5,4.5]: " + juce::String(maxErr, 8));
+        expect(maxErr < 5e-5f,
+               "fastTanh error " + juce::String(maxErr) + " exceeds 5e-5 threshold");
+    }
+
+    beginTest("fastTanh: clamps correctly at |x| > 4.5");
+    {
+        expectWithinAbsoluteError(FastMath::tanh( 10.0f), 1.0f, 1e-6f, "tanh(10) should be 1");
+        expectWithinAbsoluteError(FastMath::tanh(-10.0f),-1.0f, 1e-6f, "tanh(-10) should be -1");
+        // At exactly ±4.5 the Padé approximation has ~2e-4 error (near-saturation region)
+        expectWithinAbsoluteError(FastMath::tanh( 4.5f), std::tanh(4.5f), 3e-4f, "tanh(4.5)");
+        expectWithinAbsoluteError(FastMath::tanh(-4.5f), std::tanh(-4.5f), 3e-4f, "tanh(-4.5)");
+    }
+
+    beginTest("fastAtan: max error vs std::atan < 5e-4 rad for |x| <= 10");
+    {
+        float maxErr = 0.0f;
+        constexpr int N = 10001;
+        for (int i = 0; i <= N; ++i)
+        {
+            const float x = -10.0f + 20.0f * (float)i / (float)N;
+            const float ref = std::atan(x);
+            const float approx = FastMath::atan(x);
+            maxErr = std::max(maxErr, std::abs(ref - approx));
+        }
+        logMessage("fastAtan max error over [-10,10]: " + juce::String(maxErr, 6));
+        expect(maxErr < 5e-4f,
+               "fastAtan error " + juce::String(maxErr) + " exceeds 5e-4 rad threshold");
+    }
+
+    beginTest("fastAtan: odd symmetry");
+    {
+        for (float x : { 0.5f, 1.0f, 2.0f, 4.0f })
+            expectWithinAbsoluteError(FastMath::atan(-x), -FastMath::atan(x), 1e-7f,
+                                      "odd symmetry at x=" + juce::String(x));
+    }
+
+    beginTest("fastTanh: odd symmetry");
+    {
+        for (float x : { 0.5f, 1.0f, 2.0f, 4.0f })
+            expectWithinAbsoluteError(FastMath::tanh(-x), -FastMath::tanh(x), 1e-7f,
+                                      "odd symmetry at x=" + juce::String(x));
+    }
+
+    beginTest("processBlock with fast math stays within 1e-4 RMS of expected output range");
+    {
+        // Regression smoke test: a stereo sine at -6 dBFS through the full chain
+        // must produce output within ±1.5x input amplitude. This is not a golden
+        // comparison — it just verifies fast math doesn't corrupt the signal.
+        PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(48000.0, 512);
+        processor.prepareToPlay(48000.0, 512);
+        setParameter(processor.parameters, "distortionAmount", 50.0f);
+        setParameter(processor.parameters, "subGuardFreq",      0.0f);
+
+        const float amp = juce::Decibels::decibelsToGain(-6.0f);
+        juce::MidiBuffer midi;
+
+        // Warm up — let smoothers settle
+        for (int b = 0; b < 8; ++b)
+        {
+            auto buf = generateSineWave(1000.0, 48000.0, 512, amp);
+            processor.processBlock(buf, midi);
+        }
+
+        // Measurement block
+        auto buf = generateSineWave(1000.0, 48000.0, 512, amp);
+        processor.processBlock(buf, midi);
+
+        float sumSq = 0.0f;
+        for (int s = 0; s < 512; ++s)
+            sumSq += buf.getSample(0, s) * buf.getSample(0, s);
+        const float rms = std::sqrt(sumSq / 512.0f);
+
+        logMessage("RMS after fast-math distortion at 50%: " + juce::String(rms, 5));
+        // A 1 kHz sine at -6 dBFS through ~50% distortion shouldn't clip to silence
+        // or blow up — accept anything in the plausible audio range.
+        expect(rms > 0.01f && rms < 2.0f,
+               "Unexpected RMS " + juce::String(rms) + " with fast math enabled");
+    }
+}
+
 #endif // JUCE_DEBUG

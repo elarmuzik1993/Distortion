@@ -4,6 +4,7 @@
 
 #include <JuceHeader.h>
 #include "../PluginProcessor.h"
+#include "../FastMath.h"
 #include "TestUtilities.h"
 
 //==============================================================================
@@ -251,6 +252,14 @@ public:
     void runTest() override;
 };
 
+// PR-7: verify FastMath approximation accuracy and plugin tolerance with fast math.
+class FastMathAccuracyTest : public juce::UnitTest
+{
+public:
+    FastMathAccuracyTest() : UnitTest("Fast Math Accuracy", TestCategories::DSP) {}
+    void runTest() override;
+};
+
 /** Tests for state save/load */
 class StateIOTests : public juce::UnitTest
 {
@@ -435,6 +444,7 @@ inline void registerAllTests()
     static RTCleanSampleRateDriftTest rtCleanSampleRateDriftTest;
     static LinearPhaseDryTest linearPhaseDryTest;
     static CoefficientPropagationTest coefficientPropagationTest;
+    static FastMathAccuracyTest fastMathAccuracyTest;
     static StateIOTests stateIOTests;
     static GoldenAudioTests goldenAudioTests;
     static NormalizationTests normalizationTests;
