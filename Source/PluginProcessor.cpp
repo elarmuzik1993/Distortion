@@ -1438,48 +1438,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const size_t numSamples = pb_oversampledBlock.getNumSamples();
     const size_t numChannels = pb_oversampledBlock.getNumChannels();
 
-    // ========== PRE-DISTORTION TRANSIENT TAMER ==========
-    // Light compression to even out dynamics before distortion
-    if (modulatedDistortionParam >= 0.5f && !extremeEnabled)
-    {
-        const float thresholdLinear = juce::Decibels::decibelsToGain(DSPConstants::PRE_COMP_THRESHOLD_DB);
-        const float ratio = DSPConstants::PRE_COMP_RATIO;
-        const float kneeDB = DSPConstants::PRE_COMP_KNEE_DB;
-        const float threshDB = DSPConstants::PRE_COMP_THRESHOLD_DB;
-
-        for (size_t sample = 0; sample < numSamples; ++sample)
-        {
-            for (size_t channel = 0; channel < numChannels && channel < 2; ++channel)
-            {
-                float* data = pb_oversampledBlock.getChannelPointer(channel);
-                const float input = data[sample];
-                const float level = std::abs(input);
-
-                float targetGain = 1.0f;
-                if (level > thresholdLinear)
-                {
-                    const float inputDB = juce::Decibels::gainToDecibels(level + 1e-6f);
-                    const float overDB = inputDB - threshDB;
-
-                    float grDB = 0.0f;
-                    if (overDB < kneeDB)
-                        grDB = overDB * (overDB / kneeDB) * (1.0f - 1.0f / ratio);
-                    else
-                        grDB = kneeDB * (1.0f - 1.0f / ratio) + (overDB - kneeDB) * (1.0f - 1.0f / ratio);
-
-                    targetGain = juce::Decibels::decibelsToGain(-grDB);
-                }
-
-                const int ch = static_cast<int>(channel);
-                if (targetGain < preCompEnvelope[ch])
-                    preCompEnvelope[ch] = preCompAttackCoeff * preCompEnvelope[ch] + (1.0f - preCompAttackCoeff) * targetGain;
-                else
-                    preCompEnvelope[ch] = preCompReleaseCoeff * preCompEnvelope[ch] + (1.0f - preCompReleaseCoeff) * targetGain;
-
-                data[sample] = input * preCompEnvelope[ch];
-            }
-        }
-    }
+    applyPreCompression();
 
     // ========== AUTO-GAIN COMPENSATION: Measure input RMS ==========
     if (autoGainEnabled)
@@ -2536,6 +2495,51 @@ void PluginProcessor::applyPreHighpass(juce::AudioBuffer<float>& buffer)
     pb_oversampledBlock = oversampling
         ? oversampling->processSamplesUp(pb_inputBlock)
         : pb_inputBlock;
+}
+
+void PluginProcessor::applyPreCompression()
+{
+    // Light compression to even out dynamics before distortion
+    if (pb_modulatedDistortionParam < 0.5f || pb_extremeEnabled)
+        return;
+
+    const float thresholdLinear = juce::Decibels::decibelsToGain(DSPConstants::PRE_COMP_THRESHOLD_DB);
+    const float ratio = DSPConstants::PRE_COMP_RATIO;
+    const float kneeDB = DSPConstants::PRE_COMP_KNEE_DB;
+    const float threshDB = DSPConstants::PRE_COMP_THRESHOLD_DB;
+
+    for (size_t sample = 0; sample < pb_numSamples; ++sample)
+    {
+        for (size_t channel = 0; channel < pb_numChannels && channel < 2; ++channel)
+        {
+            float* data = pb_oversampledBlock.getChannelPointer(channel);
+            const float input = data[sample];
+            const float level = std::abs(input);
+
+            float targetGain = 1.0f;
+            if (level > thresholdLinear)
+            {
+                const float inputDB = juce::Decibels::gainToDecibels(level + 1e-6f);
+                const float overDB = inputDB - threshDB;
+
+                float grDB = 0.0f;
+                if (overDB < kneeDB)
+                    grDB = overDB * (overDB / kneeDB) * (1.0f - 1.0f / ratio);
+                else
+                    grDB = kneeDB * (1.0f - 1.0f / ratio) + (overDB - kneeDB) * (1.0f - 1.0f / ratio);
+
+                targetGain = juce::Decibels::decibelsToGain(-grDB);
+            }
+
+            const int ch = static_cast<int>(channel);
+            if (targetGain < preCompEnvelope[ch])
+                preCompEnvelope[ch] = preCompAttackCoeff * preCompEnvelope[ch] + (1.0f - preCompAttackCoeff) * targetGain;
+            else
+                preCompEnvelope[ch] = preCompReleaseCoeff * preCompEnvelope[ch] + (1.0f - preCompReleaseCoeff) * targetGain;
+
+            data[sample] = input * preCompEnvelope[ch];
+        }
+    }
 }
 
 // Helper method called from audio thread to safely reset DSP state
