@@ -688,6 +688,22 @@ public:
         autoGainAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
             apvts, "autoGainEnabled", autoGainToggle);
 
+        // Linear Phase Dry toggle
+        addAndMakeVisible(linearPhaseToggle);
+        linearPhaseToggle.setButtonText("");
+        linearPhaseToggle.setLookAndFeel(&pillLnf);
+        {
+            bool lpOn = apvts.getRawParameterValue("linearPhaseDry")->load() > 0.5f;
+            linearPhaseToggle.setToggleState(lpOn, juce::dontSendNotification);
+        }
+        linearPhaseToggle.onClick = [this, &apvts]()
+        {
+            bool on = linearPhaseToggle.getToggleState();
+            if (auto* param = apvts.getParameter("linearPhaseDry"))
+                param->setValueNotifyingHost(on ? 1.0f : 0.0f);
+            processor.requestOversamplingRebuild(settingsState.oversamplingMode);
+        };
+
         // Window Scale combo
         addAndMakeVisible(windowScaleCombo);
         windowScaleCombo.addItem("70%", 70);
@@ -755,6 +771,7 @@ public:
     {
         antiAliasToggle.setLookAndFeel(nullptr);
         autoGainToggle.setLookAndFeel(nullptr);
+        linearPhaseToggle.setLookAndFeel(nullptr);
         tooltipsToggle.setLookAndFeel(nullptr);
         oscilloscopeToggle.setLookAndFeel(nullptr);
         scopeStereoToggle.setLookAndFeel(nullptr);
@@ -821,6 +838,12 @@ public:
         // Auto Gain row label
         auto agRow = inner.removeFromTop(24.0f);
         g.drawText("Auto Gain", agRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
+
+        inner.removeFromTop(6.0f);
+
+        // Linear Phase Dry row label
+        auto lpRow = inner.removeFromTop(24.0f);
+        g.drawText("Lin. Phase Dry", lpRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
 
         inner.removeFromTop(16.0f);
 
@@ -899,6 +922,13 @@ public:
         auto agRow = inner.removeFromTop(24.0f);
         agRow.removeFromLeft(140.0f);
         autoGainToggle.setBounds(agRow.removeFromLeft(50).reduced(0, 2).toNearestInt());
+
+        inner.removeFromTop(6.0f);
+
+        // Linear Phase Dry row
+        auto lpRow = inner.removeFromTop(24.0f);
+        lpRow.removeFromLeft(140.0f);
+        linearPhaseToggle.setBounds(lpRow.removeFromLeft(50).reduced(0, 2).toNearestInt());
 
         inner.removeFromTop(16.0f);
 
@@ -988,6 +1018,7 @@ private:
 
     juce::ToggleButton antiAliasToggle;
     juce::ToggleButton autoGainToggle;
+    juce::ToggleButton linearPhaseToggle;
     juce::ComboBox oversamplingCombo;
     juce::ComboBox windowScaleCombo;
     juce::ToggleButton tooltipsToggle;

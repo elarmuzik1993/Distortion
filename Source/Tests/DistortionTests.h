@@ -235,6 +235,14 @@ public:
     void runTest() override;
 };
 
+// PR-6: Linear-Phase Dry toggle — FIR oversampling path
+class LinearPhaseDryTest : public juce::UnitTest
+{
+public:
+    LinearPhaseDryTest() : UnitTest("Linear Phase Dry", TestCategories::DSP) {}
+    void runTest() override;
+};
+
 // PR-14: verify coefficient updates actually reach the per-channel Filter.
 class CoefficientPropagationTest : public juce::UnitTest
 {
@@ -425,6 +433,7 @@ inline void registerAllTests()
     static RTCleanOversamplingTest rtCleanOversamplingTest;
     static RTCleanToneSweepTest rtCleanToneSweepTest;
     static RTCleanSampleRateDriftTest rtCleanSampleRateDriftTest;
+    static LinearPhaseDryTest linearPhaseDryTest;
     static CoefficientPropagationTest coefficientPropagationTest;
     static StateIOTests stateIOTests;
     static GoldenAudioTests goldenAudioTests;

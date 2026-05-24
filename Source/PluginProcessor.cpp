@@ -118,13 +118,14 @@ PluginProcessor::PluginProcessor()
     distMixParam = parameters.getRawParameterValue("distMix");
     toneParam = parameters.getRawParameterValue("tone");
     waveshaperCleanParam = parameters.getRawParameterValue("waveshaperClean");
+    linearPhaseDryParam = parameters.getRawParameterValue("linearPhaseDry");
     // Verify all parameters were found
     jassert(inputGainParam && outputGainParam && distortionAmountParam
         && highPassFreqParam && subGuardFreqParam && clipTypeParam
         && lfoRateParam && lfoDepthParam && lfoWaveformParam && lfoEnabledParam && lfoDestinationParam && waveshaperMixParam
         && compPeakReductionParam && compMakeupGainParam && compRatioParam && compEnabledParam
         && autoGainEnabledParam && extremeEnabledParam && globalMixParam
-        && distMixParam && toneParam && waveshaperCleanParam);
+        && distMixParam && toneParam && waveshaperCleanParam && linearPhaseDryParam);
 
     // Initialize SmoothedValues with default sample rate to prevent assertions
     // They will be properly re-initialized in prepareToPlay() with actual sample rate
@@ -931,16 +932,19 @@ void PluginProcessor::handleAsyncUpdate()
 void PluginProcessor::rebuildOversampling(double sampleRate, int samplesPerBlock)
 {
     const int stages = requestedOversamplingStages.load(std::memory_order_acquire);
+    const bool linearPhase = linearPhaseDryParam && (linearPhaseDryParam->load() > 0.5f);
     const int numChannels = std::max(1, getTotalNumInputChannels());
     const double sr = sampleRate;
     const int currentBlockSize = samplesPerBlock;
     const bool needsRebuild = stages != currentOversamplingStages
+        || linearPhase != currentLinearPhase
         || currentNumChannels != numChannels
         || (stages > 0 && !oversampling);
 
     if (needsRebuild)
     {
         currentOversamplingStages = stages;
+        currentLinearPhase = linearPhase;
 
         if (stages == 0)
         {
@@ -949,10 +953,11 @@ void PluginProcessor::rebuildOversampling(double sampleRate, int samplesPerBlock
         }
         else
         {
+            const auto filterType = linearPhase
+                ? juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple
+                : juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR;
             oversampling = std::make_unique<juce::dsp::Oversampling<float>>(
-                numChannels, stages,
-                juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR,
-                false, false
+                numChannels, stages, filterType, false, false
             );
             oversampling->initProcessing(static_cast<size_t>(currentBlockSize));
             oversamplingFactor = oversampling->getOversamplingFactor();
@@ -2778,6 +2783,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         "Global Mix",
         juce::NormalisableRange<float>(0.0f, 100.0f, 0.1f),
         100.0f));  // Default 100% wet
+
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{ "linearPhaseDry", 1 },
+        "Linear Phase Dry",
+        false));  // Default OFF — preserves existing IIR character and sessions
 
     return { params.begin(), params.end() };
 }
