@@ -473,7 +473,10 @@ private:
     void applyPreHighpass(juce::AudioBuffer<float>& buffer);
     void applyPreCompression();
     bool applySubGuardSplit();  // returns false to abort processBlock (band buffer overflow)
-    void applyDistortionStage();
+    // Per-sample distortion: harmonic-density envelope + studio distortion + wet/dry mix.
+    // Called from both applySubGuardSplit branches (OFF: full-range; ACTIVE: high band only).
+    float applyDistortionStage(float inputSample, int channel,
+                               float sampleDrive, float sampleMixAmount, float sampleDistortionParam);
     void applyAutoGainAndISP();
     void applyLA2A();
 

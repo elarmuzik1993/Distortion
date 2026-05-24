@@ -2286,6 +2286,34 @@ void PluginProcessor::applyPreCompression()
     }
 }
 
+float PluginProcessor::applyDistortionStage(float inputSample, int channel,
+                                            float sampleDrive, float sampleMixAmount,
+                                            float sampleDistortionParam)
+{
+    // Bypass when distortion amount is negligible (< 0.5%)
+    if (sampleDistortionParam < 0.5f)
+        return inputSample;
+
+    // Update harmonic-density envelope (sub-linear scaling: louder input → fewer harmonics)
+    const float inputLevel = std::abs(inputSample);
+    if (inputLevel > harmonicDensityEnvelope[channel])
+        harmonicDensityEnvelope[channel] = harmonicDensityAttackCoeff * harmonicDensityEnvelope[channel]
+                                         + (1.0f - harmonicDensityAttackCoeff) * inputLevel;
+    else
+        harmonicDensityEnvelope[channel] = harmonicDensityReleaseCoeff * harmonicDensityEnvelope[channel]
+                                         + (1.0f - harmonicDensityReleaseCoeff) * inputLevel;
+
+    const float clampedEnv = std::max(0.0f, harmonicDensityEnvelope[channel]);
+    const float harmonicScale = juce::jlimit(DSPConstants::HARMONIC_DENSITY_MIN_SCALE, 1.0f,
+                                             1.0f / (1.0f + std::sqrt(clampedEnv)));
+
+    const float distorted = applyStudioDistortion(inputSample, pb_currentInputGain, sampleDrive,
+        pb_clipType, pb_extremeEnabled ? 1.0f : harmonicScale, channel);
+
+    // Wet/dry mix (per-sample interpolated to prevent zipper noise)
+    return inputSample * (1.0f - sampleMixAmount) + distorted * sampleMixAmount;
+}
+
 bool PluginProcessor::applySubGuardSplit()
 {
     pb_subGuardActive = (pb_subGuardFreq > 1.0f);
@@ -2331,32 +2359,8 @@ bool PluginProcessor::applySubGuardSplit()
             for (size_t channel = 0; channel < pb_numChannels; ++channel)
             {
                 auto* channelData = pb_oversampledBlock.getChannelPointer(channel);
-                const int ch = static_cast<int>(channel);
-                float inputSample = channelData[sample];
-
-                if (sampleDistortionParam < 0.5f)
-                {
-                    channelData[sample] = inputSample;
-                }
-                else
-                {
-                    const float inputLevel = std::abs(inputSample);
-                    if (inputLevel > harmonicDensityEnvelope[ch])
-                        harmonicDensityEnvelope[ch] = harmonicDensityAttackCoeff * harmonicDensityEnvelope[ch]
-                                                    + (1.0f - harmonicDensityAttackCoeff) * inputLevel;
-                    else
-                        harmonicDensityEnvelope[ch] = harmonicDensityReleaseCoeff * harmonicDensityEnvelope[ch]
-                                                    + (1.0f - harmonicDensityReleaseCoeff) * inputLevel;
-
-                    const float clampedEnv = std::max(0.0f, harmonicDensityEnvelope[ch]);
-                    const float harmonicScale = juce::jlimit(DSPConstants::HARMONIC_DENSITY_MIN_SCALE, 1.0f,
-                                                            1.0f / (1.0f + std::sqrt(clampedEnv)));
-
-                    float distorted = applyStudioDistortion(inputSample, pb_currentInputGain, sampleDrive, pb_clipType,
-                        pb_extremeEnabled ? 1.0f : harmonicScale, ch);
-
-                    channelData[sample] = inputSample * (1.0f - sampleMixAmount) + distorted * sampleMixAmount;
-                }
+                channelData[sample] = applyDistortionStage(channelData[sample],
+                    static_cast<int>(channel), sampleDrive, sampleMixAmount, sampleDistortionParam);
             }
 
             pb_currentInputGain += pb_gainDelta;
@@ -2462,32 +2466,8 @@ bool PluginProcessor::applySubGuardSplit()
         for (size_t channel = 0; channel < pb_numChannels; ++channel)
         {
             auto* highBandData = highBandBuffer.getWritePointer(static_cast<int>(channel));
-            const int ch = static_cast<int>(channel);
-            float inputSample = highBandData[sample];
-
-            if (sampleDistortionParam < 0.5f)
-            {
-                highBandData[sample] = inputSample;
-            }
-            else
-            {
-                const float inputLevel = std::abs(inputSample);
-                if (inputLevel > harmonicDensityEnvelope[ch])
-                    harmonicDensityEnvelope[ch] = harmonicDensityAttackCoeff * harmonicDensityEnvelope[ch]
-                                                + (1.0f - harmonicDensityAttackCoeff) * inputLevel;
-                else
-                    harmonicDensityEnvelope[ch] = harmonicDensityReleaseCoeff * harmonicDensityEnvelope[ch]
-                                                + (1.0f - harmonicDensityReleaseCoeff) * inputLevel;
-
-                const float clampedEnv = std::max(0.0f, harmonicDensityEnvelope[ch]);
-                const float harmonicScale = juce::jlimit(DSPConstants::HARMONIC_DENSITY_MIN_SCALE, 1.0f,
-                                                        1.0f / (1.0f + std::sqrt(clampedEnv)));
-
-                float distorted = applyStudioDistortion(inputSample, pb_currentInputGain, sampleDrive, pb_clipType,
-                    pb_extremeEnabled ? 1.0f : harmonicScale, ch);
-
-                highBandData[sample] = inputSample * (1.0f - sampleMixAmount) + distorted * sampleMixAmount;
-            }
+            highBandData[sample] = applyDistortionStage(highBandData[sample],
+                static_cast<int>(channel), sampleDrive, sampleMixAmount, sampleDistortionParam);
         }
 
         pb_currentInputGain += pb_gainDelta;
