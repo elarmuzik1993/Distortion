@@ -12,6 +12,7 @@
 
 #include <JuceHeader.h>
 #include <juce_dsp/juce_dsp.h>
+#include "LinearRamp.h"
 
 //==============================================================================
 // DSP Constants - Centralized configuration for audio processing algorithms
@@ -424,10 +425,11 @@ private:
     double lastSampleRate = 0.0;  // Track sample rate changes
     double lastOversampledSampleRate = 0.0;  // Track oversampled rate for distortion filters
 
-    // Manual parameter smoothing for oversampled domain (to avoid SmoothedValue issues)
-    float lastInputGain = 1.0f;
-    float lastDistortionDrive = 1.0f;
-    float lastDistMix = 1.0f;  // Per-sample interpolation for distortion wet/dry mix
+    // Per-sample linear interpolators for the oversampled-domain hot loop
+    // (replace the old lastFoo/fooDelta/currentFoo triads — see LinearRamp.h).
+    LinearRamp<float> inputGainRamp { 1.0f };
+    LinearRamp<float> driveRamp     { 1.0f };
+    LinearRamp<float> distMixRamp   { 1.0f };
 
     juce::AudioBuffer<float> scopeBuffer;
     juce::AbstractFifo scopeFifo;
@@ -463,12 +465,7 @@ private:
     float pb_subGuardFreq             = 0.0f;
     float pb_outGainParam             = 50.0f;  // raw, for output gain LFO modulation
     bool  pb_subGuardActive           = false;  // set by applySubGuardSplit
-    float pb_currentInputGain         = 1.0f;
-    float pb_gainDelta                = 0.0f;
-    float pb_currentDrive             = 1.0f;
-    float pb_driveDelta               = 0.0f;
-    float pb_currentMixAmount         = 1.0f;
-    float pb_mixDelta                 = 0.0f;
+    // (Per-sample interpolation moved to inputGainRamp/driveRamp/distMixRamp — see LinearRamp.h)
 
     // Stage helper methods extracted from processBlock (PR-8)
     void applyPreHighpass(juce::AudioBuffer<float>& buffer);
@@ -476,8 +473,10 @@ private:
     bool applySubGuardSplit();  // returns false to abort processBlock (band buffer overflow)
     // Per-sample distortion: harmonic-density envelope + studio distortion + wet/dry mix.
     // Called from both applySubGuardSplit branches (OFF: full-range; ACTIVE: high band only).
+    // All per-sample params are explicit so the caller controls ramp advancement.
     float applyDistortionStage(float inputSample, int channel,
-                               float sampleDrive, float sampleMixAmount, float sampleDistortionParam);
+                               float currentGain, float sampleDrive,
+                               float sampleMixAmount, float sampleDistortionParam);
     void applyAutoGainAndISP(juce::AudioBuffer<float>& buffer);
     void applyLA2A();
 
