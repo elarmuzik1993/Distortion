@@ -2064,6 +2064,105 @@ bool PluginProcessor::applySubGuardSplit()
 
 // Helper method called from audio thread to safely reset DSP state
 
+void PluginProcessor::applyLA2A()
+{
+    // LA-2A full-band compression (oversampled domain) — simple full-band,
+    // no crossover, no wet/dry blend. Called from applyAutoGainAndISP.
+    if (!pb_compEnabled || pb_compPeakReduction <= 0.0f)
+        return;
+
+    const size_t oversampledNumSamples = pb_oversampledBlock.getNumSamples();
+    const int compNumChannels = static_cast<int>(pb_oversampledBlock.getNumChannels());
+    const int compNumSamples = static_cast<int>(oversampledNumSamples);
+
+    const float threshold = DSPConstants::COMP_THRESHOLD_MIN_DB +
+                          (pb_compPeakReduction * DSPConstants::COMP_THRESHOLD_RANGE_DB / 100.0f);
+
+    const float ratio = (pb_compRatioMode == 0) ? DSPConstants::COMP_RATIO_COMPRESS : DSPConstants::COMP_RATIO_LIMIT;
+
+    const float makeupGainDB = (pb_compMakeupGain - 50.0f) * (DSPConstants::COMP_MAKEUP_RANGE_DB / 50.0f);
+    const float makeupGainLinear = juce::Decibels::decibelsToGain(makeupGainDB);
+
+    const float attackCoeff = compAttackCoeffOversampled;
+    const float releaseCoeff = compReleaseCoeffOversampled;
+
+    float maxGainReductionDB = 0.0f;
+
+    for (int sampleIdx = 0; sampleIdx < compNumSamples; ++sampleIdx)
+    {
+        // RMS detection across channels
+        float sumSquares = 0.0f;
+        for (int ch = 0; ch < compNumChannels; ++ch)
+        {
+            const float sampleValue = pb_oversampledBlock.getChannelPointer(static_cast<size_t>(ch))[sampleIdx];
+            sumSquares += sampleValue * sampleValue;
+        }
+
+        const float rms = std::sqrt(sumSquares / compNumChannels);
+
+        compRmsHistory = compRmsHistoryCoeffOversampled * compRmsHistory +
+                        (1.0f - compRmsHistoryCoeffOversampled) * rms;
+
+        const float inputLevelDB = juce::Decibels::gainToDecibels(rms + 0.00001f);
+
+        float gainReductionDB = 0.0f;
+        if (inputLevelDB > threshold)
+        {
+            const float overThresholdDB = inputLevelDB - threshold;
+            const float kneeWidth = DSPConstants::COMP_KNEE_WIDTH_DB;
+            if (overThresholdDB < kneeWidth)
+            {
+                const float kneeRatio = overThresholdDB / kneeWidth;
+                gainReductionDB = overThresholdDB * kneeRatio * (1.0f - 1.0f / ratio);
+            }
+            else
+            {
+                gainReductionDB = kneeWidth * (1.0f - 1.0f / ratio) +
+                    (overThresholdDB - kneeWidth) * (1.0f - 1.0f / ratio);
+            }
+        }
+
+        // Optical-cell envelope follower
+        const float targetGainReduction = juce::Decibels::decibelsToGain(-gainReductionDB);
+        if (targetGainReduction < compEnvelopeState)
+            compEnvelopeState = attackCoeff * compEnvelopeState + (1.0f - attackCoeff) * targetGainReduction;
+        else
+            compEnvelopeState = releaseCoeff * compEnvelopeState + (1.0f - releaseCoeff) * targetGainReduction;
+
+        maxGainReductionDB = juce::jmax(maxGainReductionDB, gainReductionDB);
+
+        // Apply compression, tube harmonics, makeup, soft clip per channel
+        for (int ch = 0; ch < compNumChannels; ++ch)
+        {
+            auto* channelData = pb_oversampledBlock.getChannelPointer(static_cast<size_t>(ch));
+            float sampleValue = channelData[sampleIdx];
+
+            sampleValue *= compEnvelopeState;
+
+            const float tubeInput = sampleValue * DSPConstants::COMP_TUBE_DRIVE;
+            const float tubeSaturation = FastMath::tanh(tubeInput);
+            sampleValue = sampleValue * (1.0f - DSPConstants::COMP_TUBE_BLEND) +
+                         tubeSaturation * DSPConstants::COMP_TUBE_BLEND;
+
+            sampleValue *= makeupGainLinear;
+
+            // Conditional soft clip (transparent below threshold)
+            const float absSample = std::abs(sampleValue);
+            if (absSample > DSPConstants::COMP_SOFT_CLIP_THRESHOLD)
+            {
+                const float sign = (sampleValue > 0.0f) ? 1.0f : -1.0f;
+                const float excess = absSample - DSPConstants::COMP_SOFT_CLIP_THRESHOLD;
+                sampleValue = sign * (DSPConstants::COMP_SOFT_CLIP_THRESHOLD
+                            + FastMath::tanh(excess * 4.0f) * DSPConstants::COMP_SOFT_CLIP_HEADROOM);
+            }
+
+            channelData[sampleIdx] = sampleValue;
+        }
+    }
+
+    currentGainReductionDB.store(maxGainReductionDB, std::memory_order_relaxed);
+}
+
 void PluginProcessor::applyAutoGainAndISP(juce::AudioBuffer<float>& buffer)
 {
     // ========== AUTO-GAIN COMPENSATION: Measure output RMS and apply compensation ==========
@@ -2253,120 +2352,7 @@ void PluginProcessor::applyAutoGainAndISP(juce::AudioBuffer<float>& buffer)
         applyWaveshaper();
     }
 
-    // ========== LA-2A FULL-BAND COMPRESSION (oversampled domain) ==========
-    // Simple full-band compression without crossover or wet/dry blend
-    if (pb_compEnabled && pb_compPeakReduction > 0.0f)
-    {
-        const size_t oversampledNumSamples = pb_oversampledBlock.getNumSamples();
-        const int compNumChannels = static_cast<int>(pb_oversampledBlock.getNumChannels());
-        const int compNumSamples = static_cast<int>(oversampledNumSamples);
-
-        // Map peak reduction (0-100) to threshold in dB
-        const float threshold = DSPConstants::COMP_THRESHOLD_MIN_DB +
-                              (pb_compPeakReduction * DSPConstants::COMP_THRESHOLD_RANGE_DB / 100.0f);
-
-        // Ratio: Compress mode = 3:1, Limit mode = 12:1
-        const float ratio = (pb_compRatioMode == 0) ? DSPConstants::COMP_RATIO_COMPRESS : DSPConstants::COMP_RATIO_LIMIT;
-
-        // Map makeup gain
-        const float makeupGainDB = (pb_compMakeupGain - 50.0f) * (DSPConstants::COMP_MAKEUP_RANGE_DB / 50.0f);
-        const float makeupGainLinear = juce::Decibels::decibelsToGain(makeupGainDB);
-
-        // Use OVERSAMPLED coefficients
-        const float attackCoeff = compAttackCoeffOversampled;
-        const float releaseCoeff = compReleaseCoeffOversampled;
-
-        float maxGainReductionDB = 0.0f;
-
-        for (int sampleIdx = 0; sampleIdx < compNumSamples; ++sampleIdx)
-        {
-            // Calculate RMS across channels for detection
-            float sumSquares = 0.0f;
-            for (int ch = 0; ch < compNumChannels; ++ch)
-            {
-                const float sampleValue = pb_oversampledBlock.getChannelPointer(static_cast<size_t>(ch))[sampleIdx];
-                sumSquares += sampleValue * sampleValue;
-            }
-
-            const float rms = std::sqrt(sumSquares / compNumChannels);
-
-            // Update RMS history with OVERSAMPLED coefficient
-            compRmsHistory = compRmsHistoryCoeffOversampled * compRmsHistory +
-                            (1.0f - compRmsHistoryCoeffOversampled) * rms;
-
-            // Convert to dB
-            const float inputLevelDB = juce::Decibels::gainToDecibels(rms + 0.00001f);
-
-            // Calculate gain reduction needed
-            float gainReductionDB = 0.0f;
-            if (inputLevelDB > threshold)
-            {
-                const float overThresholdDB = inputLevelDB - threshold;
-
-                // Soft knee for smooth LA-2A character
-                const float kneeWidth = DSPConstants::COMP_KNEE_WIDTH_DB;
-                if (overThresholdDB < kneeWidth)
-                {
-                    const float kneeRatio = overThresholdDB / kneeWidth;
-                    gainReductionDB = overThresholdDB * kneeRatio * (1.0f - 1.0f / ratio);
-                }
-                else
-                {
-                    gainReductionDB = kneeWidth * (1.0f - 1.0f / ratio) +
-                        (overThresholdDB - kneeWidth) * (1.0f - 1.0f / ratio);
-                }
-            }
-
-            // Optical cell envelope follower
-            const float targetGainReduction = juce::Decibels::decibelsToGain(-gainReductionDB);
-
-            if (targetGainReduction < compEnvelopeState)
-            {
-                compEnvelopeState = attackCoeff * compEnvelopeState + (1.0f - attackCoeff) * targetGainReduction;
-            }
-            else
-            {
-                compEnvelopeState = releaseCoeff * compEnvelopeState + (1.0f - releaseCoeff) * targetGainReduction;
-            }
-
-            maxGainReductionDB = juce::jmax(maxGainReductionDB, gainReductionDB);
-
-            // Apply compression and makeup gain to all channels
-            for (int ch = 0; ch < compNumChannels; ++ch)
-            {
-                auto* channelData = pb_oversampledBlock.getChannelPointer(static_cast<size_t>(ch));
-                float sampleValue = channelData[sampleIdx];
-
-                // Apply compression
-                sampleValue *= compEnvelopeState;
-
-                // Tube harmonic generation
-                const float tubeInput = sampleValue * DSPConstants::COMP_TUBE_DRIVE;
-                const float tubeSaturation = FastMath::tanh(tubeInput);
-
-                sampleValue = sampleValue * (1.0f - DSPConstants::COMP_TUBE_BLEND) +
-                             tubeSaturation * DSPConstants::COMP_TUBE_BLEND;
-
-                sampleValue *= makeupGainLinear;
-
-                // Conditional soft clip (transparent below -1dBFS, prevents overs above)
-                {
-                    const float absSample = std::abs(sampleValue);
-                    if (absSample > DSPConstants::COMP_SOFT_CLIP_THRESHOLD)
-                    {
-                        const float sign = (sampleValue > 0.0f) ? 1.0f : -1.0f;
-                        const float excess = absSample - DSPConstants::COMP_SOFT_CLIP_THRESHOLD;
-                        sampleValue = sign * (DSPConstants::COMP_SOFT_CLIP_THRESHOLD
-                                    + FastMath::tanh(excess * 4.0f) * DSPConstants::COMP_SOFT_CLIP_HEADROOM);
-                    }
-                }
-
-                channelData[sampleIdx] = sampleValue;
-            }
-        }
-
-        currentGainReductionDB.store(maxGainReductionDB, std::memory_order_relaxed);
-    }
+    applyLA2A();
 
     // ========== SOFT CLIPPER (ISP Protection) ==========
     // Gentle ceiling at -0.3 dBFS to prevent inter-sample overs from oversampling collapse
