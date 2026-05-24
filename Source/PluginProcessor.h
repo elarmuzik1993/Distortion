@@ -472,7 +472,7 @@ private:
     // Stage helper methods extracted from processBlock (PR-8)
     void applyPreHighpass(juce::AudioBuffer<float>& buffer);
     void applyPreCompression();
-    void applySubGuardSplit();
+    bool applySubGuardSplit();  // returns false to abort processBlock (band buffer overflow)
     void applyDistortionStage();
     void applyAutoGainAndISP();
     void applyLA2A();

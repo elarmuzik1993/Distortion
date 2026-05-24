@@ -1404,11 +1404,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const float targetMixAmount = modulatedDistMix / 100.0f;  // 0.0 to 1.0
     const float mixDelta = (targetMixAmount - lastDistMix) / static_cast<float>(actualOversampledSamples);
 
-    // Start from last block's values
-    float currentInputGain = lastInputGain;
-    float currentDrive = lastDistortionDrive;
-    float currentMixAmount = lastDistMix;
-
     if (actualOversampledSamples > static_cast<size_t>(lowBandBuffer.getNumSamples()))
     {
         debugHadBufferOverflow.store(true, std::memory_order_relaxed);
@@ -1419,16 +1414,18 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Get the actual oversampled sample rate
     const double oversampledSR = getSampleRate() * oversamplingFactor;
 
-    // Publish oversampled-domain context to block-scope members for stage helpers
+    // Publish oversampled-domain context to block-scope members for stage helpers.
+    // Per-sample interpolated params (currentInputGain/Drive/MixAmount) are mutated
+    // inside applySubGuardSplit; their final values feed lastInputGain/etc. below.
     pb_numSamples       = actualOversampledSamples;
     pb_numChannels      = pb_oversampledBlock.getNumChannels();
     pb_oversampledSR    = oversampledSR;
     pb_gainDelta        = gainDelta;
     pb_driveDelta       = driveDelta;
     pb_mixDelta         = mixDelta;
-    pb_currentInputGain = currentInputGain;
-    pb_currentDrive     = currentDrive;
-    pb_currentMixAmount = currentMixAmount;
+    pb_currentInputGain = lastInputGain;
+    pb_currentDrive     = lastDistortionDrive;
+    pb_currentMixAmount = lastDistMix;
 
     // Sub Guard filter coefficients are updated dynamically in the processing block below
     // No need for static sample rate change detection
@@ -1460,267 +1457,14 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             autoGainInputEnvelope = autoGainReleaseCoeff * autoGainInputEnvelope + (1.0f - autoGainReleaseCoeff) * inputRms;
     }
 
-    // Sub Guard variable-slope crossover processing
-    // Check if Sub Guard is OFF (value <= 1.0 Hz to account for smoothing)
-    if (subGuardFreq <= 1.0f)
-    {
-        // === SUB GUARD OFF: Full-range distortion (no band-split) ===
-
-        // Apply distortion to entire oversampledBlock (all frequencies)
-        // Per-sample LFO phase increment (oversampled rate: divide by oversamplingFactor)
-        const float lfoOversampledPhaseInc = lfoPhaseIncrement / static_cast<float>(oversamplingFactor);
-
-        for (size_t sample = 0; sample < numSamples; ++sample)
-        {
-            // Per-sample LFO for destinations 0 (distortion) and 3 (dist mix)
-            float sampleDrive = currentDrive;
-            float sampleMixAmount = currentMixAmount;
-            float sampleDistortionParam = modulatedDistortionParam;
-
-            if (perSampleLFO && lfoEnabled && lfoPhaseIncrement > 0.0f)
-            {
-                float sampleLfoValue = generateLFOWaveform(lfoPhase, lfoWaveform);
-                if (std::isnan(sampleLfoValue) || std::isinf(sampleLfoValue))
-                    sampleLfoValue = 0.0f;
-                const float sampleLfoMod = sampleLfoValue * lfoDepth / 100.0f;
-
-                if (lfoDestination == 0)  // Distortion Amount
-                {
-                    sampleDistortionParam = juce::jlimit(0.0f, 100.0f,
-                        distortionParam + sampleLfoMod * 50.0f);
-                    sampleDrive = 1.0f + (sampleDistortionParam / 100.0f) * 3.0f;
-                    if (extremeEnabled) sampleDrive *= 4.0f;
-                }
-                else if (lfoDestination == 3)  // Dist Mix
-                {
-                    const float modMix = juce::jlimit(0.0f, 100.0f,
-                        distMix + sampleLfoMod * 50.0f);
-                    sampleMixAmount = modMix / 100.0f;
-                }
-                // Destination 4 (output gain) handled in the output gain loop below
-
-                // Advance LFO phase per oversampled sample
-                lfoPhase += lfoOversampledPhaseInc;
-                if (lfoPhase >= 1.0f)
-                    lfoPhase -= 1.0f;
-            }
-
-            for (size_t channel = 0; channel < numChannels; ++channel)
-            {
-                auto* channelData = pb_oversampledBlock.getChannelPointer(channel);
-                const int ch = static_cast<int>(channel);
-
-                // Read input
-                float inputSample = channelData[sample];
-
-                // Bypass distortion if amount is negligible (< 0.5%)
-                if (sampleDistortionParam < 0.5f)
-                {
-                    channelData[sample] = inputSample;  // Pure bypass
-                }
-                else
-                {
-                    // Update harmonic density envelope for sub-linear scaling
-                    const float inputLevel = std::abs(inputSample);
-                    if (inputLevel > harmonicDensityEnvelope[ch])
-                        harmonicDensityEnvelope[ch] = harmonicDensityAttackCoeff * harmonicDensityEnvelope[ch]
-                                                    + (1.0f - harmonicDensityAttackCoeff) * inputLevel;
-                    else
-                        harmonicDensityEnvelope[ch] = harmonicDensityReleaseCoeff * harmonicDensityEnvelope[ch]
-                                                    + (1.0f - harmonicDensityReleaseCoeff) * inputLevel;
-
-                    // Calculate inverse harmonic scale
-                    const float clampedEnv = std::max(0.0f, harmonicDensityEnvelope[ch]);
-                    const float harmonicScale = juce::jlimit(DSPConstants::HARMONIC_DENSITY_MIN_SCALE, 1.0f,
-                                                            1.0f / (1.0f + std::sqrt(clampedEnv)));
-
-                    // Apply studio distortion with sub-linear harmonic scaling
-                    float distorted = applyStudioDistortion(inputSample, currentInputGain, sampleDrive, clipType,
-                        extremeEnabled ? 1.0f : harmonicScale, ch);
-
-                    // Wet/Dry mix (per-sample interpolated to prevent zipper noise)
-                    channelData[sample] = inputSample * (1.0f - sampleMixAmount) + distorted * sampleMixAmount;
-                }
-            }
-
-            // Manually step the smoothed parameters AFTER processing all channels
-            currentInputGain += gainDelta;
-            currentDrive += driveDelta;
-            currentMixAmount += mixDelta;
-        }
-    }
-    else
-    {
-        // === SUB GUARD ACTIVE: Variable-slope clean low + Distorted high ===
-
-        // Update Sub Guard frequency with smoothing
-        smoothedSubGuardFreq.setTargetValue(subGuardFreq);
-        const float currentSubGuardFreq = smoothedSubGuardFreq.getNextValue();
-
-        // Update filter coefficients if frequency changed significantly
-        if (std::abs(currentSubGuardFreq - lastSubGuardFreq) > 0.5f)
-        {
-            updateSubGuardCoefficients(currentSubGuardFreq, oversampledSR);
-            lastSubGuardFreq = currentSubGuardFreq;
-        }
-
-        // Determine which filter order to use based on frequency
-        const SubGuardFilterOrder filterOrder = determineSubGuardFilterOrder(currentSubGuardFreq);
-
-        // SAFETY CHECK: Ensure we have enough buffer space
-        const int requiredBufferSize = static_cast<int>(numSamples);
-        if (requiredBufferSize > lowBandBuffer.getNumSamples() || requiredBufferSize > highBandBuffer.getNumSamples())
-        {
-            debugHadBufferOverflow.store(true, std::memory_order_relaxed);
-            // Skip band-split processing to prevent crash
-            return;
-        }
-
-        // Copy input to both band buffers (with bounds checking)
-        // Note: copyFrom overwrites exactly numSamples; tail is never read via getSubBlock(0, numSamples).
-        for (size_t channel = 0; channel < numChannels; ++channel)
-        {
-            const int channelIdx = static_cast<int>(channel);
-            const int sampleCount = static_cast<int>(numSamples);
-
-            lowBandBuffer.copyFrom(channelIdx, 0,
-                pb_oversampledBlock.getChannelPointer(channel),
-                sampleCount);
-            highBandBuffer.copyFrom(channelIdx, 0,
-                pb_oversampledBlock.getChannelPointer(channel),
-                sampleCount);
-        }
-
-        // Filter the bands using the appropriate filter order
-        auto lowBlock = juce::dsp::AudioBlock<float>(lowBandBuffer).getSubBlock(0, numSamples);
-        auto highBlock = juce::dsp::AudioBlock<float>(highBandBuffer).getSubBlock(0, numSamples);
-
-        // Apply filters based on determined order
-        switch (filterOrder)
-        {
-            case SubGuardFilterOrder::LR12:  // AGGRESSIVE - 12dB/octave
-                subGuardLP12.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
-                subGuardHP12.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
-                break;
-
-            case SubGuardFilterOrder::LR18:  // CONTROL - 18dB/octave
-                subGuardLP18_1.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
-                subGuardLP18_2.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
-                subGuardHP18_1.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
-                subGuardHP18_2.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
-                break;
-
-            case SubGuardFilterOrder::LR24:  // PRESERVE - 24dB/octave
-            default:
-                lowPassFilter1.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
-                lowPassFilter2.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
-                highPassFilter1.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
-                highPassFilter2.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
-                break;
-        }
-
-        // Apply studio distortion ONLY to the high band (with pre/post LP + DC block)
-        // Per-sample LFO phase increment (oversampled rate)
-        const float lfoOversampledPhaseIncSG = lfoPhaseIncrement / static_cast<float>(oversamplingFactor);
-
-        for (size_t sample = 0; sample < numSamples; ++sample)
-        {
-            // Per-sample LFO for destinations 0 (distortion) and 3 (dist mix)
-            float sampleDrive = currentDrive;
-            float sampleMixAmount = currentMixAmount;
-            float sampleDistortionParam = modulatedDistortionParam;
-
-            if (perSampleLFO && lfoEnabled && lfoPhaseIncrement > 0.0f)
-            {
-                float sampleLfoValue = generateLFOWaveform(lfoPhase, lfoWaveform);
-                if (std::isnan(sampleLfoValue) || std::isinf(sampleLfoValue))
-                    sampleLfoValue = 0.0f;
-                const float sampleLfoMod = sampleLfoValue * lfoDepth / 100.0f;
-
-                if (lfoDestination == 0)  // Distortion Amount
-                {
-                    sampleDistortionParam = juce::jlimit(0.0f, 100.0f,
-                        distortionParam + sampleLfoMod * 50.0f);
-                    sampleDrive = 1.0f + (sampleDistortionParam / 100.0f) * 3.0f;
-                    if (extremeEnabled) sampleDrive *= 4.0f;
-                }
-                else if (lfoDestination == 3)  // Dist Mix
-                {
-                    const float modMix = juce::jlimit(0.0f, 100.0f,
-                        distMix + sampleLfoMod * 50.0f);
-                    sampleMixAmount = modMix / 100.0f;
-                }
-
-                // Advance LFO phase per oversampled sample
-                lfoPhase += lfoOversampledPhaseIncSG;
-                if (lfoPhase >= 1.0f)
-                    lfoPhase -= 1.0f;
-            }
-
-            for (size_t channel = 0; channel < numChannels; ++channel)
-            {
-                auto* highBandData = highBandBuffer.getWritePointer(static_cast<int>(channel));
-                const int ch = static_cast<int>(channel);
-
-                // Read input (already band-split)
-                float inputSample = highBandData[sample];
-
-                // Bypass distortion if amount is negligible (< 0.5%)
-                if (sampleDistortionParam < 0.5f)
-                {
-                    highBandData[sample] = inputSample;  // Pure bypass
-                }
-                else
-                {
-                    // Update harmonic density envelope for sub-linear scaling
-                    const float inputLevel = std::abs(inputSample);
-                    if (inputLevel > harmonicDensityEnvelope[ch])
-                        harmonicDensityEnvelope[ch] = harmonicDensityAttackCoeff * harmonicDensityEnvelope[ch]
-                                                    + (1.0f - harmonicDensityAttackCoeff) * inputLevel;
-                    else
-                        harmonicDensityEnvelope[ch] = harmonicDensityReleaseCoeff * harmonicDensityEnvelope[ch]
-                                                    + (1.0f - harmonicDensityReleaseCoeff) * inputLevel;
-
-                    // Calculate inverse harmonic scale: high input → fewer harmonics (prevents harshness)
-                    const float clampedEnv = std::max(0.0f, harmonicDensityEnvelope[ch]);
-                    const float harmonicScale = juce::jlimit(DSPConstants::HARMONIC_DENSITY_MIN_SCALE, 1.0f,
-                                                            1.0f / (1.0f + std::sqrt(clampedEnv)));
-
-                    // Apply studio distortion with sub-linear harmonic scaling
-                    float distorted = applyStudioDistortion(inputSample, currentInputGain, sampleDrive, clipType,
-                        extremeEnabled ? 1.0f : harmonicScale, ch);
-
-                    // Wet/Dry mix (per-sample interpolated to prevent zipper noise)
-                    highBandData[sample] = inputSample * (1.0f - sampleMixAmount) + distorted * sampleMixAmount;
-                }
-            }
-
-            // Manually step the smoothed parameters AFTER processing all channels
-            currentInputGain += gainDelta;
-            currentDrive += driveDelta;
-            currentMixAmount += mixDelta;
-        }
-
-        // Recombine: Clean low + Distorted high
-        for (size_t channel = 0; channel < numChannels; ++channel)
-        {
-            auto* outputData = pb_oversampledBlock.getChannelPointer(channel);
-            const auto* lowData = lowBandBuffer.getReadPointer(static_cast<int>(channel));
-            const auto* highData = highBandBuffer.getReadPointer(static_cast<int>(channel));
-
-            for (size_t sample = 0; sample < numSamples; ++sample)
-            {
-                outputData[sample] = lowData[sample] + highData[sample];
-            }
-        }
-    }  // end else (Sub Guard active)
+    if (!applySubGuardSplit())
+        return;  // band-split safety check failed — bail entire processBlock
 
     // ========== SUB GUARD: Remove clean low band before post-distortion processing ==========
     // When Sub Guard is active, subtract the clean low band from oversampledBlock
     // so that waveshaper, tone filter, and compressor only process the high band.
     // The clean low band is added back after all nonlinear processing is complete.
-    const bool subGuardActive = (subGuardFreq > 1.0f);
-    if (subGuardActive)
+    if (pb_subGuardActive)
     {
         for (size_t channel = 0; channel < numChannels; ++channel)
         {
@@ -1779,9 +1523,9 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     }
 
     // Store final parameter values for next block's interpolation
-    lastInputGain = currentInputGain;
-    lastDistortionDrive = currentDrive;
-    lastDistMix = currentMixAmount;
+    lastInputGain = pb_currentInputGain;
+    lastDistortionDrive = pb_currentDrive;
+    lastDistMix = pb_currentMixAmount;
 
     // Check for corruption after distortion processing, before downsampling
     bool hasNaN = false;
@@ -2067,7 +1811,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Apply an identical tone LP (with its own state) to the clean low band so both
     // bands share the same magnitude/phase response at the recombine sum. Gated on the
     // same bypass condition as the high-branch tone filter.
-    if (subGuardActive && toneFreq < 19500.0f && toneFilterLow.state != nullptr)
+    if (pb_subGuardActive && toneFreq < 19500.0f && toneFilterLow.state != nullptr)
     {
         auto lowBlockTone = juce::dsp::AudioBlock<float>(lowBandBuffer).getSubBlock(0, numSamples);
         toneFilterLow.process(juce::dsp::ProcessContextReplacing<float>(lowBlockTone));
@@ -2076,7 +1820,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // ========== SUB GUARD: Add clean low band back after all nonlinear processing ==========
     // The clean sub bypasses: auto-gain, waveshaper, compressor, and soft clipper
     // (tone filter is mirrored above for phase coherence at recombine)
-    if (subGuardActive)
+    if (pb_subGuardActive)
     {
         for (size_t channel = 0; channel < numChannels; ++channel)
         {
@@ -2540,6 +2284,229 @@ void PluginProcessor::applyPreCompression()
             data[sample] = input * preCompEnvelope[ch];
         }
     }
+}
+
+bool PluginProcessor::applySubGuardSplit()
+{
+    pb_subGuardActive = (pb_subGuardFreq > 1.0f);
+
+    // === SUB GUARD OFF: Full-range distortion (no band-split) ===
+    if (!pb_subGuardActive)
+    {
+        // Per-sample LFO phase increment (oversampled rate: divide by oversamplingFactor)
+        const float lfoOversampledPhaseInc = pb_lfoPhaseIncrement / static_cast<float>(oversamplingFactor);
+
+        for (size_t sample = 0; sample < pb_numSamples; ++sample)
+        {
+            float sampleDrive = pb_currentDrive;
+            float sampleMixAmount = pb_currentMixAmount;
+            float sampleDistortionParam = pb_modulatedDistortionParam;
+
+            if (pb_perSampleLFO && pb_lfoEnabled && pb_lfoPhaseIncrement > 0.0f)
+            {
+                float sampleLfoValue = generateLFOWaveform(lfoPhase, pb_lfoWaveform);
+                if (std::isnan(sampleLfoValue) || std::isinf(sampleLfoValue))
+                    sampleLfoValue = 0.0f;
+                const float sampleLfoMod = sampleLfoValue * pb_lfoDepth / 100.0f;
+
+                if (pb_lfoDestination == 0)
+                {
+                    sampleDistortionParam = juce::jlimit(0.0f, 100.0f,
+                        pb_distortionParam + sampleLfoMod * 50.0f);
+                    sampleDrive = 1.0f + (sampleDistortionParam / 100.0f) * 3.0f;
+                    if (pb_extremeEnabled) sampleDrive *= 4.0f;
+                }
+                else if (pb_lfoDestination == 3)
+                {
+                    const float modMix = juce::jlimit(0.0f, 100.0f,
+                        pb_distMix + sampleLfoMod * 50.0f);
+                    sampleMixAmount = modMix / 100.0f;
+                }
+
+                lfoPhase += lfoOversampledPhaseInc;
+                if (lfoPhase >= 1.0f)
+                    lfoPhase -= 1.0f;
+            }
+
+            for (size_t channel = 0; channel < pb_numChannels; ++channel)
+            {
+                auto* channelData = pb_oversampledBlock.getChannelPointer(channel);
+                const int ch = static_cast<int>(channel);
+                float inputSample = channelData[sample];
+
+                if (sampleDistortionParam < 0.5f)
+                {
+                    channelData[sample] = inputSample;
+                }
+                else
+                {
+                    const float inputLevel = std::abs(inputSample);
+                    if (inputLevel > harmonicDensityEnvelope[ch])
+                        harmonicDensityEnvelope[ch] = harmonicDensityAttackCoeff * harmonicDensityEnvelope[ch]
+                                                    + (1.0f - harmonicDensityAttackCoeff) * inputLevel;
+                    else
+                        harmonicDensityEnvelope[ch] = harmonicDensityReleaseCoeff * harmonicDensityEnvelope[ch]
+                                                    + (1.0f - harmonicDensityReleaseCoeff) * inputLevel;
+
+                    const float clampedEnv = std::max(0.0f, harmonicDensityEnvelope[ch]);
+                    const float harmonicScale = juce::jlimit(DSPConstants::HARMONIC_DENSITY_MIN_SCALE, 1.0f,
+                                                            1.0f / (1.0f + std::sqrt(clampedEnv)));
+
+                    float distorted = applyStudioDistortion(inputSample, pb_currentInputGain, sampleDrive, pb_clipType,
+                        pb_extremeEnabled ? 1.0f : harmonicScale, ch);
+
+                    channelData[sample] = inputSample * (1.0f - sampleMixAmount) + distorted * sampleMixAmount;
+                }
+            }
+
+            pb_currentInputGain += pb_gainDelta;
+            pb_currentDrive     += pb_driveDelta;
+            pb_currentMixAmount += pb_mixDelta;
+        }
+        return true;
+    }
+
+    // === SUB GUARD ACTIVE: Variable-slope clean low + Distorted high ===
+    smoothedSubGuardFreq.setTargetValue(pb_subGuardFreq);
+    const float currentSubGuardFreq = smoothedSubGuardFreq.getNextValue();
+
+    if (std::abs(currentSubGuardFreq - lastSubGuardFreq) > 0.5f)
+    {
+        updateSubGuardCoefficients(currentSubGuardFreq, pb_oversampledSR);
+        lastSubGuardFreq = currentSubGuardFreq;
+    }
+
+    const SubGuardFilterOrder filterOrder = determineSubGuardFilterOrder(currentSubGuardFreq);
+
+    // SAFETY CHECK: Ensure we have enough buffer space
+    const int requiredBufferSize = static_cast<int>(pb_numSamples);
+    if (requiredBufferSize > lowBandBuffer.getNumSamples() || requiredBufferSize > highBandBuffer.getNumSamples())
+    {
+        debugHadBufferOverflow.store(true, std::memory_order_relaxed);
+        return false;
+    }
+
+    // Copy input to both band buffers
+    for (size_t channel = 0; channel < pb_numChannels; ++channel)
+    {
+        const int channelIdx = static_cast<int>(channel);
+        const int sampleCount = static_cast<int>(pb_numSamples);
+
+        lowBandBuffer.copyFrom(channelIdx, 0,
+            pb_oversampledBlock.getChannelPointer(channel),
+            sampleCount);
+        highBandBuffer.copyFrom(channelIdx, 0,
+            pb_oversampledBlock.getChannelPointer(channel),
+            sampleCount);
+    }
+
+    auto lowBlock  = juce::dsp::AudioBlock<float>(lowBandBuffer ).getSubBlock(0, pb_numSamples);
+    auto highBlock = juce::dsp::AudioBlock<float>(highBandBuffer).getSubBlock(0, pb_numSamples);
+
+    switch (filterOrder)
+    {
+        case SubGuardFilterOrder::LR12:
+            subGuardLP12.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
+            subGuardHP12.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
+            break;
+        case SubGuardFilterOrder::LR18:
+            subGuardLP18_1.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
+            subGuardLP18_2.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
+            subGuardHP18_1.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
+            subGuardHP18_2.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
+            break;
+        case SubGuardFilterOrder::LR24:
+        default:
+            lowPassFilter1.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
+            lowPassFilter2.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
+            highPassFilter1.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
+            highPassFilter2.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
+            break;
+    }
+
+    // Apply studio distortion ONLY to the high band
+    const float lfoOversampledPhaseIncSG = pb_lfoPhaseIncrement / static_cast<float>(oversamplingFactor);
+
+    for (size_t sample = 0; sample < pb_numSamples; ++sample)
+    {
+        float sampleDrive = pb_currentDrive;
+        float sampleMixAmount = pb_currentMixAmount;
+        float sampleDistortionParam = pb_modulatedDistortionParam;
+
+        if (pb_perSampleLFO && pb_lfoEnabled && pb_lfoPhaseIncrement > 0.0f)
+        {
+            float sampleLfoValue = generateLFOWaveform(lfoPhase, pb_lfoWaveform);
+            if (std::isnan(sampleLfoValue) || std::isinf(sampleLfoValue))
+                sampleLfoValue = 0.0f;
+            const float sampleLfoMod = sampleLfoValue * pb_lfoDepth / 100.0f;
+
+            if (pb_lfoDestination == 0)
+            {
+                sampleDistortionParam = juce::jlimit(0.0f, 100.0f,
+                    pb_distortionParam + sampleLfoMod * 50.0f);
+                sampleDrive = 1.0f + (sampleDistortionParam / 100.0f) * 3.0f;
+                if (pb_extremeEnabled) sampleDrive *= 4.0f;
+            }
+            else if (pb_lfoDestination == 3)
+            {
+                const float modMix = juce::jlimit(0.0f, 100.0f,
+                    pb_distMix + sampleLfoMod * 50.0f);
+                sampleMixAmount = modMix / 100.0f;
+            }
+
+            lfoPhase += lfoOversampledPhaseIncSG;
+            if (lfoPhase >= 1.0f)
+                lfoPhase -= 1.0f;
+        }
+
+        for (size_t channel = 0; channel < pb_numChannels; ++channel)
+        {
+            auto* highBandData = highBandBuffer.getWritePointer(static_cast<int>(channel));
+            const int ch = static_cast<int>(channel);
+            float inputSample = highBandData[sample];
+
+            if (sampleDistortionParam < 0.5f)
+            {
+                highBandData[sample] = inputSample;
+            }
+            else
+            {
+                const float inputLevel = std::abs(inputSample);
+                if (inputLevel > harmonicDensityEnvelope[ch])
+                    harmonicDensityEnvelope[ch] = harmonicDensityAttackCoeff * harmonicDensityEnvelope[ch]
+                                                + (1.0f - harmonicDensityAttackCoeff) * inputLevel;
+                else
+                    harmonicDensityEnvelope[ch] = harmonicDensityReleaseCoeff * harmonicDensityEnvelope[ch]
+                                                + (1.0f - harmonicDensityReleaseCoeff) * inputLevel;
+
+                const float clampedEnv = std::max(0.0f, harmonicDensityEnvelope[ch]);
+                const float harmonicScale = juce::jlimit(DSPConstants::HARMONIC_DENSITY_MIN_SCALE, 1.0f,
+                                                        1.0f / (1.0f + std::sqrt(clampedEnv)));
+
+                float distorted = applyStudioDistortion(inputSample, pb_currentInputGain, sampleDrive, pb_clipType,
+                    pb_extremeEnabled ? 1.0f : harmonicScale, ch);
+
+                highBandData[sample] = inputSample * (1.0f - sampleMixAmount) + distorted * sampleMixAmount;
+            }
+        }
+
+        pb_currentInputGain += pb_gainDelta;
+        pb_currentDrive     += pb_driveDelta;
+        pb_currentMixAmount += pb_mixDelta;
+    }
+
+    // Recombine: Clean low + Distorted high
+    for (size_t channel = 0; channel < pb_numChannels; ++channel)
+    {
+        auto* outputData = pb_oversampledBlock.getChannelPointer(channel);
+        const auto* lowData  = lowBandBuffer.getReadPointer(static_cast<int>(channel));
+        const auto* highData = highBandBuffer.getReadPointer(static_cast<int>(channel));
+
+        for (size_t sample = 0; sample < pb_numSamples; ++sample)
+            outputData[sample] = lowData[sample] + highData[sample];
+    }
+
+    return true;
 }
 
 // Helper method called from audio thread to safely reset DSP state
