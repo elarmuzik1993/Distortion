@@ -1226,6 +1226,27 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         }
     }
 
+    // Publish preamble parameters to block-scope members for stage helpers (PR-8)
+    pb_modulatedHighPassFreq    = modulatedHighPassFreq;
+    pb_modulatedDistortionParam = modulatedDistortionParam;
+    pb_modulatedToneFreq        = modulatedToneFreq;
+    pb_distortionParam          = distortionParam;
+    pb_distMix                  = distMix;
+    pb_extremeEnabled           = extremeEnabled;
+    pb_autoGainEnabled          = autoGainEnabled;
+    pb_compEnabled              = compEnabled;
+    pb_compPeakReduction        = compPeakReduction;
+    pb_compMakeupGain           = compMakeupGain;
+    pb_compRatioMode            = compRatioMode;
+    pb_lfoPhaseIncrement        = lfoPhaseIncrement;
+    pb_perSampleLFO             = perSampleLFO;
+    pb_lfoEnabled               = lfoEnabled;
+    pb_lfoWaveform              = lfoWaveform;
+    pb_lfoDepth                 = lfoDepth;
+    pb_lfoDestination           = lfoDestination;
+    pb_clipType                 = clipType;
+    pb_subGuardFreq             = subGuardFreq;
+
     // Calculate distortion drive from modulated parameter
     float distortionDrive = 1.0f + (modulatedDistortionParam / 100.0f) * 3.0f;
 
@@ -1365,40 +1386,10 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         return;  // Skip all DSP processing
     }
 
-    // Check input buffer for corruption BEFORE processing
-    // Wrap original buffer into an AudioBlock
-    auto inputBlock = juce::dsp::AudioBlock<float>(buffer);
-
-    // ========== PRE-HIGHPASS FILTER (BEFORE upsampling for efficiency) ==========
-    // Update filter coefficients if frequency changed (at BASE sample rate)
-    // Use modulated frequency for LFO-controlled filter sweeps.
-    // In-place write through .state mutates the Coefficients object that every
-    // per-channel IIR::Filter was bound to at prepare() time, so the new values
-    // are visible on the next process() call. See docs/Architecture Contract.md
-    // "RT-safety" for why the standby-swap pattern does not propagate here.
-    const double baseSampleRate = getSampleRate();
-    if (std::abs(modulatedHighPassFreq - lastHighPassFreq) > 0.5f)  // Only update if changed
-    {
-        if (baseSampleRate >= 1000.0 && baseSampleRate <= 500000.0 &&
-            modulatedHighPassFreq >= 1.0f && modulatedHighPassFreq <= (baseSampleRate / 2.0f) &&
-            preHighPassFilter.state != nullptr)
-        {
-            writeFirstOrderHighPassCoeffs(*preHighPassFilter.state, baseSampleRate, modulatedHighPassFreq);
-            lastHighPassFreq = modulatedHighPassFreq;
-        }
-    }
-
-    // Apply pre-highpass filter BEFORE upsampling (only if state is valid)
-    if (preHighPassFilter.state)
-        preHighPassFilter.process(juce::dsp::ProcessContextReplacing<float>(inputBlock));
-
-    // Upsample (or use input directly when oversampling is off)
-    auto oversampledBlock = oversampling
-        ? oversampling->processSamplesUp(inputBlock)
-        : inputBlock;
+    applyPreHighpass(buffer);
 
     // Check actual oversampled size and validate buffer allocation (always enabled)
-    const size_t actualOversampledSamples = oversampledBlock.getNumSamples();
+    const size_t actualOversampledSamples = pb_oversampledBlock.getNumSamples();
 
     // CRITICAL: Check for zero samples (would cause division by zero)
     if (actualOversampledSamples == 0)
@@ -1428,13 +1419,24 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Get the actual oversampled sample rate
     const double oversampledSR = getSampleRate() * oversamplingFactor;
 
+    // Publish oversampled-domain context to block-scope members for stage helpers
+    pb_numSamples       = actualOversampledSamples;
+    pb_numChannels      = pb_oversampledBlock.getNumChannels();
+    pb_oversampledSR    = oversampledSR;
+    pb_gainDelta        = gainDelta;
+    pb_driveDelta       = driveDelta;
+    pb_mixDelta         = mixDelta;
+    pb_currentInputGain = currentInputGain;
+    pb_currentDrive     = currentDrive;
+    pb_currentMixAmount = currentMixAmount;
+
     // Sub Guard filter coefficients are updated dynamically in the processing block below
     // No need for static sample rate change detection
 
     // NOTE: Pre-highpass filter is now applied BEFORE upsampling (see above)
 
-    const size_t numSamples = oversampledBlock.getNumSamples();
-    const size_t numChannels = oversampledBlock.getNumChannels();
+    const size_t numSamples = pb_oversampledBlock.getNumSamples();
+    const size_t numChannels = pb_oversampledBlock.getNumChannels();
 
     // ========== PRE-DISTORTION TRANSIENT TAMER ==========
     // Light compression to even out dynamics before distortion
@@ -1449,7 +1451,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         {
             for (size_t channel = 0; channel < numChannels && channel < 2; ++channel)
             {
-                float* data = oversampledBlock.getChannelPointer(channel);
+                float* data = pb_oversampledBlock.getChannelPointer(channel);
                 const float input = data[sample];
                 const float level = std::abs(input);
 
@@ -1486,7 +1488,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         float inputSumSquares = 0.0f;
         for (size_t ch = 0; ch < numChannels; ++ch)
         {
-            const float* data = oversampledBlock.getChannelPointer(ch);
+            const float* data = pb_oversampledBlock.getChannelPointer(ch);
             for (size_t i = 0; i < numSamples; ++i)
                 inputSumSquares += data[i] * data[i];
         }
@@ -1546,7 +1548,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
             for (size_t channel = 0; channel < numChannels; ++channel)
             {
-                auto* channelData = oversampledBlock.getChannelPointer(channel);
+                auto* channelData = pb_oversampledBlock.getChannelPointer(channel);
                 const int ch = static_cast<int>(channel);
 
                 // Read input
@@ -1623,10 +1625,10 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             const int sampleCount = static_cast<int>(numSamples);
 
             lowBandBuffer.copyFrom(channelIdx, 0,
-                oversampledBlock.getChannelPointer(channel),
+                pb_oversampledBlock.getChannelPointer(channel),
                 sampleCount);
             highBandBuffer.copyFrom(channelIdx, 0,
-                oversampledBlock.getChannelPointer(channel),
+                pb_oversampledBlock.getChannelPointer(channel),
                 sampleCount);
         }
 
@@ -1743,7 +1745,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         // Recombine: Clean low + Distorted high
         for (size_t channel = 0; channel < numChannels; ++channel)
         {
-            auto* outputData = oversampledBlock.getChannelPointer(channel);
+            auto* outputData = pb_oversampledBlock.getChannelPointer(channel);
             const auto* lowData = lowBandBuffer.getReadPointer(static_cast<int>(channel));
             const auto* highData = highBandBuffer.getReadPointer(static_cast<int>(channel));
 
@@ -1763,7 +1765,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     {
         for (size_t channel = 0; channel < numChannels; ++channel)
         {
-            auto* outputData = oversampledBlock.getChannelPointer(channel);
+            auto* outputData = pb_oversampledBlock.getChannelPointer(channel);
             const auto* lowData = lowBandBuffer.getReadPointer(static_cast<int>(channel));
 
             for (size_t sample = 0; sample < numSamples; ++sample)
@@ -1780,7 +1782,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         float outputSumSquares = 0.0f;
         for (size_t ch = 0; ch < numChannels; ++ch)
         {
-            const float* data = oversampledBlock.getChannelPointer(ch);
+            const float* data = pb_oversampledBlock.getChannelPointer(ch);
             for (size_t i = 0; i < numSamples; ++i)
                 outputSumSquares += data[i] * data[i];
         }
@@ -1806,7 +1808,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         // Apply auto-gain compensation to oversampled block
         for (size_t ch = 0; ch < numChannels; ++ch)
         {
-            float* data = oversampledBlock.getChannelPointer(ch);
+            float* data = pb_oversampledBlock.getChannelPointer(ch);
             for (size_t i = 0; i < numSamples; ++i)
                 data[i] *= autoGainCompensation;
         }
@@ -1826,11 +1828,11 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     bool hasNaN = false;
     bool hasInf = false;
     float maxSample = 0.0f;
-    const size_t numSamplesCheck = oversampledBlock.getNumSamples();
-    const size_t numChannelsCheck = oversampledBlock.getNumChannels();
+    const size_t numSamplesCheck = pb_oversampledBlock.getNumSamples();
+    const size_t numChannelsCheck = pb_oversampledBlock.getNumChannels();
     for (size_t ch = 0; ch < numChannelsCheck && !hasNaN && !hasInf; ++ch)
     {
-        const float* channelData = oversampledBlock.getChannelPointer(ch);
+        const float* channelData = pb_oversampledBlock.getChannelPointer(ch);
         for (size_t i = 0; i < numSamplesCheck; ++i)
         {
             const float sample = channelData[i];
@@ -1882,7 +1884,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     auto applyToneFilter = [&]() {
         if (toneFreq < 19500.0f && toneFilter.state != nullptr)
         {
-            toneFilter.process(juce::dsp::ProcessContextReplacing<float>(oversampledBlock));
+            toneFilter.process(juce::dsp::ProcessContextReplacing<float>(pb_oversampledBlock));
         }
     };
 
@@ -1893,12 +1895,12 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         const float wetAmountWS = waveshaperMix / 100.0f;  // 0.0 to 1.0
         const float dryAmountWS = 1.0f - wetAmountWS;
 
-        const size_t wsNumChannels = oversampledBlock.getNumChannels();
-        const size_t wsNumSamples = oversampledBlock.getNumSamples();
+        const size_t wsNumChannels = pb_oversampledBlock.getNumChannels();
+        const size_t wsNumSamples = pb_oversampledBlock.getNumSamples();
 
         for (size_t channel = 0; channel < wsNumChannels; ++channel)
         {
-            auto* channelData = oversampledBlock.getChannelPointer(channel);
+            auto* channelData = pb_oversampledBlock.getChannelPointer(channel);
             for (size_t sample = 0; sample < wsNumSamples; ++sample)
             {
                 const float dry = channelData[sample];
@@ -1964,8 +1966,8 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Simple full-band compression without crossover or wet/dry blend
     if (compEnabled && compPeakReduction > 0.0f)
     {
-        const size_t oversampledNumSamples = oversampledBlock.getNumSamples();
-        const int compNumChannels = static_cast<int>(oversampledBlock.getNumChannels());
+        const size_t oversampledNumSamples = pb_oversampledBlock.getNumSamples();
+        const int compNumChannels = static_cast<int>(pb_oversampledBlock.getNumChannels());
         const int compNumSamples = static_cast<int>(oversampledNumSamples);
 
         // Map peak reduction (0-100) to threshold in dB
@@ -1991,7 +1993,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             float sumSquares = 0.0f;
             for (int ch = 0; ch < compNumChannels; ++ch)
             {
-                const float sampleValue = oversampledBlock.getChannelPointer(static_cast<size_t>(ch))[sampleIdx];
+                const float sampleValue = pb_oversampledBlock.getChannelPointer(static_cast<size_t>(ch))[sampleIdx];
                 sumSquares += sampleValue * sampleValue;
             }
 
@@ -2041,7 +2043,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             // Apply compression and makeup gain to all channels
             for (int ch = 0; ch < compNumChannels; ++ch)
             {
-                auto* channelData = oversampledBlock.getChannelPointer(static_cast<size_t>(ch));
+                auto* channelData = pb_oversampledBlock.getChannelPointer(static_cast<size_t>(ch));
                 float sampleValue = channelData[sampleIdx];
 
                 // Apply compression
@@ -2079,12 +2081,12 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Gentle ceiling at -0.3 dBFS to prevent inter-sample overs from oversampling collapse
     {
         const float thresholdLinear = juce::Decibels::decibelsToGain(DSPConstants::SOFT_CLIP_THRESHOLD_DB);
-        const size_t scNumChannels = oversampledBlock.getNumChannels();
-        const size_t scNumSamples = oversampledBlock.getNumSamples();
+        const size_t scNumChannels = pb_oversampledBlock.getNumChannels();
+        const size_t scNumSamples = pb_oversampledBlock.getNumSamples();
 
         for (size_t channel = 0; channel < scNumChannels; ++channel)
         {
-            auto* data = oversampledBlock.getChannelPointer(channel);
+            auto* data = pb_oversampledBlock.getChannelPointer(channel);
             for (size_t sample = 0; sample < scNumSamples; ++sample)
             {
                 const float input = data[sample];
@@ -2119,7 +2121,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     {
         for (size_t channel = 0; channel < numChannels; ++channel)
         {
-            auto* outputData = oversampledBlock.getChannelPointer(channel);
+            auto* outputData = pb_oversampledBlock.getChannelPointer(channel);
             const auto* lowData = lowBandBuffer.getReadPointer(static_cast<int>(channel));
 
             for (size_t sample = 0; sample < numSamples; ++sample)
@@ -2131,7 +2133,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
     // Downsample back into original buffer (skip when oversampling is off)
     if (oversampling)
-        oversampling->processSamplesDown(inputBlock);
+        oversampling->processSamplesDown(pb_inputBlock);
 
     // NOTE: Waveshaper and LA-2A compression are now in the oversampled domain (before downsampling)
     // This eliminates aliasing from harmonic generation
@@ -2503,6 +2505,37 @@ void PluginProcessor::setStateInformation(const void* data, int sizeInBytes)
         // Signal audio thread to reset state (thread-safe handoff)
         stateNeedsReset.store(true, std::memory_order_release);
     }
+}
+
+// =============================================================================
+// PR-8: processBlock stage helpers
+// =============================================================================
+
+void PluginProcessor::applyPreHighpass(juce::AudioBuffer<float>& buffer)
+{
+    pb_inputBlock = juce::dsp::AudioBlock<float>(buffer);
+
+    // Update filter coefficients if frequency changed (at BASE sample rate).
+    // In-place write through .state — see docs/Architecture Contract.md.
+    const double baseSampleRate = getSampleRate();
+    if (std::abs(pb_modulatedHighPassFreq - lastHighPassFreq) > 0.5f)
+    {
+        if (baseSampleRate >= 1000.0 && baseSampleRate <= 500000.0 &&
+            pb_modulatedHighPassFreq >= 1.0f &&
+            pb_modulatedHighPassFreq <= (baseSampleRate / 2.0f) &&
+            preHighPassFilter.state != nullptr)
+        {
+            writeFirstOrderHighPassCoeffs(*preHighPassFilter.state, baseSampleRate, pb_modulatedHighPassFreq);
+            lastHighPassFreq = pb_modulatedHighPassFreq;
+        }
+    }
+
+    if (preHighPassFilter.state)
+        preHighPassFilter.process(juce::dsp::ProcessContextReplacing<float>(pb_inputBlock));
+
+    pb_oversampledBlock = oversampling
+        ? oversampling->processSamplesUp(pb_inputBlock)
+        : pb_inputBlock;
 }
 
 // Helper method called from audio thread to safely reset DSP state

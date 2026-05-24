@@ -149,6 +149,7 @@ class StatefulDistortionTests;
 class DryWetAlignmentTests;
 class RTCleanOversamplingTest;
 class CoefficientPropagationTest;
+class ProcessBlockDecompTest;
 #endif
 
 class PluginProcessor : public juce::AudioProcessor,
@@ -172,6 +173,7 @@ class PluginProcessor : public juce::AudioProcessor,
     friend class DryWetAlignmentTests;
     friend class RTCleanOversamplingTest;
     friend class CoefficientPropagationTest;
+    friend class ProcessBlockDecompTest;
 #endif
 
 public:
@@ -429,6 +431,51 @@ private:
 
     juce::AudioBuffer<float> scopeBuffer;
     juce::AbstractFifo scopeFifo;
+
+    // -------------------------------------------------------------------------
+    // Block-scope transient state — set in processBlock preamble; consumed by
+    // the stage helper methods.  Valid only during a processBlock call.
+    // -------------------------------------------------------------------------
+    juce::dsp::AudioBlock<float> pb_inputBlock;          // view into the host buffer
+    juce::dsp::AudioBlock<float> pb_oversampledBlock;    // view into the oversampler's buffer
+    size_t pb_numSamples  = 0;
+    size_t pb_numChannels = 0;
+    double pb_oversampledSR = 0.0;
+
+    float pb_modulatedHighPassFreq    = 0.0f;
+    float pb_modulatedDistortionParam = 0.0f;
+    float pb_modulatedToneFreq        = 0.0f;
+    float pb_distortionParam          = 0.0f;  // raw (pre-LFO) for per-sample modulation
+    float pb_distMix                  = 0.0f;  // raw (pre-LFO) for per-sample modulation
+    bool  pb_extremeEnabled           = false;
+    bool  pb_autoGainEnabled          = false;
+    bool  pb_compEnabled              = false;
+    float pb_compPeakReduction        = 0.0f;
+    float pb_compMakeupGain           = 0.0f;
+    int   pb_compRatioMode            = 0;
+    float pb_lfoPhaseIncrement        = 0.0f;
+    bool  pb_perSampleLFO             = false;
+    bool  pb_lfoEnabled               = false;
+    int   pb_lfoWaveform              = 0;
+    float pb_lfoDepth                 = 0.0f;
+    int   pb_lfoDestination           = 0;
+    int   pb_clipType                 = 0;
+    float pb_subGuardFreq             = 0.0f;
+    bool  pb_subGuardActive           = false;  // set by applySubGuardSplit
+    float pb_currentInputGain         = 1.0f;
+    float pb_gainDelta                = 0.0f;
+    float pb_currentDrive             = 1.0f;
+    float pb_driveDelta               = 0.0f;
+    float pb_currentMixAmount         = 1.0f;
+    float pb_mixDelta                 = 0.0f;
+
+    // Stage helper methods extracted from processBlock (PR-8)
+    void applyPreHighpass(juce::AudioBuffer<float>& buffer);
+    void applyPreCompression();
+    void applySubGuardSplit();
+    void applyDistortionStage();
+    void applyAutoGainAndISP();
+    void applyLA2A();
 
     // Helper methods for studio distortion DSP
     float applyStudioDistortion(float x, float gain, float drive, int clipType, float harmonicScale, int channel = 0);
