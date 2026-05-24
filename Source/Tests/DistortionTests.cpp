@@ -15,6 +15,7 @@ using namespace TestUtilities;
 void DistortionDSPTests::runTest()
 {
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Test all 7 clip types
@@ -163,6 +164,7 @@ void CompressionDSPTests::testThresholdMapping()
     // We verify by checking that higher peakReduction = more gain reduction
 
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Enable compression
@@ -176,6 +178,7 @@ void CompressionDSPTests::testThresholdMapping()
 void CompressionDSPTests::testRatioModes()
 {
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     auto* compRatioParam = processor.parameters.getParameter("compRatio");
@@ -193,6 +196,7 @@ void CompressionDSPTests::testRatioModes()
 void CompressionDSPTests::testMakeupGain()
 {
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     auto* makeupParam = processor.parameters.getParameter("compMakeupGain");
@@ -207,6 +211,7 @@ void CompressionDSPTests::testMakeupGain()
 void CompressionDSPTests::testEnvelopeFollower()
 {
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Envelope follower uses attack ~10ms, release ~500ms
@@ -225,6 +230,7 @@ void CompressionDSPTests::testEnvelopeFollower()
 void CompressionDSPTests::testGainReductionMeter()
 {
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Enable compression with significant peak reduction
@@ -273,6 +279,7 @@ void PreCompressionTests::testTransientReduction()
 {
     // Test that loud transients are reduced by the pre-compression
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Enable distortion (pre-comp only active when distortion >= 0.5%)
@@ -301,6 +308,7 @@ void PreCompressionTests::testBypassWhenDistortionOff()
 {
     // Test that pre-compression is bypassed when distortion is off (< 0.5%)
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Disable distortion (pre-comp should be bypassed)
@@ -329,6 +337,7 @@ void PreCompressionTests::testEnvelopeAttackRelease()
 {
     // Test envelope follower behavior with transients
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 2048);
     processor.prepareToPlay(44100.0, 2048);
 
     // Enable distortion
@@ -370,6 +379,7 @@ void PreCompressionTests::testStereoIndependence()
 {
     // Test that per-channel envelopes preserve stereo imaging
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Enable distortion
@@ -417,6 +427,7 @@ void PreCompressionTests::testNoInvalidSamples()
 {
     // Stress test with various signals to ensure no NaN/Inf
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     setParameter(processor.parameters, "distortionAmount", 75.0f);
@@ -483,6 +494,7 @@ void PreCompressionTests::testGainReductionRange()
 {
     // Test that gain reduction stays within expected bounds
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 1024);
     processor.prepareToPlay(44100.0, 1024);
 
     setParameter(processor.parameters, "distortionAmount", 50.0f);
@@ -538,6 +550,7 @@ void HarmonicDensityTests::testSubLinearScaling()
     // Test that harmonic coefficients scale inversely with input level
     // High input → low harmonicScale → fewer harmonics (prevents harshness)
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Test Transformer Saturation (clip type 4) which has explicit harmonic control
@@ -566,6 +579,7 @@ void HarmonicDensityTests::testClipTypeSpecificity()
 {
     // Test that harmonic scaling affects clip types 1, 3, 4 but not others
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     const float testInput = 0.5f;
@@ -605,6 +619,7 @@ void HarmonicDensityTests::testNoNaNOrInf()
 {
     // Test that harmonic density processing doesn't produce invalid samples
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Test extreme harmonic scale values
@@ -662,6 +677,7 @@ void OutputLimiterTests::testThresholdEnforcement()
     using namespace TestUtilities;
 
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Set output gain to maximum to push signal above threshold
@@ -707,6 +723,7 @@ void OutputLimiterTests::testTransparencyBelowThreshold()
     using namespace TestUtilities;
 
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Set everything to bypass/minimum except output gain at unity
@@ -740,6 +757,7 @@ void OutputLimiterTests::testStereoLinking()
     using namespace TestUtilities;
 
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Set output gain high to ensure limiting
@@ -790,6 +808,7 @@ void OutputLimiterTests::testSoftKnee()
     using namespace TestUtilities;
 
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Test signals at different levels to verify soft knee behavior
@@ -830,6 +849,7 @@ void OutputLimiterTests::testEnvelopeAttackRelease()
     using namespace TestUtilities;
 
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 1024);
     processor.prepareToPlay(44100.0, 1024);  // Match buffer size to prevent oversampling overflow
 
     setParameter(processor.parameters, "outputGain", 50.0f);  // Unity gain
@@ -876,6 +896,7 @@ void OutputLimiterTests::testStateReset()
     using namespace TestUtilities;
 
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Set envelope to non-unity value
@@ -896,6 +917,7 @@ void OutputLimiterTests::testStateReset()
 void LFOTests::runTest()
 {
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     beginTest("Sine Waveform");
@@ -995,6 +1017,7 @@ void LFODestinationTests::runTest()
     beginTest("Destination parameter exists and defaults to 0");
     {
         PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(44100.0, 512);
         processor.prepareToPlay(44100.0, 512);
 
         auto* param = processor.parameters.getParameter("lfoDestination");
@@ -1021,6 +1044,7 @@ void LFODestinationTests::runTest()
     beginTest("Extreme depth doesn't cause NaN on any destination");
     {
         PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(44100.0, 4410);
         processor.prepareToPlay(44100.0, 4410);  // Match buffer size to prevent oversampling overflow
 
         TestUtilities::setParameter(processor.parameters, "lfoEnabled", 1.0f);
@@ -1066,6 +1090,7 @@ void LFODestinationTests::runTest()
     beginTest("Fast LFO rate (50Hz) is stable on all destinations");
     {
         PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(44100.0, 44100);
         processor.prepareToPlay(44100.0, 44100);  // Match buffer size to prevent oversampling overflow
 
         TestUtilities::setParameter(processor.parameters, "lfoEnabled", 1.0f);
@@ -1097,6 +1122,7 @@ void LFODestinationTests::runTest()
 void LFODestinationTests::testDestination(int destIndex, const juce::String& paramID, float centerValue)
 {
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 4410);
     processor.prepareToPlay(44100.0, 4410);  // Match buffer size to prevent oversampling overflow
 
     TestUtilities::setParameter(processor.parameters, "lfoEnabled", 1.0f);
@@ -1154,6 +1180,7 @@ void ProcessBlockTests::runTest()
 void ProcessBlockTests::testTrueBypass()
 {
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Set distortion to minimum and compression off (true bypass)
@@ -1180,6 +1207,7 @@ void ProcessBlockTests::testTrueBypass()
 void ProcessBlockTests::test808SafeMode()
 {
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 2048);
     processor.prepareToPlay(44100.0, 2048);  // Match buffer size
 
     // Enable Sub Guard mode (60 Hz crossover = PRESERVE mode)
@@ -1200,6 +1228,7 @@ void ProcessBlockTests::test808SafeMode()
 void ProcessBlockTests::testOversampling()
 {
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Enable distortion (which uses oversampling)
@@ -1218,6 +1247,7 @@ void ProcessBlockTests::testOversampling()
 void ProcessBlockTests::testDCBlocking()
 {
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Enable distortion
@@ -1276,6 +1306,7 @@ void ProcessBlockTests::testDCBlocking()
 void ProcessBlockTests::testWetDryMix()
 {
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Enable distortion
@@ -1324,6 +1355,7 @@ void ProcessBlockTests::testWetDryMix()
 void ProcessBlockTests::testEmptyBufferHandling()
 {
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Test with zero samples
@@ -1339,6 +1371,7 @@ void ProcessBlockTests::testEmptyBufferHandling()
 void ProcessBlockTests::testOutputGain()
 {
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Enable distortion slightly to avoid bypass mode (bypass happens when distortion < 0.5%)
@@ -1464,6 +1497,7 @@ void DryWetAlignmentTests::testDryOnlyLatency()
     PluginProcessor processor;
     const double sr = 44100.0;
     const int blockSize = 512;
+    processor.setRateAndBufferSizeDetails(sr, blockSize);
     processor.prepareToPlay(sr, blockSize);
     configureForAlignmentTest(processor, 0.0f);
 
@@ -1544,6 +1578,7 @@ void DryWetAlignmentTests::testNoCombFiltering()
     PluginProcessor processor;
     const double sr = 44100.0;
     const int blockSize = 512;
+    processor.setRateAndBufferSizeDetails(sr, blockSize);
     processor.prepareToPlay(sr, blockSize);
     configureForAlignmentTest(processor, 50.0f);
 
@@ -1617,6 +1652,7 @@ void DryWetAlignmentTests::testFullyWetPathUnaffected()
     PluginProcessor processor;
     const double sr = 44100.0;
     const int blockSize = 512;
+    processor.setRateAndBufferSizeDetails(sr, blockSize);
     processor.prepareToPlay(sr, blockSize);
     configureForAlignmentTest(processor, 100.0f);
 
@@ -1639,6 +1675,7 @@ void DryWetAlignmentTests::testOversamplingReinit()
     PluginProcessor processor;
     const double sr = 44100.0;
     const int blockSize = 512;
+    processor.setRateAndBufferSizeDetails(sr, blockSize);
     processor.prepareToPlay(sr, blockSize);
     configureForAlignmentTest(processor, 40.0f);  // mid mix — forces dry path
 
@@ -1687,6 +1724,7 @@ void DryWetAlignmentTests::testOversamplingReinit()
 void ParameterTests::runTest()
 {
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     beginTest("Parameter Ranges");
@@ -1801,6 +1839,7 @@ void SampleRateTests::testSampleRate(double sampleRate)
     PluginProcessor processor;
 
     // prepareToPlay should not crash at any sample rate
+    processor.setRateAndBufferSizeDetails(sampleRate, 512);
     processor.prepareToPlay(sampleRate, 512);
 
     // Enable all processing
@@ -1825,6 +1864,7 @@ void SampleRateTests::testRuntimeSampleRateChange()
     PluginProcessor processor;
 
     // Start at 44.1kHz
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
     setParameter(processor.parameters, "distortionAmount", 50.0f);
 
@@ -1833,6 +1873,7 @@ void SampleRateTests::testRuntimeSampleRateChange()
     processor.processBlock(buffer, midi);
 
     // Change to 96kHz (simulating DAW sample rate change)
+    processor.setRateAndBufferSizeDetails(96000.0, 512);
     processor.prepareToPlay(96000.0, 512);
 
     buffer = generateSineWave(1000.0, 96000.0, 512, 0.7f);
@@ -1866,6 +1907,7 @@ void ThreadSafetyTests::runTest()
 void ThreadSafetyTests::testScopeBufferAccess()
 {
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Simulate audio thread writing
@@ -1884,6 +1926,7 @@ void ThreadSafetyTests::testScopeBufferAccess()
 void ThreadSafetyTests::testScopeDrainExcess()
 {
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(48000.0, 512);
     processor.prepareToPlay(48000.0, 512);
 
     // Overfill the FIFO with multiple blocks
@@ -1912,6 +1955,7 @@ void ThreadSafetyTests::testScopeDrainExcess()
 void ThreadSafetyTests::testAtomicGainReduction()
 {
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Enable compression
@@ -1938,7 +1982,9 @@ void ThreadSafetyTests::testMultiInstanceIndependence()
     PluginProcessor processor1;
     PluginProcessor processor2;
 
+    processor1.setRateAndBufferSizeDetails(44100.0, 512);
     processor1.prepareToPlay(44100.0, 512);
+    processor2.setRateAndBufferSizeDetails(44100.0, 512);
     processor2.prepareToPlay(44100.0, 512);
 
     // Set different parameters
@@ -1970,7 +2016,9 @@ void ThreadSafetyTests::testPerInstanceRandomGenerators()
     PluginProcessor processor1;
     PluginProcessor processor2;
 
+    processor1.setRateAndBufferSizeDetails(44100.0, 512);
     processor1.prepareToPlay(44100.0, 512);
+    processor2.setRateAndBufferSizeDetails(44100.0, 512);
     processor2.prepareToPlay(44100.0, 512);
 
     // Both use distortion which has random noise injection
@@ -2015,6 +2063,7 @@ void StateIOTests::runTest()
 void StateIOTests::testGetStateInformation()
 {
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Set some non-default values
@@ -2031,6 +2080,7 @@ void StateIOTests::testGetStateInformation()
 void StateIOTests::testSetStateInformation()
 {
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Get current state
@@ -2051,6 +2101,7 @@ void StateIOTests::testSetStateInformation()
 void StateIOTests::testRoundTrip()
 {
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Set specific values
@@ -2066,6 +2117,7 @@ void StateIOTests::testRoundTrip()
 
     // Create new processor and restore
     PluginProcessor processor2;
+    processor2.setRateAndBufferSizeDetails(44100.0, 512);
     processor2.prepareToPlay(44100.0, 512);
     processor2.setStateInformation(stateData.getData(), static_cast<int>(stateData.getSize()));
 
@@ -2082,6 +2134,7 @@ void StateIOTests::testRoundTrip()
 void StateIOTests::testInvalidDataHandling()
 {
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Test empty data
@@ -2129,6 +2182,7 @@ juce::File GoldenAudioTests::getTestAudioDirectory()
 void GoldenAudioTests::testSilencePassthrough()
 {
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // True bypass mode
@@ -2148,6 +2202,7 @@ void GoldenAudioTests::testSilencePassthrough()
 void GoldenAudioTests::testDistortionOutput(int clipType, const juce::String& name)
 {
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     // Enable distortion with this clip type
@@ -2180,6 +2235,7 @@ void GoldenAudioTests::testDistortionOutput(int clipType, const juce::String& na
 void GoldenAudioTests::test808BandSplit()
 {
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 2048);
     processor.prepareToPlay(44100.0, 2048);
 
     // Enable Sub Guard mode (60 Hz crossover = PRESERVE mode)
@@ -2216,6 +2272,7 @@ void NormalizationTests::runTest()
 void NormalizationTests::testClipTypeLevelMatching()
 {
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     const float gain = 1.0f;
@@ -2281,6 +2338,7 @@ void StatefulDistortionTests::testTubeBiasShift()
     // Tube overdrive (clip type 1) should produce different output based on signal history
     // Cold start (no prior signal) vs hot (after sustained loud signal)
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     const float gain = 1.0f;
@@ -2320,6 +2378,7 @@ void StatefulDistortionTests::testTapeHysteresis()
 {
     // Tape saturation (clip type 3) should produce different output based on signal history
     PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
     processor.prepareToPlay(44100.0, 512);
 
     const float gain = 1.0f;
@@ -2375,6 +2434,7 @@ void LinearPhaseDryTest::runTest()
         // Set linearPhaseDry before prepareToPlay so rebuildOversampling picks it up.
         if (auto* param = p.parameters.getParameter("linearPhaseDry"))
             param->setValueNotifyingHost(linearPhase ? 1.0f : 0.0f);
+        p.setRateAndBufferSizeDetails(48000.0, 512);
         p.prepareToPlay(48000.0, 512);
     };
 
@@ -2595,6 +2655,7 @@ void RTBufferPreallocTest::runTest()
     beginTest("No allocation on prepared-size block with pre-sized scratch buffers");
     {
         PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(48000.0, 512);
         processor.prepareToPlay(48000.0, 512);
 
         auto* distortionAmount = processor.parameters.getParameter("distortionAmount");
@@ -2637,6 +2698,7 @@ void RTCleanPreHighPassTest::runTest()
     beginTest("No allocation during 100-block high-pass sweep");
     {
         PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(48000.0, 512);
         processor.prepareToPlay(48000.0, 512);
 
         auto* distortionAmount = processor.parameters.getParameter("distortionAmount");
@@ -2686,6 +2748,7 @@ void RTCleanSubGuardTest::runTest()
     beginTest("No allocation during 200-block Sub Guard sweep");
     {
         PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(48000.0, 512);
         processor.prepareToPlay(48000.0, 512);
 
         setParameter(processor.parameters, "distortionAmount", 50.0f);
@@ -2723,6 +2786,7 @@ void RTCleanOversamplingTest::runTest()
     beginTest("No allocation in processBlock while oversampling rebuild is deferred");
     {
         PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(48000.0, 512);
         processor.prepareToPlay(48000.0, 512);
 
         setParameter(processor.parameters, "distortionAmount", 50.0f);
@@ -2763,6 +2827,7 @@ void RTCleanToneSweepTest::runTest()
     beginTest("No allocation during 100-block tone frequency sweep (PR-10)");
     {
         PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(48000.0, 512);
         processor.prepareToPlay(48000.0, 512);
 
         auto* distortionAmount = processor.parameters.getParameter("distortionAmount");
@@ -2809,6 +2874,7 @@ void RTCleanToneSweepTest::runTest()
         // output. The in-place write through .state aliases the object held by each
         // per-channel Filter.coefficients, so updates take effect on the next process().
         PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(48000.0, 512);
         processor.prepareToPlay(48000.0, 512);
 
         auto* distortionAmount = processor.parameters.getParameter("distortionAmount");
@@ -2864,6 +2930,7 @@ void RTCleanToneSweepTest::runTest()
     beginTest("No allocation during tone sweep with Sub Guard engaged (toneFilterLow path)");
     {
         PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(48000.0, 512);
         processor.prepareToPlay(48000.0, 512);
 
         auto* distortionAmount = processor.parameters.getParameter("distortionAmount");
@@ -2909,6 +2976,7 @@ void RTCleanSampleRateDriftTest::runTest()
     beginTest("No allocation when SR drift branch fires inside processBlock (PR-12)");
     {
         PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(48000.0, 512);
         processor.prepareToPlay(48000.0, 512);
 
         setParameter(processor.parameters, "distortionAmount", 50.0f);
