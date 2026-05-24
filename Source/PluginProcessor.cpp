@@ -9,6 +9,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "RTAllocationGuard.h"
+#include "FastMath.h"
 #include <memory>
 
 namespace
@@ -161,16 +162,16 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
         // Hard clip with brutal threshold
         const float threshold = 0.3f;  // Very low threshold for aggressive clipping
         if (y > threshold)
-            y = threshold + std::atan((y - threshold) * 2.0f) * 0.2f;
+            y = threshold + FastMath::atan((y - threshold) * 2.0f) * 0.2f;
         else if (y < -threshold)
-            y = -threshold + std::atan((y + threshold) * 2.0f) * 0.2f;
+            y = -threshold + FastMath::atan((y + threshold) * 2.0f) * 0.2f;
 
         // Add input-dependent analog noise (silent on silence, warm with signal)
         float noiseAmount = std::min(std::abs(x) * 0.01f, 0.002f);
         y += distortionRandom.nextFloat() * noiseAmount - (noiseAmount * 0.5f);
 
         // Final saturation
-        y = std::tanh(y * 1.8f);
+        y = FastMath::tanh(y * 1.8f);
         break;
     }
     case 1:  // TUBE OVERDRIVE - Asymmetric tube saturation with harmonics
@@ -197,13 +198,13 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
         if (y > 0.0f)
         {
             // Positive: harder clipping with even harmonics (threshold modulated by bias)
-            y = std::tanh(y * 1.6f) * posClipThreshold;
+            y = FastMath::tanh(y * 1.6f) * posClipThreshold;
             y += (0.15f * harmonicScale) * y * y;  // 2nd harmonic (sub-linear scaled)
         }
         else
         {
             // Negative: softer clipping with odd harmonics
-            y = std::tanh(y * 1.2f) * 0.9f;
+            y = FastMath::tanh(y * 1.2f) * 0.9f;
             y += (0.08f * harmonicScale) * y * y * y;  // 3rd harmonic (sub-linear scaled)
         }
 
@@ -222,7 +223,7 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
         y = (float)(int)(y * maxValue) / maxValue;
 
         // Add aliasing character
-        y = std::tanh(y * 2.5f);
+        y = FastMath::tanh(y * 2.5f);
 
         // Hard clip for extra grit
         y = juce::jlimit(-0.95f, 0.95f, y);
@@ -258,13 +259,13 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
             y = sign * (tapeKnee * 0.57f * 1.05f + (abs_y - tapeKnee * 0.57f) * tapeKnee);
         else
             y = sign * (tapeKnee * 0.57f * 1.05f + (1.0f - tapeKnee * 0.57f) * tapeKnee
-                + std::tanh((abs_y - 1.0f) * 2.0f) * 0.15f);
+                + FastMath::tanh((abs_y - 1.0f) * 2.0f) * 0.15f);
 
         // Add tape warmth (subtle even harmonics, sub-linear scaled)
         y += (0.12f * harmonicScale) * y * y * sign;
 
         // Final soft saturation
-        y = std::tanh(y * 1.3f) * 0.92f;
+        y = FastMath::tanh(y * 1.3f) * 0.92f;
         break;
     }
     case 4:  // TRANSFORMER SATURATION - Heavy harmonic distortion
@@ -273,7 +274,7 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
         y = x * drive * 1.5f;
 
         // Multi-stage waveshaping for complex harmonics
-        y = std::tanh(y * 1.5f);
+        y = FastMath::tanh(y * 1.5f);
 
         // Add rich harmonic content (all coefficients sub-linear scaled)
         const float fundamental = y;
@@ -284,7 +285,7 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
         y = fundamental + harmonic2 + harmonic3 + harmonic5;
 
         // Final limiting
-        y = std::tanh(y * 1.4f) * 0.88f;
+        y = FastMath::tanh(y * 1.4f) * 0.88f;
         break;
     }
     case 5:  // DIODE CLIPPER - Asymmetric diode clipping with grit
@@ -296,12 +297,12 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
         if (y > 0.5f)
         {
             // Forward bias: hard clip at ~0.7V
-            y = 0.5f + std::atan((y - 0.5f) * 4.0f) * 0.15f;
+            y = 0.5f + FastMath::atan((y - 0.5f) * 4.0f) * 0.15f;
         }
         else if (y < -0.6f)
         {
             // Reverse bias: slightly different threshold
-            y = -0.6f + std::atan((y + 0.6f) * 3.5f) * 0.2f;
+            y = -0.6f + FastMath::atan((y + 0.6f) * 3.5f) * 0.2f;
         }
 
         // Add crossover distortion character
@@ -309,7 +310,7 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
             y *= 0.7f;  // Dead zone near zero crossing
 
         // Final saturation
-        y = std::tanh(y * 2.2f) * 0.9f;
+        y = FastMath::tanh(y * 2.2f) * 0.9f;
         break;
     }
     case 6:  // DECIMATOR - Extreme digital destruction
@@ -326,14 +327,14 @@ float PluginProcessor::applyStudioDistortion(float x, float gain, float drive, i
         for (int i = 0; i < 16 && y < -1.0f; ++i) y = -2.0f - y;
 
         // Add harmonic distortion
-        y = std::tanh(y * 2.8f);
+        y = FastMath::tanh(y * 2.8f);
 
         // Brutal final limiting
         y = juce::jlimit(-0.9f, 0.9f, y);
         break;
     }
     default:  // Fallback: simple tanh
-        y = std::tanh(x * drive) * 0.95f;
+        y = FastMath::tanh(x * drive) * 0.95f;
         break;
     }
 
@@ -883,7 +884,7 @@ void PluginProcessor::applyLA2ACompression(juce::AudioBuffer<float>& buffer,
 
             // Tube harmonic generation (even harmonics for warmth)
             const float tubeInput = sampleValue * DSPConstants::COMP_TUBE_DRIVE;
-            const float tubeSaturation = std::tanh(tubeInput);
+            const float tubeSaturation = FastMath::tanh(tubeInput);
 
             // Blend tube character (subtle 2nd harmonic)
             sampleValue = sampleValue * (1.0f - DSPConstants::COMP_TUBE_BLEND) +
@@ -900,7 +901,7 @@ void PluginProcessor::applyLA2ACompression(juce::AudioBuffer<float>& buffer,
                     const float sign = (sampleValue > 0.0f) ? 1.0f : -1.0f;
                     const float excess = absSample - DSPConstants::COMP_SOFT_CLIP_THRESHOLD;
                     sampleValue = sign * (DSPConstants::COMP_SOFT_CLIP_THRESHOLD
-                                + std::tanh(excess * 4.0f) * DSPConstants::COMP_SOFT_CLIP_HEADROOM);
+                                + FastMath::tanh(excess * 4.0f) * DSPConstants::COMP_SOFT_CLIP_HEADROOM);
                 }
             }
 
@@ -1614,10 +1615,8 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             return;
         }
 
-        lowBandBuffer.clear();
-        highBandBuffer.clear();
-
         // Copy input to both band buffers (with bounds checking)
+        // Note: copyFrom overwrites exactly numSamples; tail is never read via getSubBlock(0, numSamples).
         for (size_t channel = 0; channel < numChannels; ++channel)
         {
             const int channelIdx = static_cast<int>(channel);
@@ -1917,7 +1916,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                 if (absWet > 0.4f)
                 {
                     const float excess = absWet - 0.4f;
-                    const float compressed = 0.4f + std::tanh(excess * 1.2f) * 0.4f;
+                    const float compressed = 0.4f + FastMath::tanh(excess * 1.2f) * 0.4f;
                     wet = (wet > 0.0f ? compressed : -compressed);
                 }
 
@@ -1932,7 +1931,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                 wet = wet + std::sin(wet * 1.5f) * 0.12f;
 
                 // Stage 7: Final smooth saturation
-                wet = std::tanh(wet * 0.85f);
+                wet = FastMath::tanh(wet * 0.85f);
 
                 // Stage 8: Subtle asymmetry for analog character
                 if (wet > 0.0f)
@@ -2050,7 +2049,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
                 // Tube harmonic generation
                 const float tubeInput = sampleValue * DSPConstants::COMP_TUBE_DRIVE;
-                const float tubeSaturation = std::tanh(tubeInput);
+                const float tubeSaturation = FastMath::tanh(tubeInput);
 
                 sampleValue = sampleValue * (1.0f - DSPConstants::COMP_TUBE_BLEND) +
                              tubeSaturation * DSPConstants::COMP_TUBE_BLEND;
@@ -2065,7 +2064,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                         const float sign = (sampleValue > 0.0f) ? 1.0f : -1.0f;
                         const float excess = absSample - DSPConstants::COMP_SOFT_CLIP_THRESHOLD;
                         sampleValue = sign * (DSPConstants::COMP_SOFT_CLIP_THRESHOLD
-                                    + std::tanh(excess * 4.0f) * DSPConstants::COMP_SOFT_CLIP_HEADROOM);
+                                    + FastMath::tanh(excess * 4.0f) * DSPConstants::COMP_SOFT_CLIP_HEADROOM);
                     }
                 }
 
@@ -2096,7 +2095,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                     // Soft saturation above threshold
                     const float sign = (input > 0.0f) ? 1.0f : -1.0f;
                     const float excess = absInput - thresholdLinear;
-                    const float compressed = thresholdLinear + std::tanh(excess * 2.0f) * (1.0f - thresholdLinear);
+                    const float compressed = thresholdLinear + FastMath::tanh(excess * 2.0f) * (1.0f - thresholdLinear);
                     data[sample] = sign * compressed;
                 }
             }
