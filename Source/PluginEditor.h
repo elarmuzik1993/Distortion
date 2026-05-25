@@ -1051,8 +1051,10 @@ public:
     std::function<void(int)>  onScopeLengthChanged;
 
 private:
-    juce::Viewport viewport;
+    // Declared before the viewport so it outlives it: ~Viewport detaches the
+    // (still-valid) viewed component before content is destroyed.
     std::unique_ptr<SettingsContent> content;
+    juce::Viewport viewport;
 
     juce::Rectangle<float> getPanelBounds() const
     {
