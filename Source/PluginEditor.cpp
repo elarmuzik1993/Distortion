@@ -1357,14 +1357,6 @@ void PluginEditor::showSettingsOverlay()
 {
     if (settingsOverlay) return;
 
-    // Expand to full height while settings is open so all rows fit
-    if (!settingsState.oscilloscopeEnabled)
-    {
-        const int w = juce::roundToInt(960.0f * settingsState.windowScalePercent / 100.0f);
-        const int h = juce::roundToInt(564.0f * settingsState.windowScalePercent / 100.0f);
-        setSize(w, h);
-    }
-
     settingsOverlay = std::make_unique<SettingsOverlay>(audioProcessor.parameters, settingsState, audioProcessor);
     addAndMakeVisible(*settingsOverlay);
     settingsOverlay->setBounds(getLocalBounds());

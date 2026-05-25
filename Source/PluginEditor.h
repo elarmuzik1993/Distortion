@@ -626,8 +626,8 @@ public:
         bool ticked, bool, bool, bool) override
     {
         juce::ignoreUnused(w, h);
-        const float pillW = 36.0f;
-        const float pillH = 18.0f;
+        const float pillW = 30.0f;
+        const float pillH = 14.0f;
         const float pillX = x;
         const float pillY = y + (h - pillH) / 2.0f;
         const float knobDiameter = pillH - 4.0f;
@@ -652,15 +652,17 @@ public:
     }
 };
 
-// Settings overlay modal panel
-class SettingsOverlay : public juce::Component
+// Scrollable content for the settings overlay (everything below the fixed header).
+// Lives inside a juce::Viewport so rows are never clipped at small window sizes.
+class SettingsContent : public juce::Component
 {
 public:
-    SettingsOverlay(juce::AudioProcessorValueTreeState& apvts, SettingsState& state, PluginProcessor& proc)
+    // Summed height of all rows below the header (272px of content + 12px bottom slack).
+    static constexpr int kContentHeight = 284;
+
+    SettingsContent(juce::AudioProcessorValueTreeState& apvts, SettingsState& state, PluginProcessor& proc)
         : settingsState(state), processor(proc)
     {
-        setInterceptsMouseClicks(true, true);
-
         // Anti-Alias toggle (attached to waveshaperClean parameter)
         addAndMakeVisible(antiAliasToggle);
         antiAliasToggle.setButtonText("");
@@ -767,7 +769,7 @@ public:
         };
     }
 
-    ~SettingsOverlay() override
+    ~SettingsContent() override
     {
         antiAliasToggle.setLookAndFeel(nullptr);
         autoGainToggle.setLookAndFeel(nullptr);
@@ -781,226 +783,161 @@ public:
 
     void paint(juce::Graphics& g) override
     {
-        // Dark backdrop
-        g.fillAll(juce::Colour(0xD9000000));
+        g.fillAll(juce::Colour(0xFF111111)); // panel bg behind scrolled content (avoids smear)
 
-        auto panelBounds = getPanelBounds();
-
-        // Panel background
-        g.setColour(juce::Colour(0xFF111111));
-        g.fillRoundedRectangle(panelBounds, 6.0f);
-
-        // Panel border
-        g.setColour(juce::Colour(0xFFFF2244));
-        g.drawRoundedRectangle(panelBounds, 6.0f, 1.0f);
-
-        auto inner = panelBounds.reduced(16.0f);
-
-        // Header: "SETTINGS"
-        g.setFont(Fonts::getOrbitron(12.0f, true));
-        g.setColour(juce::Colour(0xFFFF2244));
-        g.drawText("SETTINGS", inner.removeFromTop(24.0f), juce::Justification::centredLeft);
-
-        // Close button (X) - drawn in top-right of panel
-        auto closeBtn = getCloseBtnBounds();
-        g.setColour(juce::Colour(0xFFFF2244));
-        g.setFont(16.0f);
-        g.drawText(juce::CharPointer_UTF8("\xc3\x97"), closeBtn, juce::Justification::centred);
-
-        inner.removeFromTop(8.0f);
+        auto inner = getLocalBounds().toFloat();
 
         // PROCESSING section header
-        g.setFont(Fonts::getOrbitron(10.0f, true));
+        g.setFont(Fonts::getOrbitron(9.0f, true));
         g.setColour(juce::Colour(0xFFFF2244).withAlpha(0.6f));
-        auto processingHeader = inner.removeFromTop(18.0f);
-        g.drawText("PROCESSING", processingHeader, juce::Justification::centredLeft);
+        g.drawText("PROCESSING", inner.removeFromTop(16.0f), juce::Justification::centredLeft);
 
         // Divider
         g.setColour(juce::Colour(0xFF282828));
-        inner.removeFromTop(4.0f);
+        inner.removeFromTop(3.0f);
         g.fillRect(inner.removeFromTop(1.0f));
-        inner.removeFromTop(8.0f);
+        inner.removeFromTop(6.0f);
 
         // Anti-Alias row label
-        g.setFont(12.0f);
+        g.setFont(11.0f);
         g.setColour(juce::Colours::white);
-        auto aaRow = inner.removeFromTop(24.0f);
+        auto aaRow = inner.removeFromTop(20.0f);
         g.drawText("Anti-Alias", aaRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
-
-        inner.removeFromTop(6.0f);
+        inner.removeFromTop(4.0f);
 
         // Oversampling row label
-        auto osRow = inner.removeFromTop(24.0f);
+        auto osRow = inner.removeFromTop(20.0f);
         g.drawText("Oversampling", osRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
-
-        inner.removeFromTop(6.0f);
+        inner.removeFromTop(4.0f);
 
         // Auto Gain row label
-        auto agRow = inner.removeFromTop(24.0f);
+        auto agRow = inner.removeFromTop(20.0f);
         g.drawText("Auto Gain", agRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
-
-        inner.removeFromTop(6.0f);
+        inner.removeFromTop(4.0f);
 
         // Linear Phase Dry row label
-        auto lpRow = inner.removeFromTop(24.0f);
+        auto lpRow = inner.removeFromTop(20.0f);
         g.drawText("Lin. Phase Dry", lpRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
-
-        inner.removeFromTop(16.0f);
+        inner.removeFromTop(12.0f);
 
         // INTERFACE section header
-        g.setFont(Fonts::getOrbitron(10.0f, true));
+        g.setFont(Fonts::getOrbitron(9.0f, true));
         g.setColour(juce::Colour(0xFFFF2244).withAlpha(0.6f));
-        auto interfaceHeader = inner.removeFromTop(18.0f);
-        g.drawText("INTERFACE", interfaceHeader, juce::Justification::centredLeft);
+        g.drawText("INTERFACE", inner.removeFromTop(16.0f), juce::Justification::centredLeft);
 
         // Divider
         g.setColour(juce::Colour(0xFF282828));
-        inner.removeFromTop(4.0f);
+        inner.removeFromTop(3.0f);
         g.fillRect(inner.removeFromTop(1.0f));
-        inner.removeFromTop(8.0f);
+        inner.removeFromTop(6.0f);
 
         // Window Scale row label
-        g.setFont(12.0f);
+        g.setFont(11.0f);
         g.setColour(juce::Colours::white);
-        auto wsRow = inner.removeFromTop(24.0f);
+        auto wsRow = inner.removeFromTop(20.0f);
         g.drawText("Window Scale", wsRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
-
-        inner.removeFromTop(6.0f);
+        inner.removeFromTop(4.0f);
 
         // Tooltips row label
-        auto ttRow = inner.removeFromTop(24.0f);
+        auto ttRow = inner.removeFromTop(20.0f);
         g.drawText("Tooltips", ttRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
-
-        inner.removeFromTop(6.0f);
+        inner.removeFromTop(4.0f);
 
         // Oscilloscope row label
-        auto scRow = inner.removeFromTop(24.0f);
+        auto scRow = inner.removeFromTop(20.0f);
         g.drawText("Oscilloscope", scRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
-
-        inner.removeFromTop(6.0f);
+        inner.removeFromTop(4.0f);
 
         // Stereo row label
-        auto stRow = inner.removeFromTop(24.0f);
+        auto stRow = inner.removeFromTop(20.0f);
         g.drawText("Stereo", stRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
-
-        inner.removeFromTop(6.0f);
+        inner.removeFromTop(4.0f);
 
         // Scope Length row label
-        auto slRow = inner.removeFromTop(24.0f);
+        auto slRow = inner.removeFromTop(20.0f);
         g.drawText("Scope Length", slRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
     }
 
     void resized() override
     {
-        auto panelBounds = getPanelBounds();
-        auto inner = panelBounds.reduced(16.0f);
-
-        inner.removeFromTop(24.0f); // header
-        inner.removeFromTop(8.0f);
+        auto inner = getLocalBounds();
 
         // PROCESSING header + divider
-        inner.removeFromTop(18.0f);
-        inner.removeFromTop(4.0f);
-        inner.removeFromTop(1.0f);
-        inner.removeFromTop(8.0f);
+        inner.removeFromTop(16);
+        inner.removeFromTop(3);
+        inner.removeFromTop(1);
+        inner.removeFromTop(6);
 
         // Anti-Alias row
-        auto aaRow = inner.removeFromTop(24.0f);
-        aaRow.removeFromLeft(140.0f);
-        antiAliasToggle.setBounds(aaRow.removeFromLeft(50).reduced(0, 2).toNearestInt());
-
-        inner.removeFromTop(6.0f);
+        auto aaRow = inner.removeFromTop(20);
+        aaRow.removeFromLeft(140);
+        antiAliasToggle.setBounds(aaRow.removeFromLeft(50).reduced(0, 2));
+        inner.removeFromTop(4);
 
         // Oversampling row
-        auto osRow = inner.removeFromTop(24.0f);
-        osRow.removeFromLeft(140.0f);
-        oversamplingCombo.setBounds(osRow.removeFromLeft(70).reduced(0, 2).toNearestInt());
-
-        inner.removeFromTop(6.0f);
+        auto osRow = inner.removeFromTop(20);
+        osRow.removeFromLeft(140);
+        oversamplingCombo.setBounds(osRow.removeFromLeft(70).reduced(0, 2));
+        inner.removeFromTop(4);
 
         // Auto Gain row
-        auto agRow = inner.removeFromTop(24.0f);
-        agRow.removeFromLeft(140.0f);
-        autoGainToggle.setBounds(agRow.removeFromLeft(50).reduced(0, 2).toNearestInt());
-
-        inner.removeFromTop(6.0f);
+        auto agRow = inner.removeFromTop(20);
+        agRow.removeFromLeft(140);
+        autoGainToggle.setBounds(agRow.removeFromLeft(50).reduced(0, 2));
+        inner.removeFromTop(4);
 
         // Linear Phase Dry row
-        auto lpRow = inner.removeFromTop(24.0f);
-        lpRow.removeFromLeft(140.0f);
-        linearPhaseToggle.setBounds(lpRow.removeFromLeft(50).reduced(0, 2).toNearestInt());
-
-        inner.removeFromTop(16.0f);
+        auto lpRow = inner.removeFromTop(20);
+        lpRow.removeFromLeft(140);
+        linearPhaseToggle.setBounds(lpRow.removeFromLeft(50).reduced(0, 2));
+        inner.removeFromTop(12);
 
         // INTERFACE header + divider
-        inner.removeFromTop(18.0f);
-        inner.removeFromTop(4.0f);
-        inner.removeFromTop(1.0f);
-        inner.removeFromTop(8.0f);
+        inner.removeFromTop(16);
+        inner.removeFromTop(3);
+        inner.removeFromTop(1);
+        inner.removeFromTop(6);
 
         // Window Scale row
-        auto wsRow = inner.removeFromTop(24.0f);
-        wsRow.removeFromLeft(140.0f);
-        windowScaleCombo.setBounds(wsRow.removeFromLeft(70).reduced(0, 2).toNearestInt());
-
-        inner.removeFromTop(6.0f);
+        auto wsRow = inner.removeFromTop(20);
+        wsRow.removeFromLeft(140);
+        windowScaleCombo.setBounds(wsRow.removeFromLeft(70).reduced(0, 2));
+        inner.removeFromTop(4);
 
         // Tooltips row
-        auto ttRow = inner.removeFromTop(24.0f);
-        ttRow.removeFromLeft(140.0f);
-        tooltipsToggle.setBounds(ttRow.removeFromLeft(50).reduced(0, 2).toNearestInt());
-
-        inner.removeFromTop(6.0f);
+        auto ttRow = inner.removeFromTop(20);
+        ttRow.removeFromLeft(140);
+        tooltipsToggle.setBounds(ttRow.removeFromLeft(50).reduced(0, 2));
+        inner.removeFromTop(4);
 
         // Oscilloscope row
-        auto scRow = inner.removeFromTop(24.0f);
-        scRow.removeFromLeft(140.0f);
-        oscilloscopeToggle.setBounds(scRow.removeFromLeft(50).reduced(0, 2).toNearestInt());
-
-        inner.removeFromTop(6.0f);
+        auto scRow = inner.removeFromTop(20);
+        scRow.removeFromLeft(140);
+        oscilloscopeToggle.setBounds(scRow.removeFromLeft(50).reduced(0, 2));
+        inner.removeFromTop(4);
 
         // Stereo row
-        auto stRow = inner.removeFromTop(24.0f);
-        stRow.removeFromLeft(140.0f);
-        scopeStereoToggle.setBounds(stRow.removeFromLeft(50).reduced(0, 2).toNearestInt());
-
-        inner.removeFromTop(6.0f);
+        auto stRow = inner.removeFromTop(20);
+        stRow.removeFromLeft(140);
+        scopeStereoToggle.setBounds(stRow.removeFromLeft(50).reduced(0, 2));
+        inner.removeFromTop(4);
 
         // Scope Length row
-        auto slRow = inner.removeFromTop(24.0f);
-        slRow.removeFromLeft(140.0f);
-        scopeLengthSlider.setBounds(slRow.removeFromLeft(130).reduced(0, 4).toNearestInt());
+        auto slRow = inner.removeFromTop(20);
+        slRow.removeFromLeft(140);
+        scopeLengthSlider.setBounds(slRow.removeFromLeft(130).reduced(0, 4));
     }
 
-    void mouseDown(const juce::MouseEvent& e) override
-    {
-        // Click outside panel closes overlay
-        if (!getPanelBounds().contains(e.getPosition().toFloat()))
-        {
-            if (onClose) onClose();
-            return;
-        }
-
-        // Check close button
-        if (getCloseBtnBounds().contains(e.getPosition().toFloat()))
-        {
-            if (onClose) onClose();
-            return;
-        }
-    }
-
-    std::function<void()> onClose;
     std::function<void(bool)> onOscilloscopeToggled;
     std::function<void(bool)> onScopeChannelModeChanged;
-    std::function<void(int)> onWindowScaleChanged;
-    std::function<void(int)> onScopeLengthChanged;
+    std::function<void(int)>  onWindowScaleChanged;
+    std::function<void(int)>  onScopeLengthChanged;
 
 private:
     SettingsState& settingsState;
     PluginProcessor& processor;
     PillToggleLookAndFeel pillLnf;
 
-    // Combo styling
     struct OverlayComboLnf : public juce::LookAndFeel_V4
     {
         OverlayComboLnf()
@@ -1028,6 +965,96 @@ private:
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> cleanModeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> autoGainAttachment;
+};
+
+// Settings overlay modal panel — fixed frame + header, with scrollable content.
+class SettingsOverlay : public juce::Component
+{
+public:
+    SettingsOverlay(juce::AudioProcessorValueTreeState& apvts, SettingsState& state, PluginProcessor& proc)
+    {
+        setInterceptsMouseClicks(true, true);
+
+        content = std::make_unique<SettingsContent>(apvts, state, proc);
+        content->onOscilloscopeToggled    = [this](bool b) { if (onOscilloscopeToggled)    onOscilloscopeToggled(b); };
+        content->onScopeChannelModeChanged = [this](bool b) { if (onScopeChannelModeChanged) onScopeChannelModeChanged(b); };
+        content->onWindowScaleChanged      = [this](int p)  { if (onWindowScaleChanged)      onWindowScaleChanged(p); };
+        content->onScopeLengthChanged      = [this](int v)  { if (onScopeLengthChanged)      onScopeLengthChanged(v); };
+
+        addAndMakeVisible(viewport);
+        viewport.setViewedComponent(content.get(), false); // overlay owns content
+        viewport.setScrollBarsShown(true, false);          // vertical only
+        viewport.setScrollBarThickness(8);
+        viewport.getVerticalScrollBar().setColour(juce::ScrollBar::thumbColourId, juce::Colour(0xFFFF2244));
+        viewport.getVerticalScrollBar().setColour(juce::ScrollBar::trackColourId, juce::Colour(0xFF333333));
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        // Dark backdrop
+        g.fillAll(juce::Colour(0xD9000000));
+
+        auto panelBounds = getPanelBounds();
+
+        // Panel background + border
+        g.setColour(juce::Colour(0xFF111111));
+        g.fillRoundedRectangle(panelBounds, 6.0f);
+        g.setColour(juce::Colour(0xFFFF2244));
+        g.drawRoundedRectangle(panelBounds, 6.0f, 1.0f);
+
+        // Header: "SETTINGS"
+        auto inner = panelBounds.reduced(14.0f);
+        g.setFont(Fonts::getOrbitron(10.0f, true));
+        g.setColour(juce::Colour(0xFFFF2244));
+        g.drawText("SETTINGS", inner.removeFromTop(15.0f), juce::Justification::centredLeft);
+
+        // Close button (X) - top-right of panel
+        auto closeBtn = getCloseBtnBounds();
+        g.setColour(juce::Colour(0xFFFF2244));
+        g.setFont(13.0f);
+        g.drawText(juce::CharPointer_UTF8("\xc3\x97"), closeBtn, juce::Justification::centred);
+    }
+
+    void resized() override
+    {
+        auto panelBounds = getPanelBounds();
+        auto inner = panelBounds.reduced(14.0f);
+        inner.removeFromTop(15.0f); // header
+        inner.removeFromTop(4.0f);  // gap
+
+        viewport.setBounds(inner.toNearestInt());
+        // Width excludes the vertical scrollbar when it is shown; reflows when not.
+        content->setSize(viewport.getMaximumVisibleWidth(), SettingsContent::kContentHeight);
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        // Click outside panel closes overlay
+        if (!getPanelBounds().contains(e.getPosition().toFloat()))
+        {
+            if (onClose) onClose();
+            return;
+        }
+
+        // Close button (X)
+        if (getCloseBtnBounds().contains(e.getPosition().toFloat()))
+        {
+            if (onClose) onClose();
+            return;
+        }
+    }
+
+    std::function<void()>     onClose;
+    std::function<void(bool)> onOscilloscopeToggled;
+    std::function<void(bool)> onScopeChannelModeChanged;
+    std::function<void(int)>  onWindowScaleChanged;
+    std::function<void(int)>  onScopeLengthChanged;
+
+private:
+    // Declared before the viewport so it outlives it: ~Viewport detaches the
+    // (still-valid) viewed component before content is destroyed.
+    std::unique_ptr<SettingsContent> content;
+    juce::Viewport viewport;
 
     juce::Rectangle<float> getPanelBounds() const
     {

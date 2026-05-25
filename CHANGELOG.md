@@ -4,6 +4,16 @@ Full development history, newest first.
 
 ---
 
+## Scrollable & Compact Settings Panel
+
+- **Scrollable settings overlay**: Extracted the settings rows into a `SettingsContent` component hosted in a `juce::Viewport`. The panel content now scrolls (vertical neon scrollbar + mouse-wheel) instead of being clipped when the window is short — fixes unreachable bottom rows (Stereo, Scope Length) in compact mode and at 70–80% window scale.
+- **Removed window-expand hack**: `showSettingsOverlay()` no longer grows the window to fit; it stays compact and scrolls. `SettingsOverlay` keeps the fixed backdrop, panel frame, "SETTINGS" header, and close button pinned outside the scroll area.
+- **Tighter layout**: Row heights 24→20px, gaps 6→4px, label font 12→11px, section headers 10→9px, section gap 16→12px, "SETTINGS" header 12→10px with reduced padding. Content height ~336px → ~272px.
+- **Smaller toggle**: `PillToggleLookAndFeel` pill 36×18 → 30×14 (knob auto-scales), keeping the slide animation.
+- **Safety**: `SettingsContent` declared before its `Viewport` so destruction order is explicit (viewport detaches the still-valid viewed component first).
+
+---
+
 ## v2.1 — Oscilloscope Quality Audit
 
 - **Removed SpinLock from scope pipeline**: `juce::AbstractFifo` is lock-free SPSC by design. The `scopeLock` SpinLock and `bufferLock` CriticalSection were redundant and risked audio-thread stalls. Both removed entirely.
