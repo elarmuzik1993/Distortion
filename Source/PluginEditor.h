@@ -1071,8 +1071,9 @@ public:
         g.setColour(juce::Colour(0xFF, 0x00, 0x44).withAlpha(0.5f));
         g.drawRoundedRectangle(bounds.reduced(0.5f), 4.0f, 1.5f);
 
-        // Draw chevron indicator on right side
-        drawChevron(g, bounds.removeFromRight(25).reduced(5));
+        // Draw chevron indicator on right side (scaled with the tab box)
+        const float scale = bounds.getHeight() / 25.0f;  // base tab height is S(25)
+        drawChevron(g, bounds.removeFromRight(25.0f * scale).reduced(5.0f * scale), scale);
     }
 
     void mouseDown(const juce::MouseEvent&) override
@@ -1098,35 +1099,40 @@ private:
     juce::Label label;
     bool isExpanded = true; // Default: expanded
 
-    void drawChevron(juce::Graphics& g, juce::Rectangle<float> bounds)
+    void drawChevron(juce::Graphics& g, juce::Rectangle<float> bounds, float scale)
     {
         juce::Path chevron;
         auto centre = bounds.getCentre();
+        const float a = 6.0f * scale;
+        const float b = 3.0f * scale;
 
         if (isExpanded)
         {
             // V shape (down chevron) - expanded state
-            chevron.startNewSubPath(centre.x - 6, centre.y - 3);
-            chevron.lineTo(centre.x, centre.y + 3);
-            chevron.lineTo(centre.x + 6, centre.y - 3);
+            chevron.startNewSubPath(centre.x - a, centre.y - b);
+            chevron.lineTo(centre.x, centre.y + b);
+            chevron.lineTo(centre.x + a, centre.y - b);
         }
         else
         {
             // > shape (right chevron) - collapsed state
-            chevron.startNewSubPath(centre.x - 3, centre.y - 6);
-            chevron.lineTo(centre.x + 3, centre.y);
-            chevron.lineTo(centre.x - 3, centre.y + 6);
+            chevron.startNewSubPath(centre.x - b, centre.y - a);
+            chevron.lineTo(centre.x + b, centre.y);
+            chevron.lineTo(centre.x - b, centre.y + a);
         }
 
         g.setColour(juce::Colour(0xFF, 0x00, 0x44)); // Neon red
-        g.strokePath(chevron, juce::PathStrokeType(2.0f));
+        g.strokePath(chevron, juce::PathStrokeType(2.0f * scale));
     }
 
     void resized() override
     {
         auto bounds = getLocalBounds();
-        // Label takes all space except chevron area
-        label.setBounds(bounds.removeFromLeft(bounds.getWidth() - 30));
+        // Scale the label font and chevron reserve with the tab box so the name
+        // never gets ellipsized at smaller window scales (base tab height is S(25)).
+        const float scale = getHeight() / 25.0f;
+        label.setFont(juce::Font(14.0f * scale, juce::Font::bold));
+        label.setBounds(bounds.removeFromLeft(bounds.getWidth() - juce::roundToInt(30.0f * scale)));
     }
 };
 
@@ -1370,6 +1376,9 @@ private:
 
     juce::TextButton extremeButton;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> extremeAttachment;
+
+    juce::TextButton cleanBoostButton;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> cleanBoostAttachment;
 
     // Custom button class for randomize with right-click menu
     class RandomizeButton : public juce::TextButton
