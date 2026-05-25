@@ -10,6 +10,7 @@
 ## Key Specifications
 - **DSP Specs**: See `DSP Architecture` section below.
 - **UI Specs**: Professional custom rotary knobs (`CustomKnob`), real-time oscilloscope, and LA2A-style gain reduction meter.
+- **Compact Window Mode** (USE-48): When the oscilloscope is disabled in Settings, the plugin window folds to a compact height (180px base at 100% scale). The Settings overlay temporarily expands to full height while open, then folds back on close. LFO/Compression tabs auto-collapse on fold; re-expanding them in compact mode shows an `ExpansionBackdrop` panel (tight bounding box, dark bg + red border) that covers the parameter knobs while controls are tweaked.
 - **Safety**: Includes `realtime-audio-safety-checklist.md` for thread safety and DSP best practices.
 - **CI/CD**: GitHub Actions for automated Windows/Linux release artifacts.
 
