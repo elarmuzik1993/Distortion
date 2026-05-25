@@ -626,8 +626,8 @@ public:
         bool ticked, bool, bool, bool) override
     {
         juce::ignoreUnused(w, h);
-        const float pillW = 36.0f;
-        const float pillH = 18.0f;
+        const float pillW = 30.0f;
+        const float pillH = 14.0f;
         const float pillX = x;
         const float pillY = y + (h - pillH) / 2.0f;
         const float knobDiameter = pillH - 4.0f;
@@ -657,8 +657,8 @@ public:
 class SettingsContent : public juce::Component
 {
 public:
-    // Summed height of all rows below the header (336px of content + 16px bottom slack).
-    static constexpr int kContentHeight = 352;
+    // Summed height of all rows below the header (272px of content + 12px bottom slack).
+    static constexpr int kContentHeight = 284;
 
     SettingsContent(juce::AudioProcessorValueTreeState& apvts, SettingsState& state, PluginProcessor& proc)
         : settingsState(state), processor(proc)
@@ -788,73 +788,73 @@ public:
         auto inner = getLocalBounds().toFloat();
 
         // PROCESSING section header
-        g.setFont(Fonts::getOrbitron(10.0f, true));
+        g.setFont(Fonts::getOrbitron(9.0f, true));
         g.setColour(juce::Colour(0xFFFF2244).withAlpha(0.6f));
-        g.drawText("PROCESSING", inner.removeFromTop(18.0f), juce::Justification::centredLeft);
+        g.drawText("PROCESSING", inner.removeFromTop(16.0f), juce::Justification::centredLeft);
 
         // Divider
         g.setColour(juce::Colour(0xFF282828));
-        inner.removeFromTop(4.0f);
+        inner.removeFromTop(3.0f);
         g.fillRect(inner.removeFromTop(1.0f));
-        inner.removeFromTop(8.0f);
+        inner.removeFromTop(6.0f);
 
         // Anti-Alias row label
-        g.setFont(12.0f);
+        g.setFont(11.0f);
         g.setColour(juce::Colours::white);
-        auto aaRow = inner.removeFromTop(24.0f);
+        auto aaRow = inner.removeFromTop(20.0f);
         g.drawText("Anti-Alias", aaRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
-        inner.removeFromTop(6.0f);
+        inner.removeFromTop(4.0f);
 
         // Oversampling row label
-        auto osRow = inner.removeFromTop(24.0f);
+        auto osRow = inner.removeFromTop(20.0f);
         g.drawText("Oversampling", osRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
-        inner.removeFromTop(6.0f);
+        inner.removeFromTop(4.0f);
 
         // Auto Gain row label
-        auto agRow = inner.removeFromTop(24.0f);
+        auto agRow = inner.removeFromTop(20.0f);
         g.drawText("Auto Gain", agRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
-        inner.removeFromTop(6.0f);
+        inner.removeFromTop(4.0f);
 
         // Linear Phase Dry row label
-        auto lpRow = inner.removeFromTop(24.0f);
+        auto lpRow = inner.removeFromTop(20.0f);
         g.drawText("Lin. Phase Dry", lpRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
-        inner.removeFromTop(16.0f);
+        inner.removeFromTop(12.0f);
 
         // INTERFACE section header
-        g.setFont(Fonts::getOrbitron(10.0f, true));
+        g.setFont(Fonts::getOrbitron(9.0f, true));
         g.setColour(juce::Colour(0xFFFF2244).withAlpha(0.6f));
-        g.drawText("INTERFACE", inner.removeFromTop(18.0f), juce::Justification::centredLeft);
+        g.drawText("INTERFACE", inner.removeFromTop(16.0f), juce::Justification::centredLeft);
 
         // Divider
         g.setColour(juce::Colour(0xFF282828));
-        inner.removeFromTop(4.0f);
+        inner.removeFromTop(3.0f);
         g.fillRect(inner.removeFromTop(1.0f));
-        inner.removeFromTop(8.0f);
+        inner.removeFromTop(6.0f);
 
         // Window Scale row label
-        g.setFont(12.0f);
+        g.setFont(11.0f);
         g.setColour(juce::Colours::white);
-        auto wsRow = inner.removeFromTop(24.0f);
+        auto wsRow = inner.removeFromTop(20.0f);
         g.drawText("Window Scale", wsRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
-        inner.removeFromTop(6.0f);
+        inner.removeFromTop(4.0f);
 
         // Tooltips row label
-        auto ttRow = inner.removeFromTop(24.0f);
+        auto ttRow = inner.removeFromTop(20.0f);
         g.drawText("Tooltips", ttRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
-        inner.removeFromTop(6.0f);
+        inner.removeFromTop(4.0f);
 
         // Oscilloscope row label
-        auto scRow = inner.removeFromTop(24.0f);
+        auto scRow = inner.removeFromTop(20.0f);
         g.drawText("Oscilloscope", scRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
-        inner.removeFromTop(6.0f);
+        inner.removeFromTop(4.0f);
 
         // Stereo row label
-        auto stRow = inner.removeFromTop(24.0f);
+        auto stRow = inner.removeFromTop(20.0f);
         g.drawText("Stereo", stRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
-        inner.removeFromTop(6.0f);
+        inner.removeFromTop(4.0f);
 
         // Scope Length row label
-        auto slRow = inner.removeFromTop(24.0f);
+        auto slRow = inner.removeFromTop(20.0f);
         g.drawText("Scope Length", slRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
     }
 
@@ -863,67 +863,67 @@ public:
         auto inner = getLocalBounds();
 
         // PROCESSING header + divider
-        inner.removeFromTop(18);
-        inner.removeFromTop(4);
+        inner.removeFromTop(16);
+        inner.removeFromTop(3);
         inner.removeFromTop(1);
-        inner.removeFromTop(8);
+        inner.removeFromTop(6);
 
         // Anti-Alias row
-        auto aaRow = inner.removeFromTop(24);
+        auto aaRow = inner.removeFromTop(20);
         aaRow.removeFromLeft(140);
         antiAliasToggle.setBounds(aaRow.removeFromLeft(50).reduced(0, 2));
-        inner.removeFromTop(6);
+        inner.removeFromTop(4);
 
         // Oversampling row
-        auto osRow = inner.removeFromTop(24);
+        auto osRow = inner.removeFromTop(20);
         osRow.removeFromLeft(140);
         oversamplingCombo.setBounds(osRow.removeFromLeft(70).reduced(0, 2));
-        inner.removeFromTop(6);
+        inner.removeFromTop(4);
 
         // Auto Gain row
-        auto agRow = inner.removeFromTop(24);
+        auto agRow = inner.removeFromTop(20);
         agRow.removeFromLeft(140);
         autoGainToggle.setBounds(agRow.removeFromLeft(50).reduced(0, 2));
-        inner.removeFromTop(6);
+        inner.removeFromTop(4);
 
         // Linear Phase Dry row
-        auto lpRow = inner.removeFromTop(24);
+        auto lpRow = inner.removeFromTop(20);
         lpRow.removeFromLeft(140);
         linearPhaseToggle.setBounds(lpRow.removeFromLeft(50).reduced(0, 2));
-        inner.removeFromTop(16);
+        inner.removeFromTop(12);
 
         // INTERFACE header + divider
-        inner.removeFromTop(18);
-        inner.removeFromTop(4);
+        inner.removeFromTop(16);
+        inner.removeFromTop(3);
         inner.removeFromTop(1);
-        inner.removeFromTop(8);
+        inner.removeFromTop(6);
 
         // Window Scale row
-        auto wsRow = inner.removeFromTop(24);
+        auto wsRow = inner.removeFromTop(20);
         wsRow.removeFromLeft(140);
         windowScaleCombo.setBounds(wsRow.removeFromLeft(70).reduced(0, 2));
-        inner.removeFromTop(6);
+        inner.removeFromTop(4);
 
         // Tooltips row
-        auto ttRow = inner.removeFromTop(24);
+        auto ttRow = inner.removeFromTop(20);
         ttRow.removeFromLeft(140);
         tooltipsToggle.setBounds(ttRow.removeFromLeft(50).reduced(0, 2));
-        inner.removeFromTop(6);
+        inner.removeFromTop(4);
 
         // Oscilloscope row
-        auto scRow = inner.removeFromTop(24);
+        auto scRow = inner.removeFromTop(20);
         scRow.removeFromLeft(140);
         oscilloscopeToggle.setBounds(scRow.removeFromLeft(50).reduced(0, 2));
-        inner.removeFromTop(6);
+        inner.removeFromTop(4);
 
         // Stereo row
-        auto stRow = inner.removeFromTop(24);
+        auto stRow = inner.removeFromTop(20);
         stRow.removeFromLeft(140);
         scopeStereoToggle.setBounds(stRow.removeFromLeft(50).reduced(0, 2));
-        inner.removeFromTop(6);
+        inner.removeFromTop(4);
 
         // Scope Length row
-        auto slRow = inner.removeFromTop(24);
+        auto slRow = inner.removeFromTop(20);
         slRow.removeFromLeft(140);
         scopeLengthSlider.setBounds(slRow.removeFromLeft(130).reduced(0, 4));
     }
@@ -1003,24 +1003,24 @@ public:
         g.drawRoundedRectangle(panelBounds, 6.0f, 1.0f);
 
         // Header: "SETTINGS"
-        auto inner = panelBounds.reduced(16.0f);
-        g.setFont(Fonts::getOrbitron(12.0f, true));
+        auto inner = panelBounds.reduced(14.0f);
+        g.setFont(Fonts::getOrbitron(10.0f, true));
         g.setColour(juce::Colour(0xFFFF2244));
-        g.drawText("SETTINGS", inner.removeFromTop(24.0f), juce::Justification::centredLeft);
+        g.drawText("SETTINGS", inner.removeFromTop(15.0f), juce::Justification::centredLeft);
 
         // Close button (X) - top-right of panel
         auto closeBtn = getCloseBtnBounds();
         g.setColour(juce::Colour(0xFFFF2244));
-        g.setFont(16.0f);
+        g.setFont(13.0f);
         g.drawText(juce::CharPointer_UTF8("\xc3\x97"), closeBtn, juce::Justification::centred);
     }
 
     void resized() override
     {
         auto panelBounds = getPanelBounds();
-        auto inner = panelBounds.reduced(16.0f);
-        inner.removeFromTop(24.0f); // header
-        inner.removeFromTop(8.0f);  // gap
+        auto inner = panelBounds.reduced(14.0f);
+        inner.removeFromTop(15.0f); // header
+        inner.removeFromTop(4.0f);  // gap
 
         viewport.setBounds(inner.toNearestInt());
         // Width excludes the vertical scrollbar when it is shown; reflows when not.
