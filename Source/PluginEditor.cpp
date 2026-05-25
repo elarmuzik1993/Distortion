@@ -224,7 +224,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
         audioProcessor.parameters, "extremeEnabled", extremeButton);
 
     addAndMakeVisible(cleanBoostButton);
-    cleanBoostButton.setButtonText("CLEAN BOOST");
+    cleanBoostButton.setButtonText("BOOST");
     cleanBoostButton.setClickingTogglesState(true);
     cleanBoostButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF1A1A1A));
     cleanBoostButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xFFFF0044));
@@ -751,7 +751,7 @@ void PluginEditor::resized()
     const int knobSize = S(67);
     const int controlSpacing = S(8);
     const int bottomMargin = S(20);
-    const int rowY = actualWindowHeight - bottomMargin - knobSize - labelHeight - S(10);
+    const int rowY = actualWindowHeight - bottomMargin - knobSize - labelHeight - S(10) + 2;
 
     const int clipTypeColumnWidth = S(50);
     const int totalControlsWidth = knobSize * 8 + clipTypeColumnWidth + controlSpacing * 8;
@@ -794,20 +794,18 @@ void PluginEditor::resized()
     const int comboWidth = S(45);
     const int comboHeight = S(18);
     const int comboXOffset = (clipTypeColumnWidth - comboWidth) / 2;
-    const int comboY = rowY + (knobSize - comboHeight) / 2;
+    const int clipButtonH = S(14);
+    const int clipButtonGap = S(2);
+    // Center the ClipType / EXTREME / BOOST stack on the knob centerline so EXTREME
+    // (the middle element) lines up vertically between the Dist. Amount and Tone knobs.
+    const int extremeY = rowY + (knobSize - clipButtonH) / 2 + 2;
+    const int comboY = extremeY - clipButtonGap - comboHeight;
+    const int boostY = extremeY + clipButtonH + clipButtonGap;
     clipTypeComboBox.setBounds(currentX + comboXOffset, comboY, comboWidth, comboHeight);
     clipTypeLabel.setBounds(currentX, rowY + knobSize + lockInset, clipTypeColumnWidth, labelHeight);
     clipTypeLock.setBounds(currentX + comboXOffset + comboWidth - S(12) - S(2), comboY, S(12), S(12));
-    extremeButton.setBounds(
-        currentX + comboXOffset,
-        comboY + comboHeight + S(2),
-        comboWidth,
-        S(14));
-    cleanBoostButton.setBounds(
-        currentX + comboXOffset,
-        comboY + comboHeight + S(2) + S(14) + S(2),
-        comboWidth,
-        S(14));
+    extremeButton.setBounds(currentX + comboXOffset, extremeY, comboWidth, clipButtonH);
+    cleanBoostButton.setBounds(currentX + comboXOffset, boostY, comboWidth, clipButtonH);
     currentX += clipTypeColumnWidth + controlSpacing;
 
     // Tone
