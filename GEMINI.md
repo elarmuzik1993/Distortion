@@ -1,3 +1,3 @@
-# Monolit Distortion — CLAUDE.md
+# Monolit Distortion — GEMINI.md
 
 For project rules and engineering standards, refer to: **AGENTS.md**

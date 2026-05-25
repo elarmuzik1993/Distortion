@@ -145,7 +145,8 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     {
         isCompressionExpanded = expanded;
         updateCompressionVisibility();
-        resized(); // Recalculate layout with new height
+        resized();
+        updateExpansionBackdrop();
     };
 
     // Setup LFO enable toggle
@@ -162,7 +163,8 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     {
         isLFOExpanded = expanded;
         updateLFOVisibility();
-        resized(); // Recalculate layout with new height
+        resized();
+        updateExpansionBackdrop();
     };
 
     // Add LFO lock icon
@@ -482,6 +484,9 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     updateCompressionVisibility();
     updateLFOVisibility();
 
+    // Expansion backdrop — starts hidden, appears when a tab is expanded in compact mode
+    addChildComponent(expansionBackdrop);
+
     // Setup settings (gear) button
     addAndMakeVisible(settingsButton);
     settingsButton.onClick = [this]() { showSettingsOverlay(); };
@@ -595,14 +600,10 @@ void PluginEditor::resized()
 
     // ========== OSCILLOSCOPE (below title, above controls, inset by border) ==========
     const int phaseH = S(16);
+    const int scopeH = juce::jmax(0, getHeight() - titleHeight - bottomControlsHeight - phaseH);
     oscilloscope.setBounds((int)borderWidth, titleHeight,
-                          getWidth() - (int)(borderWidth * 2),
-                          getHeight() - titleHeight - bottomControlsHeight - phaseH);
-
-    // XY Morph Pad - same bounds as oscilloscope (invisible overlay)
+                          getWidth() - (int)(borderWidth * 2), scopeH);
     xyMorphPad.setBounds(oscilloscope.getBounds());
-
-    // Phase Correlation Meter - directly below oscilloscope, same width
     phaseCorrelationMeter.setBounds((int)borderWidth, oscilloscope.getBottom(),
                                     getWidth() - (int)(borderWidth * 2), phaseH);
 
@@ -822,6 +823,9 @@ void PluginEditor::resized()
     outputGainSlider.setBounds(currentX, rowY, knobSize, knobSize);
     outputGainLabel.setBounds(currentX, rowY + knobSize + lockInset, knobSize, labelHeight);
     outputGainLock.setBounds(currentX + knobSize - lockSize - lockInset, rowY + lockInset, lockSize, lockSize);
+
+    // Expansion backdrop (compact mode only)
+    updateExpansionBackdrop();
 
     // Settings overlay covers entire editor
     if (settingsOverlay)
@@ -1353,6 +1357,14 @@ void PluginEditor::showSettingsOverlay()
 {
     if (settingsOverlay) return;
 
+    // Expand to full height while settings is open so all rows fit
+    if (!settingsState.oscilloscopeEnabled)
+    {
+        const int w = juce::roundToInt(960.0f * settingsState.windowScalePercent / 100.0f);
+        const int h = juce::roundToInt(564.0f * settingsState.windowScalePercent / 100.0f);
+        setSize(w, h);
+    }
+
     settingsOverlay = std::make_unique<SettingsOverlay>(audioProcessor.parameters, settingsState, audioProcessor);
     addAndMakeVisible(*settingsOverlay);
     settingsOverlay->setBounds(getLocalBounds());
@@ -1376,12 +1388,14 @@ void PluginEditor::hideSettingsOverlay()
 {
     saveSettings();
     settingsOverlay.reset();
+    applyWindowScale(settingsState.windowScalePercent); // fold back if scope is off
 }
 
 void PluginEditor::applyWindowScale(int scalePercent)
 {
+    const float baseH = settingsState.oscilloscopeEnabled ? 564.0f : 180.0f;
     const int w = juce::roundToInt(960.0f * scalePercent / 100.0f);
-    const int h = juce::roundToInt(564.0f * scalePercent / 100.0f);
+    const int h = juce::roundToInt(baseH * scalePercent / 100.0f);
     setSize(w, h);
 }
 
@@ -1391,6 +1405,7 @@ void PluginEditor::applyOscilloscopeEnabled(bool enabled)
     {
         oscilloscope.setVisible(true);
         xyMorphPad.setVisible(true);
+        phaseCorrelationMeter.setVisible(true);
         oscilloscope.startTimerHz(DSPConstants::SCOPE_REFRESH_RATE_HZ);
     }
     else
@@ -1398,6 +1413,66 @@ void PluginEditor::applyOscilloscopeEnabled(bool enabled)
         oscilloscope.stopTimer();
         oscilloscope.setVisible(false);
         xyMorphPad.setVisible(false);
+        phaseCorrelationMeter.setVisible(false);
+        // Collapse expanded sections so compact window starts clean
+        if (isLFOExpanded)        { isLFOExpanded = false;        lfoTabHeader.setExpanded(false);        updateLFOVisibility(); }
+        if (isCompressionExpanded){ isCompressionExpanded = false; compressionTabHeader.setExpanded(false); updateCompressionVisibility(); }
+    }
+    // Don't resize while settings overlay is open — fold happens on close
+    if (!settingsOverlay)
+        applyWindowScale(settingsState.windowScalePercent);
+    else
+        resized(); // bounds must be recalculated when visibility changes mid-session
+}
+
+void PluginEditor::updateExpansionBackdrop()
+{
+    const bool compact = !settingsState.oscilloscopeEnabled;
+    const bool anyExpanded = isLFOExpanded || isCompressionExpanded;
+
+    if (compact && anyExpanded)
+    {
+        // Compute tight bounding box from the actual control positions
+        juce::Rectangle<int> box;
+        auto grow = [&](juce::Component& c) {
+            if (c.isVisible()) box = box.isEmpty() ? c.getBounds() : box.getUnion(c.getBounds());
+        };
+        if (isLFOExpanded)
+        {
+            grow(lfoRateSlider);  grow(lfoRateLabel);
+            grow(lfoDepthSlider); grow(lfoDepthLabel);
+            grow(lfoWaveformComboBox); grow(lfoWaveformLabel);
+            grow(lfoDestinationComboBox); grow(lfoDestinationLabel);
+        }
+        if (isCompressionExpanded)
+        {
+            grow(compPeakReductionSlider); grow(compPeakReductionLabel);
+            grow(compMakeupGainSlider);    grow(compMakeupGainLabel);
+            grow(compRatioComboBox);       grow(compRatioLabel);
+            grow(gainReductionMeter);
+        }
+        expansionBackdrop.setBounds(box.expanded(8, 6));
+        expansionBackdrop.setVisible(true);
+        expansionBackdrop.toFront(false);
+        // Bring expanded controls in front of the backdrop
+        if (isLFOExpanded)
+        {
+            lfoRateSlider.toFront(false);     lfoRateLabel.toFront(false);     lfoRateLock.toFront(false);
+            lfoDepthSlider.toFront(false);    lfoDepthLabel.toFront(false);    lfoDepthLock.toFront(false);
+            lfoWaveformComboBox.toFront(false); lfoWaveformLabel.toFront(false);
+            lfoDestinationComboBox.toFront(false); lfoDestinationLabel.toFront(false); lfoDestinationLock.toFront(false);
+        }
+        if (isCompressionExpanded)
+        {
+            compPeakReductionSlider.toFront(false); compPeakReductionLabel.toFront(false); compPeakReductionLock.toFront(false);
+            compMakeupGainSlider.toFront(false);    compMakeupGainLabel.toFront(false);    compMakeupGainLock.toFront(false);
+            compRatioComboBox.toFront(false);       compRatioLabel.toFront(false);         compRatioLock.toFront(false);
+            gainReductionMeter.toFront(false);
+        }
+    }
+    else
+    {
+        expansionBackdrop.setVisible(false);
     }
 }
 

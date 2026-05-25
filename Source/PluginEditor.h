@@ -1478,6 +1478,19 @@ private:
     void loadSettings();
     void saveSettings();
     juce::File getSettingsFile();
+    void updateExpansionBackdrop();
+
+    // Opaque panel drawn over the parameter row when a tab is expanded in compact mode
+    struct ExpansionBackdrop : juce::Component
+    {
+        void paint(juce::Graphics& g) override
+        {
+            g.setColour(juce::Colour(0xff141414));
+            g.fillAll();
+            g.setColour(juce::Colour(0xFFFF2244).withAlpha(0.25f));
+            g.drawRect(getLocalBounds().toFloat().reduced(0.5f), 1.0f);
+        }
+    } expansionBackdrop;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginEditor)
 };
