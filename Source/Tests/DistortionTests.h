@@ -69,6 +69,22 @@ private:
     void testGainReductionRange();
 };
 
+/** Tests for Clean Boost (pre-emphasis toggle in front of the distortion) */
+class CleanBoostTests : public juce::UnitTest
+{
+public:
+    CleanBoostTests() : UnitTest("Clean Boost", TestCategories::DSP) {}
+    void runTest() override;
+
+private:
+    void testNoInvalidSamplesAcrossSampleRates();
+    void testBoostRaisesLevel();
+    void testBypassWhenDistortionOff();
+    void testStateRoundTrip();
+    void testNoAllocationWhenToggling();
+    void testRuntimeOversamplingChange();
+};
+
 /** Tests for sub-linear harmonic density scaling */
 class HarmonicDensityTests : public juce::UnitTest
 {
@@ -435,6 +451,7 @@ inline void registerAllTests()
     static DistortionDSPTests distortionDSPTests;
     static CompressionDSPTests compressionDSPTests;
     static PreCompressionTests preCompressionTests;
+    static CleanBoostTests cleanBoostTests;
     static HarmonicDensityTests harmonicDensityTests;
     static OutputLimiterTests outputLimiterTests;
     static LFOTests lfoTests;

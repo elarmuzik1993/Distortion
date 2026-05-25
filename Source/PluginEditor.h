@@ -1371,6 +1371,9 @@ private:
     juce::TextButton extremeButton;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> extremeAttachment;
 
+    juce::TextButton cleanBoostButton;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> cleanBoostAttachment;
+
     // Custom button class for randomize with right-click menu
     class RandomizeButton : public juce::TextButton
     {

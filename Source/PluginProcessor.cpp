@@ -76,6 +76,38 @@ void writeSecondOrderHighPassCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
     coeffs[4] = static_cast<float>(c1 * (1.0 - invQ * n + nSquared));
 }
 
+// RBJ high-shelf, written in place (a0-normalized) so we never allocate on the
+// audio thread. gainDb > 0 boosts highs above cutoffHz; < 0 cuts them.
+void writeHighShelfCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
+                          const double sampleRate,
+                          const double cutoffHz,
+                          const double q,
+                          const double gainDb) noexcept
+{
+    const auto A = std::pow(10.0, gainDb / 40.0);
+    const auto w0 = juce::MathConstants<double>::twoPi * cutoffHz / sampleRate;
+    const auto cosw0 = std::cos(w0);
+    const auto alpha = std::sin(w0) / (2.0 * q);
+    const auto twoSqrtAalpha = 2.0 * std::sqrt(A) * alpha;
+    const auto Aplus = A + 1.0;
+    const auto Aminus = A - 1.0;
+
+    const auto b0 =      A * (Aplus + Aminus * cosw0 + twoSqrtAalpha);
+    const auto b1 = -2.0 * A * (Aminus + Aplus * cosw0);
+    const auto b2 =      A * (Aplus + Aminus * cosw0 - twoSqrtAalpha);
+    const auto a0 =          (Aplus - Aminus * cosw0 + twoSqrtAalpha);
+    const auto a1 =  2.0 *   (Aminus - Aplus * cosw0);
+    const auto a2 =          (Aplus - Aminus * cosw0 - twoSqrtAalpha);
+
+    const auto invA0 = 1.0 / a0;
+    auto* coeffs = dest.getRawCoefficients();
+    coeffs[0] = static_cast<float>(b0 * invA0);
+    coeffs[1] = static_cast<float>(b1 * invA0);
+    coeffs[2] = static_cast<float>(b2 * invA0);
+    coeffs[3] = static_cast<float>(a1 * invA0);
+    coeffs[4] = static_cast<float>(a2 * invA0);
+}
+
 }
 
 // Include test header in debug builds (tests run from separate test runner)
@@ -120,13 +152,14 @@ PluginProcessor::PluginProcessor()
     toneParam = parameters.getRawParameterValue("tone");
     waveshaperCleanParam = parameters.getRawParameterValue("waveshaperClean");
     linearPhaseDryParam = parameters.getRawParameterValue("linearPhaseDry");
+    cleanBoostParam = parameters.getRawParameterValue("cleanBoost");
     // Verify all parameters were found
     jassert(inputGainParam && outputGainParam && distortionAmountParam
         && highPassFreqParam && subGuardFreqParam && clipTypeParam
         && lfoRateParam && lfoDepthParam && lfoWaveformParam && lfoEnabledParam && lfoDestinationParam && waveshaperMixParam
         && compPeakReductionParam && compMakeupGainParam && compRatioParam && compEnabledParam
         && autoGainEnabledParam && extremeEnabledParam && globalMixParam
-        && distMixParam && toneParam && waveshaperCleanParam && linearPhaseDryParam);
+        && distMixParam && toneParam && waveshaperCleanParam && linearPhaseDryParam && cleanBoostParam);
 
     // Initialize SmoothedValues with default sample rate to prevent assertions
     // They will be properly re-initialized in prepareToPlay() with actual sample rate
@@ -137,6 +170,8 @@ PluginProcessor::PluginProcessor()
     smoothedGlobalMix.setCurrentAndTargetValue(1.0f);
     smoothedSubGuardFreq.reset(defaultSampleRate, DSPConstants::SUBGUARD_FREQ_SMOOTH_TIME_S);
     smoothedSubGuardFreq.setCurrentAndTargetValue(DSPConstants::SUBGUARD_FREQ_DEFAULT);
+    smoothedBoostDepth.reset(defaultSampleRate, DSPConstants::CLEAN_BOOST_SMOOTH_TIME_S);
+    smoothedBoostDepth.setCurrentAndTargetValue(0.0f);
 }
 
 PluginProcessor::~PluginProcessor()
@@ -611,6 +646,18 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     *toneFilterLow.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, initialToneFreq);
     toneFilterLow.reset();
 
+    // Clean Boost emphasis / de-emphasis high-shelves (oversampled rate).
+    // Seed from the current toggle state so a restored "on" session starts settled.
+    emphasisFilter.prepare(spec);
+    deEmphasisFilter.prepare(spec);
+    const float boostOn = (cleanBoostParam && cleanBoostParam->load() > 0.5f) ? 1.0f : 0.0f;
+    smoothedBoostDepth.reset(spec.sampleRate, DSPConstants::CLEAN_BOOST_SMOOTH_TIME_S);
+    smoothedBoostDepth.setCurrentAndTargetValue(boostOn);
+    lastBoostDepth = -1.0f;  // force first updateCleanBoostCoefficients to write
+    updateCleanBoostCoefficients(boostOn, spec.sampleRate);
+    emphasisFilter.reset();
+    deEmphasisFilter.reset();
+
     // Sub Guard variable-slope crossover filters (oversampled domain)
     const float sgFreq = subGuardFreqParam ? subGuardFreqParam->load() : DSPConstants::SUBGUARD_FREQ_DEFAULT;
     // Use safe frequency for filter initialization when OFF (prevents divide-by-zero)
@@ -1004,6 +1051,17 @@ void PluginProcessor::rebuildOversampling(double sampleRate, int samplesPerBlock
     *toneFilterLow.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, toneFreq);
     toneFilterLow.reset();
 
+    // Re-prepare Clean Boost shelves at the new oversampled rate (see prepareToPlay)
+    emphasisFilter.prepare(spec);
+    deEmphasisFilter.prepare(spec);
+    const float boostOn = (cleanBoostParam && cleanBoostParam->load() > 0.5f) ? 1.0f : 0.0f;
+    smoothedBoostDepth.reset(spec.sampleRate, DSPConstants::CLEAN_BOOST_SMOOTH_TIME_S);
+    smoothedBoostDepth.setCurrentAndTargetValue(boostOn);
+    lastBoostDepth = -1.0f;  // force first updateCleanBoostCoefficients to write
+    updateCleanBoostCoefficients(boostOn, spec.sampleRate);
+    emphasisFilter.reset();
+    deEmphasisFilter.reset();
+
     // Re-prepare sub guard filters
     const float sgFreq = subGuardFreqParam ? subGuardFreqParam->load() : DSPConstants::SUBGUARD_FREQ_DEFAULT;
     const float filterInitFreq = (sgFreq <= 1.0f) ? 60.0f : sgFreq;
@@ -1249,6 +1307,13 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     pb_subGuardFreq             = subGuardFreq;
     pb_outGainParam             = outGainParam;
 
+    // Clean Boost engages only when distortion is active (it sits in front of the
+    // clipper); with distortion bypassed the path stays truly clean. The smoothed
+    // depth morphs the toggle click-free.
+    const bool cleanBoostRequested = (cleanBoostParam && cleanBoostParam->load() > 0.5f);
+    pb_cleanBoostOn = cleanBoostRequested && (modulatedDistortionParam >= 0.5f);
+    smoothedBoostDepth.setTargetValue(pb_cleanBoostOn ? 1.0f : 0.0f);
+
     // Calculate distortion drive from modulated parameter
     float distortionDrive = 1.0f + (modulatedDistortionParam / 100.0f) * 3.0f;
 
@@ -1453,8 +1518,14 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             autoGainInputEnvelope = autoGainReleaseCoeff * autoGainInputEnvelope + (1.0f - autoGainReleaseCoeff) * inputRms;
     }
 
+    // Clean Boost pre-emphasis: lift + high-shelf into the distortion (reduces IMD).
+    applyCleanBoostEmphasis();
+
     if (!applySubGuardSplit())
         return;  // band-split safety check failed — bail entire processBlock
+
+    // Clean Boost de-emphasis: complementary high-shelf cut restoring spectral balance.
+    applyCleanBoostDeEmphasis();
 
     // ========== SUB GUARD: Remove clean low band before post-distortion processing ==========
     // When Sub Guard is active, subtract the clean low band from oversampledBlock
@@ -2592,6 +2663,55 @@ void PluginProcessor::updateSubGuardCoefficients(float freq, double sampleRate)
         writeSecondOrderHighPassCoeffs(*subGuardHP18_2.state, sampleRate, freq, lr2Q);
 }
 
+void PluginProcessor::updateCleanBoostCoefficients(float depth, double sampleRate)
+{
+    // RT-safe in-place shelf update (same .state contract as updateSubGuardCoefficients).
+    // depth 0 → flat shelves (transparent); depth 1 → full pre-emphasis boost / de-emphasis cut.
+    const double shelfDb = static_cast<double>(depth) * DSPConstants::CLEAN_BOOST_EMPH_DB;
+    const double freq = DSPConstants::CLEAN_BOOST_EMPH_FREQ;
+    const double q = DSPConstants::CLEAN_BOOST_Q;
+
+    if (emphasisFilter.state != nullptr)
+        writeHighShelfCoeffs(*emphasisFilter.state, sampleRate, freq, q, shelfDb);
+    if (deEmphasisFilter.state != nullptr)
+        writeHighShelfCoeffs(*deEmphasisFilter.state, sampleRate, freq, q, -shelfDb);
+}
+
+void PluginProcessor::applyCleanBoostEmphasis()
+{
+    // Process while engaged OR still fading out; once settled at 0, true-bypass.
+    pb_boostProcessedThisBlock =
+        pb_cleanBoostOn || smoothedBoostDepth.getCurrentValue() > 0.0f;
+
+    if (!pb_boostProcessedThisBlock)
+        return;
+
+    // Block-paced morph (one value per block, like smoothedSubGuardFreq).
+    const float depth = smoothedBoostDepth.skip(static_cast<int>(pb_numSamples));
+    if (std::abs(depth - lastBoostDepth) > 1.0e-4f)
+    {
+        updateCleanBoostCoefficients(depth, pb_oversampledSR);
+        lastBoostDepth = depth;
+    }
+
+    // Broadband level lift (allowed to get louder — not undone by de-emphasis),
+    // scaled by depth so the toggle morphs in click-free.
+    const float boostGain = juce::Decibels::decibelsToGain(depth * DSPConstants::CLEAN_BOOST_DB);
+    pb_oversampledBlock.multiplyBy(boostGain);
+
+    if (emphasisFilter.state != nullptr)
+        emphasisFilter.process(juce::dsp::ProcessContextReplacing<float>(pb_oversampledBlock));
+}
+
+void PluginProcessor::applyCleanBoostDeEmphasis()
+{
+    if (!pb_boostProcessedThisBlock)
+        return;  // mirrors the emphasis gate so the shelves stay paired
+
+    if (deEmphasisFilter.state != nullptr)
+        deEmphasisFilter.process(juce::dsp::ProcessContextReplacing<float>(pb_oversampledBlock));
+}
+
 //Add Parameter Definition Here
 juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParameterLayout()
 {
@@ -2753,6 +2873,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         juce::ParameterID{ "linearPhaseDry", 1 },
         "Linear Phase Dry",
         false));  // Default OFF — preserves existing IIR character and sessions
+
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{ "cleanBoost", 1 },
+        "Clean Boost",
+        false));  // Default OFF — pre-emphasis boost in front of the distortion
 
     return { params.begin(), params.end() };
 }

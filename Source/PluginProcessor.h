@@ -105,6 +105,16 @@ namespace DSPConstants
     constexpr float AUTO_GAIN_MIN = 0.1f;                      // -20dB minimum compensation
     constexpr float AUTO_GAIN_MAX = 4.0f;                      // +12dB maximum compensation
 
+    // Clean Boost (toggle): level lift + high-shelf pre-emphasis in front of the
+    // distortion, with a complementary high-shelf de-emphasis after the clipper.
+    // Suppressing lows entering the nonlinearity reduces intermodulation distortion;
+    // the de-emphasis restores spectral balance so only the saturation character changes.
+    constexpr float CLEAN_BOOST_DB = 6.0f;                     // broadband level lift into the clipper
+    constexpr float CLEAN_BOOST_EMPH_FREQ = 700.0f;            // high-shelf corner (Tube-Screamer territory)
+    constexpr float CLEAN_BOOST_EMPH_DB = 5.0f;                // shelf tilt depth (pre boost / post cut)
+    constexpr float CLEAN_BOOST_Q = 0.7071067811865476f;       // shelf Q
+    constexpr double CLEAN_BOOST_SMOOTH_TIME_S = 0.02;         // 20ms click-free toggle morph
+
     // Tube bias envelope (simulates cathode bias shift under sustained signal)
     constexpr float TUBE_BIAS_ATTACK_TIME_S = 0.003f;         // 3ms attack
     constexpr float TUBE_BIAS_RELEASE_TIME_S = 0.080f;        // 80ms release
@@ -136,6 +146,7 @@ namespace DSPConstants
 #if JUCE_DEBUG
 class DistortionDSPTests;
 class CompressionDSPTests;
+class CleanBoostTests;
 class LFOTests;
 class ProcessBlockTests;
 class ParameterTests;
@@ -160,6 +171,7 @@ class PluginProcessor : public juce::AudioProcessor,
     // Grant test classes access to private members for unit testing
     friend class DistortionDSPTests;
     friend class CompressionDSPTests;
+    friend class CleanBoostTests;
     friend class LFOTests;
     friend class ProcessBlockTests;
     friend class ParameterTests;
@@ -246,6 +258,11 @@ private:
     SubGuardFilterOrder determineSubGuardFilterOrder(float freq) const;
     void updateSubGuardCoefficients(float freq, double sampleRate);
 
+    // Clean Boost helpers
+    void updateCleanBoostCoefficients(float depth, double sampleRate);
+    void applyCleanBoostEmphasis();
+    void applyCleanBoostDeEmphasis();
+
     std::unique_ptr<juce::dsp::Oversampling<float>> oversampling;
     size_t oversamplingFactor = 4;
     int currentNumChannels = 0;
@@ -298,6 +315,16 @@ private:
     // before recombine, so both bands share the same magnitude/phase response.
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> toneFilterLow;
+
+    // Clean Boost pre-emphasis (high-shelf boost) before distortion and the
+    // complementary de-emphasis (high-shelf cut) after. Coefficients mutate
+    // .state in place from a smoothed depth (see updateCleanBoostCoefficients).
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> emphasisFilter;
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>> deEmphasisFilter;
+    juce::SmoothedValue<float> smoothedBoostDepth;  // 0=off, 1=full boost (morphs the toggle)
+    float lastBoostDepth = -1.0f;
 
     juce::AudioBuffer<float> lowBandBuffer;   // For clean low frequencies
     juce::AudioBuffer<float> highBandBuffer;  // For distorted high frequencies
@@ -352,6 +379,7 @@ private:
     std::atomic<float>* toneParam = nullptr;            // Post-distortion tone (2000-20000Hz)
     std::atomic<float>* waveshaperCleanParam = nullptr; // 0=Gritty (tone→waveshaper), 1=Clean (waveshaper→tone)
     std::atomic<float>* linearPhaseDryParam = nullptr;  // FIR linear-phase oversampling toggle (default OFF)
+    std::atomic<float>* cleanBoostParam = nullptr;      // Clean boost on/off (pre-emphasis into distortion)
 
     // Compressor state variables (LA-2A optical cell simulation)
     // Optical cell envelope follower (T4 cell)
@@ -465,6 +493,8 @@ private:
     float pb_subGuardFreq             = 0.0f;
     float pb_outGainParam             = 50.0f;  // raw, for output gain LFO modulation
     bool  pb_subGuardActive           = false;  // set by applySubGuardSplit
+    bool  pb_cleanBoostOn             = false;  // boost requested this block (gated with distortion active)
+    bool  pb_boostProcessedThisBlock  = false;  // emphasis ran → de-emphasis must run too (pairs the shelves)
     // (Per-sample interpolation moved to inputGainRamp/driveRamp/distMixRamp — see LinearRamp.h)
 
     // Stage helper methods extracted from processBlock (PR-8)

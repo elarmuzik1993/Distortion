@@ -223,6 +223,16 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     extremeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
         audioProcessor.parameters, "extremeEnabled", extremeButton);
 
+    addAndMakeVisible(cleanBoostButton);
+    cleanBoostButton.setButtonText("CLEAN BOOST");
+    cleanBoostButton.setClickingTogglesState(true);
+    cleanBoostButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF1A1A1A));
+    cleanBoostButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xFFFF0044));
+    cleanBoostButton.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFFFF0044));
+    cleanBoostButton.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+    cleanBoostAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        audioProcessor.parameters, "cleanBoost", cleanBoostButton);
+
     // Setup preset selector
     // Note: presetLabel removed - no "Preset:" text shown
     presetLabel.setText("", juce::dontSendNotification);
@@ -791,6 +801,11 @@ void PluginEditor::resized()
     extremeButton.setBounds(
         currentX + comboXOffset,
         comboY + comboHeight + S(2),
+        comboWidth,
+        S(14));
+    cleanBoostButton.setBounds(
+        currentX + comboXOffset,
+        comboY + comboHeight + S(2) + S(14) + S(2),
         comboWidth,
         S(14));
     currentX += clipTypeColumnWidth + controlSpacing;

@@ -530,6 +530,222 @@ void PreCompressionTests::testGainReductionRange()
 }
 
 //==============================================================================
+// CleanBoostTests Implementation (Pre-emphasis boost in front of distortion)
+//==============================================================================
+
+void CleanBoostTests::runTest()
+{
+    beginTest("No invalid samples across sample rates");
+    testNoInvalidSamplesAcrossSampleRates();
+
+    beginTest("Boost raises output level");
+    testBoostRaisesLevel();
+
+    beginTest("Bypassed when distortion off");
+    testBypassWhenDistortionOff();
+
+    beginTest("State round-trip");
+    testStateRoundTrip();
+
+    beginTest("No allocation when toggling");
+    testNoAllocationWhenToggling();
+
+    beginTest("Runtime oversampling change re-prepares shelves");
+    testRuntimeOversamplingChange();
+}
+
+void CleanBoostTests::testNoInvalidSamplesAcrossSampleRates()
+{
+    const double rates[] = { 44100.0, 48000.0, 96000.0, 192000.0 };
+    for (double sr : rates)
+    {
+        PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(sr, 512);
+        processor.prepareToPlay(sr, 512);
+
+        setParameter(processor.parameters, "distortionAmount", 50.0f);
+        setParameter(processor.parameters, "cleanBoost", 1.0f);
+
+        juce::MidiBuffer midi;
+        // Process several blocks, toggling mid-stream to exercise the morph.
+        for (int i = 0; i < 16; ++i)
+        {
+            if (i == 8)
+                setParameter(processor.parameters, "cleanBoost", 0.0f);
+
+            auto buffer = generateSineWave(440.0, sr, 512, 0.5f);
+            processor.processBlock(buffer, midi);
+            expect(!containsInvalidSamples(buffer),
+                "Clean boost produced invalid samples at " + juce::String(sr) + "Hz");
+        }
+    }
+}
+
+void CleanBoostTests::testBoostRaisesLevel()
+{
+    auto measure = [](bool boostOn)
+    {
+        PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(44100.0, 512);
+        processor.prepareToPlay(44100.0, 512);
+
+        setParameter(processor.parameters, "distortionAmount", 20.0f);
+        setParameter(processor.parameters, "distMix", 100.0f);
+        setParameter(processor.parameters, "globalMix", 100.0f);
+        setParameter(processor.parameters, "autoGainEnabled", 0.0f);  // don't level-match
+        setParameter(processor.parameters, "compEnabled", 0.0f);
+        setParameter(processor.parameters, "cleanBoost", boostOn ? 1.0f : 0.0f);
+
+        juce::MidiBuffer midi;
+        // Small input keeps the output below the soft-clip/limiter ceiling so the
+        // level lift is observable; warm up so the depth smoother settles.
+        float rms = 0.0f;
+        for (int i = 0; i < 12; ++i)
+        {
+            auto buffer = generateSineWave(440.0, 44100.0, 512, 0.05f);
+            processor.processBlock(buffer, midi);
+            rms = calculateRMS(buffer);
+        }
+        return rms;
+    };
+
+    const float offRms = measure(false);
+    const float onRms = measure(true);
+
+    expect(onRms > offRms * 1.05f,
+        "Boost-on RMS (" + juce::String(onRms) + ") should exceed boost-off RMS ("
+        + juce::String(offRms) + ")");
+}
+
+void CleanBoostTests::testBypassWhenDistortionOff()
+{
+    // With distortion off the plugin is in true bypass; the boost must not engage.
+    auto measure = [](bool boostOn)
+    {
+        PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(44100.0, 512);
+        processor.prepareToPlay(44100.0, 512);
+
+        setParameter(processor.parameters, "distortionAmount", 0.0f);
+        setParameter(processor.parameters, "compEnabled", 0.0f);
+        setParameter(processor.parameters, "cleanBoost", boostOn ? 1.0f : 0.0f);
+
+        juce::MidiBuffer midi;
+        float rms = 0.0f;
+        for (int i = 0; i < 8; ++i)
+        {
+            auto buffer = generateSineWave(440.0, 44100.0, 512, 0.3f);
+            processor.processBlock(buffer, midi);
+            rms = calculateRMS(buffer);
+        }
+        return rms;
+    };
+
+    const float offRms = measure(false);
+    const float onRms = measure(true);
+
+    expect(std::abs(onRms - offRms) < 1.0e-4f,
+        "Clean boost changed output while distortion was off (off=" + juce::String(offRms)
+        + ", on=" + juce::String(onRms) + ")");
+}
+
+void CleanBoostTests::testStateRoundTrip()
+{
+    PluginProcessor src;
+    src.setRateAndBufferSizeDetails(44100.0, 512);
+    src.prepareToPlay(44100.0, 512);
+    setParameter(src.parameters, "cleanBoost", 1.0f);
+
+    juce::MemoryBlock stateData;
+    src.getStateInformation(stateData);
+    expect(stateData.getSize() > 0, "getStateInformation produced empty data");
+
+    PluginProcessor dst;
+    dst.setRateAndBufferSizeDetails(44100.0, 512);
+    dst.prepareToPlay(44100.0, 512);
+    dst.setStateInformation(stateData.getData(), static_cast<int>(stateData.getSize()));
+
+    expect(*dst.parameters.getRawParameterValue("cleanBoost") > 0.5f,
+        "cleanBoost did not round-trip through state save/restore");
+}
+
+void CleanBoostTests::testNoAllocationWhenToggling()
+{
+#if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD
+    PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(48000.0, 512);
+    processor.prepareToPlay(48000.0, 512);
+
+    setParameter(processor.parameters, "distortionAmount", 50.0f);
+    setParameter(processor.parameters, "globalMix", 100.0f);
+
+    juce::MidiBuffer midi;
+    auto warmup = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+    processor.processBlock(warmup, midi);
+
+    rt_guard::resetAllocationCounter();
+
+    for (int i = 0; i < 200; ++i)
+    {
+        setParameter(processor.parameters, "cleanBoost", (i % 20 < 10) ? 1.0f : 0.0f);
+        auto buffer = generateSineWave(1000.0, 48000.0, 512, 0.25f);
+        processor.processBlock(buffer, midi);
+    }
+
+    expectEquals(rt_guard::getAllocationCount(), 0,
+        "Clean boost coefficient morph should not allocate on the audio thread");
+#else
+    expect(true, "DISTORTION_RT_GUARD not defined; skipping.");
+#endif
+}
+
+void CleanBoostTests::testRuntimeOversamplingChange()
+{
+    // Regression guard: changing oversampling stages at runtime drives
+    // rebuildOversampling() WITHOUT prepareToPlay(); it must re-prepare the
+    // Clean Boost shelves at the new oversampled rate. If it doesn't, the
+    // emphasis shelf keeps stale coefficients from the old rate (wrong corner
+    // frequency), so the raw coefficients would be identical across the change.
+    PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(48000.0, 512);
+    processor.prepareToPlay(48000.0, 512);
+
+    setParameter(processor.parameters, "distortionAmount", 50.0f);
+    setParameter(processor.parameters, "cleanBoost", 1.0f);
+
+    juce::MidiBuffer midi;
+    auto snapshotEmphasis = [&]() {
+        // Settle the depth smoother so coefficients reflect a steady depth = 1.
+        for (int i = 0; i < 8; ++i)
+        {
+            auto buffer = generateSineWave(440.0, 48000.0, 512, 0.3f);
+            processor.processBlock(buffer, midi);
+            expect(!containsInvalidSamples(buffer),
+                "Clean boost produced invalid samples around oversampling change");
+        }
+        auto* coeffs = processor.emphasisFilter.state->getRawCoefficients();
+        return std::array<float, 5>{ coeffs[0], coeffs[1], coeffs[2], coeffs[3], coeffs[4] };
+    };
+
+    // Default stages = 2 (4x → 192 kHz oversampled).
+    const auto before = snapshotEmphasis();
+
+    // Switch to stages = 1 (2x → 96 kHz oversampled), driven synchronously.
+    processor.requestOversamplingRebuild(1);
+    processor.handleAsyncUpdate();
+
+    const auto after = snapshotEmphasis();
+
+    float maxDiff = 0.0f;
+    for (int i = 0; i < 5; ++i)
+        maxDiff = std::max(maxDiff, std::abs(before[i] - after[i]));
+
+    expect(maxDiff > 1e-3f,
+        "Emphasis shelf coefficients did not change after the oversampling rebuild — "
+        "shelves were not re-prepared at the new rate (maxDiff=" + juce::String(maxDiff) + ")");
+}
+
+//==============================================================================
 // HarmonicDensityTests Implementation (Sub-Linear Harmonic Scaling)
 //==============================================================================
 
