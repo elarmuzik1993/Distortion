@@ -967,131 +967,26 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> autoGainAttachment;
 };
 
-// Settings overlay modal panel
+// Settings overlay modal panel — fixed frame + header, with scrollable content.
 class SettingsOverlay : public juce::Component
 {
 public:
     SettingsOverlay(juce::AudioProcessorValueTreeState& apvts, SettingsState& state, PluginProcessor& proc)
-        : settingsState(state), processor(proc)
     {
         setInterceptsMouseClicks(true, true);
 
-        // Anti-Alias toggle (attached to waveshaperClean parameter)
-        addAndMakeVisible(antiAliasToggle);
-        antiAliasToggle.setButtonText("");
-        antiAliasToggle.setLookAndFeel(&pillLnf);
-        cleanModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
-            apvts, "waveshaperClean", antiAliasToggle);
+        content = std::make_unique<SettingsContent>(apvts, state, proc);
+        content->onOscilloscopeToggled    = [this](bool b) { if (onOscilloscopeToggled)    onOscilloscopeToggled(b); };
+        content->onScopeChannelModeChanged = [this](bool b) { if (onScopeChannelModeChanged) onScopeChannelModeChanged(b); };
+        content->onWindowScaleChanged      = [this](int p)  { if (onWindowScaleChanged)      onWindowScaleChanged(p); };
+        content->onScopeLengthChanged      = [this](int v)  { if (onScopeLengthChanged)      onScopeLengthChanged(v); };
 
-        // Oversampling combo
-        addAndMakeVisible(oversamplingCombo);
-        oversamplingCombo.addItem("Off", 1);
-        oversamplingCombo.addItem("2x", 2);
-        oversamplingCombo.addItem("4x", 3);
-        oversamplingCombo.setSelectedId(state.oversamplingMode + 1, juce::dontSendNotification);
-        oversamplingCombo.setLookAndFeel(&comboLnf);
-        oversamplingCombo.onChange = [this]() {
-            int mode = oversamplingCombo.getSelectedId() - 1; // 0=Off, 1=2x, 2=4x
-            settingsState.oversamplingMode = mode;
-            processor.requestOversamplingRebuild(mode);
-        };
-
-        // Auto Gain toggle
-        addAndMakeVisible(autoGainToggle);
-        autoGainToggle.setButtonText("");
-        autoGainToggle.setLookAndFeel(&pillLnf);
-        autoGainAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
-            apvts, "autoGainEnabled", autoGainToggle);
-
-        // Linear Phase Dry toggle
-        addAndMakeVisible(linearPhaseToggle);
-        linearPhaseToggle.setButtonText("");
-        linearPhaseToggle.setLookAndFeel(&pillLnf);
-        {
-            bool lpOn = apvts.getRawParameterValue("linearPhaseDry")->load() > 0.5f;
-            linearPhaseToggle.setToggleState(lpOn, juce::dontSendNotification);
-        }
-        linearPhaseToggle.onClick = [this, &apvts]()
-        {
-            bool on = linearPhaseToggle.getToggleState();
-            if (auto* param = apvts.getParameter("linearPhaseDry"))
-                param->setValueNotifyingHost(on ? 1.0f : 0.0f);
-            processor.requestOversamplingRebuild(settingsState.oversamplingMode);
-        };
-
-        // Window Scale combo
-        addAndMakeVisible(windowScaleCombo);
-        windowScaleCombo.addItem("70%", 70);
-        windowScaleCombo.addItem("80%", 80);
-        windowScaleCombo.addItem("90%", 90);
-        windowScaleCombo.addItem("100%", 100);
-        windowScaleCombo.setSelectedId(state.windowScalePercent, juce::dontSendNotification);
-        windowScaleCombo.setLookAndFeel(&comboLnf);
-        windowScaleCombo.onChange = [this]() {
-            int percent = windowScaleCombo.getSelectedId();
-            settingsState.windowScalePercent = percent;
-            if (onWindowScaleChanged)
-                onWindowScaleChanged(percent);
-        };
-
-        // Tooltips toggle
-        addAndMakeVisible(tooltipsToggle);
-        tooltipsToggle.setButtonText("");
-        tooltipsToggle.setLookAndFeel(&pillLnf);
-        tooltipsToggle.setToggleState(state.tooltipsEnabled, juce::dontSendNotification);
-        tooltipsToggle.onClick = [this]() {
-            settingsState.tooltipsEnabled = tooltipsToggle.getToggleState();
-        };
-
-        // Oscilloscope toggle
-        addAndMakeVisible(oscilloscopeToggle);
-        oscilloscopeToggle.setButtonText("");
-        oscilloscopeToggle.setLookAndFeel(&pillLnf);
-        oscilloscopeToggle.setToggleState(state.oscilloscopeEnabled, juce::dontSendNotification);
-        oscilloscopeToggle.onClick = [this]() {
-            settingsState.oscilloscopeEnabled = oscilloscopeToggle.getToggleState();
-            if (onOscilloscopeToggled)
-                onOscilloscopeToggled(oscilloscopeToggle.getToggleState());
-        };
-
-        // Scope Stereo/Mono toggle
-        addAndMakeVisible(scopeStereoToggle);
-        scopeStereoToggle.setButtonText("");
-        scopeStereoToggle.setLookAndFeel(&pillLnf);
-        scopeStereoToggle.setToggleState(state.oscilloscopeStereo, juce::dontSendNotification);
-        scopeStereoToggle.onClick = [this]() {
-            settingsState.oscilloscopeStereo = scopeStereoToggle.getToggleState();
-            if (onScopeChannelModeChanged)
-                onScopeChannelModeChanged(scopeStereoToggle.getToggleState());
-        };
-
-        // Scope Length slider
-        addAndMakeVisible(scopeLengthSlider);
-        scopeLengthSlider.setRange(64.0, 1024.0, 1.0);
-        scopeLengthSlider.setValue(state.scopeLength, juce::dontSendNotification);
-        scopeLengthSlider.setSliderStyle(juce::Slider::LinearHorizontal);
-        scopeLengthSlider.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
-        scopeLengthSlider.setColour(juce::Slider::trackColourId, juce::Colour(0xFFFF2244));
-        scopeLengthSlider.setColour(juce::Slider::thumbColourId, juce::Colour(0xFFFF2244));
-        scopeLengthSlider.setColour(juce::Slider::backgroundColourId, juce::Colour(0xFF333333));
-        scopeLengthSlider.onValueChange = [this]() {
-            int val = static_cast<int>(scopeLengthSlider.getValue());
-            settingsState.scopeLength = val;
-            if (onScopeLengthChanged)
-                onScopeLengthChanged(val);
-        };
-    }
-
-    ~SettingsOverlay() override
-    {
-        antiAliasToggle.setLookAndFeel(nullptr);
-        autoGainToggle.setLookAndFeel(nullptr);
-        linearPhaseToggle.setLookAndFeel(nullptr);
-        tooltipsToggle.setLookAndFeel(nullptr);
-        oscilloscopeToggle.setLookAndFeel(nullptr);
-        scopeStereoToggle.setLookAndFeel(nullptr);
-        oversamplingCombo.setLookAndFeel(nullptr);
-        windowScaleCombo.setLookAndFeel(nullptr);
+        addAndMakeVisible(viewport);
+        viewport.setViewedComponent(content.get(), false); // overlay owns content
+        viewport.setScrollBarsShown(true, false);          // vertical only
+        viewport.setScrollBarThickness(8);
+        viewport.getVerticalScrollBar().setColour(juce::ScrollBar::thumbColourId, juce::Colour(0xFFFF2244));
+        viewport.getVerticalScrollBar().setColour(juce::ScrollBar::trackColourId, juce::Colour(0xFF333333));
     }
 
     void paint(juce::Graphics& g) override
@@ -1101,190 +996,35 @@ public:
 
         auto panelBounds = getPanelBounds();
 
-        // Panel background
+        // Panel background + border
         g.setColour(juce::Colour(0xFF111111));
         g.fillRoundedRectangle(panelBounds, 6.0f);
-
-        // Panel border
         g.setColour(juce::Colour(0xFFFF2244));
         g.drawRoundedRectangle(panelBounds, 6.0f, 1.0f);
 
-        auto inner = panelBounds.reduced(16.0f);
-
         // Header: "SETTINGS"
+        auto inner = panelBounds.reduced(16.0f);
         g.setFont(Fonts::getOrbitron(12.0f, true));
         g.setColour(juce::Colour(0xFFFF2244));
         g.drawText("SETTINGS", inner.removeFromTop(24.0f), juce::Justification::centredLeft);
 
-        // Close button (X) - drawn in top-right of panel
+        // Close button (X) - top-right of panel
         auto closeBtn = getCloseBtnBounds();
         g.setColour(juce::Colour(0xFFFF2244));
         g.setFont(16.0f);
         g.drawText(juce::CharPointer_UTF8("\xc3\x97"), closeBtn, juce::Justification::centred);
-
-        inner.removeFromTop(8.0f);
-
-        // PROCESSING section header
-        g.setFont(Fonts::getOrbitron(10.0f, true));
-        g.setColour(juce::Colour(0xFFFF2244).withAlpha(0.6f));
-        auto processingHeader = inner.removeFromTop(18.0f);
-        g.drawText("PROCESSING", processingHeader, juce::Justification::centredLeft);
-
-        // Divider
-        g.setColour(juce::Colour(0xFF282828));
-        inner.removeFromTop(4.0f);
-        g.fillRect(inner.removeFromTop(1.0f));
-        inner.removeFromTop(8.0f);
-
-        // Anti-Alias row label
-        g.setFont(12.0f);
-        g.setColour(juce::Colours::white);
-        auto aaRow = inner.removeFromTop(24.0f);
-        g.drawText("Anti-Alias", aaRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
-
-        inner.removeFromTop(6.0f);
-
-        // Oversampling row label
-        auto osRow = inner.removeFromTop(24.0f);
-        g.drawText("Oversampling", osRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
-
-        inner.removeFromTop(6.0f);
-
-        // Auto Gain row label
-        auto agRow = inner.removeFromTop(24.0f);
-        g.drawText("Auto Gain", agRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
-
-        inner.removeFromTop(6.0f);
-
-        // Linear Phase Dry row label
-        auto lpRow = inner.removeFromTop(24.0f);
-        g.drawText("Lin. Phase Dry", lpRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
-
-        inner.removeFromTop(16.0f);
-
-        // INTERFACE section header
-        g.setFont(Fonts::getOrbitron(10.0f, true));
-        g.setColour(juce::Colour(0xFFFF2244).withAlpha(0.6f));
-        auto interfaceHeader = inner.removeFromTop(18.0f);
-        g.drawText("INTERFACE", interfaceHeader, juce::Justification::centredLeft);
-
-        // Divider
-        g.setColour(juce::Colour(0xFF282828));
-        inner.removeFromTop(4.0f);
-        g.fillRect(inner.removeFromTop(1.0f));
-        inner.removeFromTop(8.0f);
-
-        // Window Scale row label
-        g.setFont(12.0f);
-        g.setColour(juce::Colours::white);
-        auto wsRow = inner.removeFromTop(24.0f);
-        g.drawText("Window Scale", wsRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
-
-        inner.removeFromTop(6.0f);
-
-        // Tooltips row label
-        auto ttRow = inner.removeFromTop(24.0f);
-        g.drawText("Tooltips", ttRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
-
-        inner.removeFromTop(6.0f);
-
-        // Oscilloscope row label
-        auto scRow = inner.removeFromTop(24.0f);
-        g.drawText("Oscilloscope", scRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
-
-        inner.removeFromTop(6.0f);
-
-        // Stereo row label
-        auto stRow = inner.removeFromTop(24.0f);
-        g.drawText("Stereo", stRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
-
-        inner.removeFromTop(6.0f);
-
-        // Scope Length row label
-        auto slRow = inner.removeFromTop(24.0f);
-        g.drawText("Scope Length", slRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
     }
 
     void resized() override
     {
         auto panelBounds = getPanelBounds();
         auto inner = panelBounds.reduced(16.0f);
-
         inner.removeFromTop(24.0f); // header
-        inner.removeFromTop(8.0f);
+        inner.removeFromTop(8.0f);  // gap
 
-        // PROCESSING header + divider
-        inner.removeFromTop(18.0f);
-        inner.removeFromTop(4.0f);
-        inner.removeFromTop(1.0f);
-        inner.removeFromTop(8.0f);
-
-        // Anti-Alias row
-        auto aaRow = inner.removeFromTop(24.0f);
-        aaRow.removeFromLeft(140.0f);
-        antiAliasToggle.setBounds(aaRow.removeFromLeft(50).reduced(0, 2).toNearestInt());
-
-        inner.removeFromTop(6.0f);
-
-        // Oversampling row
-        auto osRow = inner.removeFromTop(24.0f);
-        osRow.removeFromLeft(140.0f);
-        oversamplingCombo.setBounds(osRow.removeFromLeft(70).reduced(0, 2).toNearestInt());
-
-        inner.removeFromTop(6.0f);
-
-        // Auto Gain row
-        auto agRow = inner.removeFromTop(24.0f);
-        agRow.removeFromLeft(140.0f);
-        autoGainToggle.setBounds(agRow.removeFromLeft(50).reduced(0, 2).toNearestInt());
-
-        inner.removeFromTop(6.0f);
-
-        // Linear Phase Dry row
-        auto lpRow = inner.removeFromTop(24.0f);
-        lpRow.removeFromLeft(140.0f);
-        linearPhaseToggle.setBounds(lpRow.removeFromLeft(50).reduced(0, 2).toNearestInt());
-
-        inner.removeFromTop(16.0f);
-
-        // INTERFACE header + divider
-        inner.removeFromTop(18.0f);
-        inner.removeFromTop(4.0f);
-        inner.removeFromTop(1.0f);
-        inner.removeFromTop(8.0f);
-
-        // Window Scale row
-        auto wsRow = inner.removeFromTop(24.0f);
-        wsRow.removeFromLeft(140.0f);
-        windowScaleCombo.setBounds(wsRow.removeFromLeft(70).reduced(0, 2).toNearestInt());
-
-        inner.removeFromTop(6.0f);
-
-        // Tooltips row
-        auto ttRow = inner.removeFromTop(24.0f);
-        ttRow.removeFromLeft(140.0f);
-        tooltipsToggle.setBounds(ttRow.removeFromLeft(50).reduced(0, 2).toNearestInt());
-
-        inner.removeFromTop(6.0f);
-
-        // Oscilloscope row
-        auto scRow = inner.removeFromTop(24.0f);
-        scRow.removeFromLeft(140.0f);
-        oscilloscopeToggle.setBounds(scRow.removeFromLeft(50).reduced(0, 2).toNearestInt());
-
-        inner.removeFromTop(6.0f);
-
-        // Stereo row
-        auto stRow = inner.removeFromTop(24.0f);
-        stRow.removeFromLeft(140.0f);
-        scopeStereoToggle.setBounds(stRow.removeFromLeft(50).reduced(0, 2).toNearestInt());
-
-        inner.removeFromTop(6.0f);
-
-        // Scope Length row
-        auto slRow = inner.removeFromTop(24.0f);
-        slRow.removeFromLeft(140.0f);
-        scopeLengthSlider.setBounds(slRow.removeFromLeft(130).reduced(0, 4).toNearestInt());
+        viewport.setBounds(inner.toNearestInt());
+        // Width excludes the vertical scrollbar when it is shown; reflows when not.
+        content->setSize(viewport.getMaximumVisibleWidth(), SettingsContent::kContentHeight);
     }
 
     void mouseDown(const juce::MouseEvent& e) override
@@ -1296,7 +1036,7 @@ public:
             return;
         }
 
-        // Check close button
+        // Close button (X)
         if (getCloseBtnBounds().contains(e.getPosition().toFloat()))
         {
             if (onClose) onClose();
@@ -1304,45 +1044,15 @@ public:
         }
     }
 
-    std::function<void()> onClose;
+    std::function<void()>     onClose;
     std::function<void(bool)> onOscilloscopeToggled;
     std::function<void(bool)> onScopeChannelModeChanged;
-    std::function<void(int)> onWindowScaleChanged;
-    std::function<void(int)> onScopeLengthChanged;
+    std::function<void(int)>  onWindowScaleChanged;
+    std::function<void(int)>  onScopeLengthChanged;
 
 private:
-    SettingsState& settingsState;
-    PluginProcessor& processor;
-    PillToggleLookAndFeel pillLnf;
-
-    // Combo styling
-    struct OverlayComboLnf : public juce::LookAndFeel_V4
-    {
-        OverlayComboLnf()
-        {
-            setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xFF1A1A1A));
-            setColour(juce::ComboBox::textColourId, juce::Colours::white);
-            setColour(juce::ComboBox::outlineColourId, juce::Colour(0xFF333333));
-            setColour(juce::ComboBox::arrowColourId, juce::Colour(0xFFFF2244));
-            setColour(juce::PopupMenu::backgroundColourId, juce::Colour(0xFF111111));
-            setColour(juce::PopupMenu::textColourId, juce::Colours::white);
-            setColour(juce::PopupMenu::highlightedBackgroundColourId, juce::Colour(0xFFFF2244).withAlpha(0.3f));
-            setColour(juce::PopupMenu::highlightedTextColourId, juce::Colours::white);
-        }
-    } comboLnf;
-
-    juce::ToggleButton antiAliasToggle;
-    juce::ToggleButton autoGainToggle;
-    juce::ToggleButton linearPhaseToggle;
-    juce::ComboBox oversamplingCombo;
-    juce::ComboBox windowScaleCombo;
-    juce::ToggleButton tooltipsToggle;
-    juce::ToggleButton oscilloscopeToggle;
-    juce::ToggleButton scopeStereoToggle;
-    juce::Slider scopeLengthSlider;
-
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> cleanModeAttachment;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> autoGainAttachment;
+    juce::Viewport viewport;
+    std::unique_ptr<SettingsContent> content;
 
     juce::Rectangle<float> getPanelBounds() const
     {
