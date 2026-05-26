@@ -53,6 +53,7 @@ set(PLUGIN_SOURCES
     Source/PluginEditor.h
     Source/CustomKnob.cpp
     Source/CustomKnob.h
+    Source/CyclingComboBox.h
     Source/LinearRamp.h
 )
 
