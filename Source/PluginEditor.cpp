@@ -245,7 +245,6 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addAndMakeVisible(presetSelector);
     presetSelector.setLookAndFeel(&comboBoxLookAndFeel);  // Apply neon red styling
     presetSelector.setTextWhenNothingSelected("Select Preset...");
-    presetSelector.setExcludedFromCycle({ 9990, 9991 }); // skip Save/Delete when cycling
     presetSelector.onChange = [this]()
     {
         int selectedId = presetSelector.getSelectedId();

@@ -3547,24 +3547,6 @@ void CyclingComboBoxTests::runTest()
         box.cycleSelection(+1);
         expect(box.getSelectedItemIndex() == -1, "empty box should stay unselected");
     }
-
-    beginTest("Excluded IDs are skipped");
-    {
-        CyclingComboBox box;
-        box.addItem("Preset1", 1);
-        box.addItem("Preset2", 2);
-        box.addItem("Save", 9990);
-        box.addItem("Delete", 9991);
-        box.setExcludedFromCycle({ 9990, 9991 });
-        box.setSelectedItemIndex(0, juce::dontSendNotification);
-
-        for (int k = 0; k < 6; ++k)
-        {
-            box.cycleSelection(+1);
-            const int idx = box.getSelectedItemIndex();
-            expect(idx == 0 || idx == 1, "must skip excluded action items");
-        }
-    }
 }
 
 #endif // JUCE_DEBUG

@@ -1448,7 +1448,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> globalMixAttachment;
 
     // Preset selector components
-    CyclingComboBox presetSelector;
+    juce::ComboBox presetSelector;
     juce::Label presetLabel;
 
     // Lock icons for each parameter

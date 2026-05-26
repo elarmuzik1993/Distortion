@@ -12,35 +12,25 @@
     juce::sendNotification so APVTS attachments and onChange lambdas update
     exactly as a manual pick would.
 */
-class CyclingComboBox : public juce::ComboBox
+class CyclingComboBox : public juce::ComboBox,
+                        private juce::Timer
 {
 public:
     using juce::ComboBox::ComboBox;
 
+    ~CyclingComboBox() override { stopTimer(); }
+
     /** Advance the selection by `direction` (+1 = next, -1 = previous),
-        wrapping at the ends, skipping any item whose ID is in excludedIds.
-        No-op if there are no items or every candidate is excluded. */
+        wrapping at the ends. No-op if there are no items. */
     void cycleSelection (int direction)
     {
         const int n = getNumItems();
         if (n == 0)
             return;
 
-        int i = getSelectedItemIndex(); // -1 if nothing selected
-        for (int step = 0; step < n; ++step)
-        {
-            i = ((i + direction) % n + n) % n;
-            if (! excludedIds.contains (getItemId (i)))
-            {
-                setSelectedItemIndex (i, juce::sendNotification);
-                return;
-            }
-        }
+        const int i = getSelectedItemIndex(); // -1 if nothing selected
+        setSelectedItemIndex (((i + direction) % n + n) % n, juce::sendNotification);
     }
-
-    /** Item IDs listed here are skipped by cycleSelection() but still appear in
-        the popup opened by double-click (used for the preset Save/Delete items). */
-    void setExcludedFromCycle (juce::Array<int> ids) { excludedIds = std::move (ids); }
 
     void mouseDown (const juce::MouseEvent& e) override
     {
@@ -51,17 +41,11 @@ public:
         if (! e.mods.isLeftButtonDown())
             return;
 
-        if (e.getNumberOfClicks() >= 2)
-        {
-            // Double-click: undo the stray cycle from the first click, then open
-            // the real list. If the user dismisses it, the value is unchanged.
-            setSelectedItemIndex (preCycleIndex, juce::sendNotification);
-            showPopup();
-            return;
-        }
-
-        preCycleIndex = getSelectedItemIndex();
-        cycleSelection (+1);
+        // Defer acting until the click burst settles (timer restarts on each
+        // click). This lets us tell a single click (cycle once) from a
+        // double-click (open the list) without ever firing a stray cycle.
+        pendingClicks = e.getNumberOfClicks();
+        startTimer (clickBurstMs);
     }
 
     void mouseWheelMove (const juce::MouseEvent& e,
@@ -76,8 +60,18 @@ public:
     }
 
 private:
-    juce::Array<int> excludedIds;
-    int preCycleIndex = -1;
+    void timerCallback() override
+    {
+        stopTimer();
+        if (pendingClicks >= 2)
+            showPopup();            // double-click (or more): open the real list
+        else
+            cycleSelection (+1);    // single click: advance one step
+        pendingClicks = 0;
+    }
+
+    int pendingClicks = 0;
+    static constexpr int clickBurstMs = 200; // grouping window for click bursts
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CyclingComboBox)
 };
