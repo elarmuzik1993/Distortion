@@ -64,10 +64,15 @@ public:
         cycleSelection (+1);
     }
 
-    void mouseWheelMove (const juce::MouseEvent&,
+    void mouseWheelMove (const juce::MouseEvent& e,
                          const juce::MouseWheelDetails& wheel) override
     {
-        cycleSelection (wheel.deltaY > 0.0f ? -1 : +1);
+        // Only consume the wheel when we actually have items to cycle; otherwise
+        // let it propagate (e.g. to a parent Viewport's scrollbar).
+        if (getNumItems() > 0)
+            cycleSelection (wheel.deltaY > 0.0f ? -1 : +1);
+        else
+            juce::ComboBox::mouseWheelMove (e, wheel);
     }
 
 private:
