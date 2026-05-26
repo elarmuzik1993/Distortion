@@ -724,8 +724,8 @@ void PluginEditor::resized()
     if (isCompressionExpanded)
     {
         const int dropW = S(50);
-        const int meterW = S(16);
-        const int meterH = S(45);
+        const int meterW = S(22);
+        const int meterH = S(60);
 
         int cx = dividerX;
 

@@ -243,74 +243,91 @@ public:
         startTimerHz(DSPConstants::METER_REFRESH_RATE_HZ);
     }
 
+    // Vertical strip of 5 round LEDs, illuminating top-down as gain
+    // reduction increases. Layout scales uniformly from the spec's 26x72
+    // reference.
     void paint(juce::Graphics& g) override
     {
-        auto bounds = getLocalBounds().toFloat();
+        auto housing = getLocalBounds().toFloat();
 
-        // Background
-        g.setColour(juce::Colours::black);
-        g.fillRoundedRectangle(bounds, 4.0f);
+        // Uniform scale from the reference housing (26 wide x 72 tall).
+        const float s   = juce::jmin(housing.getWidth() / 26.0f, housing.getHeight() / 72.0f);
+        const float ledD   = 8.0f * s;
+        const float gap    = 5.0f * s;
+        const float padY   = 10.0f * s;
+        const float r      = ledD * 0.5f;
+        const float cx     = housing.getCentreX();
 
-        // Border
-        g.setColour(juce::Colours::grey.withAlpha(0.5f));
-        g.drawRoundedRectangle(bounds, 4.0f, 1.5f);
+        // ── LEDs (index 0 = top = heaviest GR) ──
+        const float thresholds[5] = { 0.85f, 0.60f, 0.35f, 0.15f, 0.0f };
+        const juce::Colour onColours[5] = {
+            juce::Colour(0xffc42020),  // red
+            juce::Colour(0xffc47a20),  // dark amber
+            juce::Colour(0xffd4a017),  // amber
+            juce::Colour(0xff3ecf72),  // green
+            juce::Colour(0xff3ecf72),  // green
+        };
+        const juce::Colour offColour(0xff1e1e1e);
 
-        // Get current gain reduction value
-        const float grDB = currentGainReduction;
-
-        if (grDB > 0.01f)  // Only draw if there's meaningful gain reduction
+        const float startY = housing.getY() + padY;
+        for (int i = 0; i < 5; ++i)
         {
-            // Map gain reduction to meter height
-            const float maxDB = DSPConstants::METER_MAX_DB;
-            const float clampedDB = juce::jlimit(0.0f, maxDB, grDB);
-            const float normalizedLevel = clampedDB / maxDB;
+            const float cy = startY + r + i * (ledD + gap);
+            const bool  on = displayGR >= thresholds[i];
+            const auto  col = on ? onColours[i] : offColour;
 
-            // Calculate meter bar height
-            const float meterHeight = bounds.getHeight() * normalizedLevel;
-            const float meterY = bounds.getBottom() - meterHeight;
+            if (on)
+            {
+                // Glow pass: wide, low-alpha bloom (same trick as knob arcs).
+                g.setColour(col.withAlpha(0.25f));
+                g.fillEllipse(cx - r * 2.0f, cy - r * 2.0f, ledD * 2.0f, ledD * 2.0f);
+            }
 
-            // Create gradient from green -> yellow -> red
-            juce::ColourGradient gradient(
-                juce::Colour(0xff00ff00),  // Green at bottom
-                bounds.getCentreX(), bounds.getBottom(),
-                juce::Colour(0xffff0000),  // Red at top
-                bounds.getCentreX(), bounds.getY(),
-                false);
-            gradient.addColour(0.3, juce::Colour(0xffffff00));  // Yellow in middle
+            // LED body.
+            g.setColour(col);
+            g.fillEllipse(cx - r, cy - r, ledD, ledD);
 
-            g.setGradientFill(gradient);
-            g.fillRoundedRectangle(bounds.getX() + 2, meterY, bounds.getWidth() - 4, meterHeight, 2.0f);
+            // Border.
+            g.setColour(on ? col.withAlpha(0.3f) : juce::Colour(0xff2a2a2a));
+            g.drawEllipse(cx - r, cy - r, ledD, ledD, 1.0f);
 
-            // Draw gain reduction value as text
-            g.setColour(juce::Colours::white);
-            g.setFont(11.0f);
-            juce::String text = juce::String(grDB, 1) + " dB";
-            g.drawText(text, bounds.reduced(2), juce::Justification::centredTop, false);
-        }
-        else
-        {
-            // No compression - show "0 dB"
-            g.setColour(juce::Colours::grey);
-            g.setFont(11.0f);
-            g.drawText("0 dB", bounds, juce::Justification::centred, false);
+            if (on)
+            {
+                // Top-left specular highlight.
+                g.setColour(juce::Colours::white.withAlpha(0.22f));
+                g.fillEllipse(cx - r * 0.7f, cy - r * 0.75f, r * 0.7f, r * 0.55f);
+            }
+            else
+            {
+                // Inset shadow on the off LED.
+                juce::ColourGradient shadow(
+                    juce::Colour(0x66000000), cx, cy - r,
+                    juce::Colours::transparentBlack, cx, cy,
+                    false);
+                g.setGradientFill(shadow);
+                g.fillEllipse(cx - r, cy - r, ledD, ledD);
+            }
         }
     }
 
     void timerCallback() override
     {
-        // Read gain reduction from processor
-        const float newGR = processor.currentGainReductionDB.load(std::memory_order_relaxed);
+        // Convert dB reduction to normalised 0..1 (1.0 = METER_MAX_DB or more).
+        const float rawDB = processor.currentGainReductionDB.load(std::memory_order_relaxed);
+        const float rawGR = juce::jlimit(0.0f, 1.0f, rawDB / DSPConstants::METER_MAX_DB);
 
-        // Smooth the value for visual stability
-        currentGainReduction = currentGainReduction * DSPConstants::METER_SMOOTHING +
-                              newGR * (1.0f - DSPConstants::METER_SMOOTHING);
+        // VCA-style ballistics: fast attack, slow release.
+        const float attack  = 0.85f;
+        const float release = 0.97f;
+        const float coeff = (rawGR > displayGR) ? attack : release;
+        displayGR = displayGR * coeff + rawGR * (1.0f - coeff);
 
         repaint();
     }
 
 private:
     PluginProcessor& processor;
-    float currentGainReduction = 0.0f;
+    float displayGR = 0.0f;  // normalised 0..1, smoothed for display
 };
 
 // Phase Correlation Meter - horizontal bar with needle (-1 to +1)

@@ -4,6 +4,16 @@ Full development history, newest first.
 
 ---
 
+## LED Gain Reduction Meter
+
+- **New GR meter design**: Replaced the single vertical green→yellow→red gradient bar (with dB readout) in `GainReductionMeter::paint()` with a vertical strip of 5 round LEDs that illuminate top-down as gain reduction increases. Thresholds and colours: red `≥85%`, dark amber `≥60%`, amber `≥35%`, green `≥15%`, green `≥0%` (bottom LED stays lit as a floor indicator).
+- **Per-LED rendering**: Each lit LED gets a wide low-alpha glow bloom (same two-pass trick as the knob arcs), a tinted border, and a top-left specular highlight; off LEDs get a subtle inset shadow.
+- **VCA-style ballistics**: `timerCallback()` normalises the processor's dB reduction via `METER_MAX_DB` and applies fast-attack / slow-release smoothing (coeffs 0.85 / 0.97) to a `displayGR` value.
+- **No housing, no label**: Dropped the rounded housing background, border, and top inset shadow — the LEDs float directly on the panel. The "GR" text caption was also removed.
+- **Bounds**: Meter resized `S(16)×S(45)` → `S(22)×S(60)` in `resized()` to suit the taller strip. Layout scales uniformly from a 26×72 reference.
+
+---
+
 ## Scrollable & Compact Settings Panel
 
 - **Scrollable settings overlay**: Extracted the settings rows into a `SettingsContent` component hosted in a `juce::Viewport`. The panel content now scrolls (vertical neon scrollbar + mouse-wheel) instead of being clipped when the window is short — fixes unreachable bottom rows (Stereo, Scope Length) in compact mode and at 70–80% window scale.
