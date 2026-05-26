@@ -974,8 +974,8 @@ private:
     juce::ToggleButton antiAliasToggle;
     juce::ToggleButton autoGainToggle;
     juce::ToggleButton linearPhaseToggle;
-    juce::ComboBox oversamplingCombo;
-    juce::ComboBox windowScaleCombo;
+    CyclingComboBox oversamplingCombo;
+    CyclingComboBox windowScaleCombo;
     juce::ToggleButton tooltipsToggle;
     juce::ToggleButton oscilloscopeToggle;
     juce::ToggleButton scopeStereoToggle;
