@@ -1376,6 +1376,9 @@ private:
     juce::ComboBox lfoDestinationComboBox;
     juce::Label lfoDestinationLabel;
     LockIcon lfoDestinationLock;
+    juce::TextButton lfoBpmSyncButton;
+    juce::ComboBox lfoBpmDivisionComboBox;
+    juce::Label lfoBpmDivisionLabel;
 
     CustomKnob waveshaperSlider;
     juce::Label waveshaperLabel;
@@ -1457,6 +1460,8 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lfoWaveformAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lfoDestinationAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> lfoEnableAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> lfoBpmSyncAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lfoBpmDivisionAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> waveshaperAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> compPeakReductionAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> compMakeupGainAttachment;

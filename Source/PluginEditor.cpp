@@ -106,6 +106,39 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     // Add destination lock icon
     addAndMakeVisible(lfoDestinationLock);
 
+    // BPM sync toggle button
+    addAndMakeVisible(lfoBpmSyncButton);
+    lfoBpmSyncButton.setButtonText("SYNC");
+    lfoBpmSyncButton.setClickingTogglesState(true);
+    lfoBpmSyncButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF1A1A1A));
+    lfoBpmSyncButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xFFFF0044));
+    lfoBpmSyncButton.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFFFF0044));
+    lfoBpmSyncButton.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+    lfoBpmSyncAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        audioProcessor.parameters, "lfoBpmSync", lfoBpmSyncButton);
+    lfoBpmSyncButton.onStateChange = [this]() { updateLFOVisibility(); };
+
+    // BPM division dropdown
+    addAndMakeVisible(lfoBpmDivisionComboBox);
+    lfoBpmDivisionComboBox.setLookAndFeel(&comboBoxLookAndFeel);
+    lfoBpmDivisionComboBox.addItem("1/1",   1);
+    lfoBpmDivisionComboBox.addItem("1/2",   2);
+    lfoBpmDivisionComboBox.addItem("1/4",   3);
+    lfoBpmDivisionComboBox.addItem("1/8",   4);
+    lfoBpmDivisionComboBox.addItem("1/16",  5);
+    lfoBpmDivisionComboBox.addItem("1/32",  6);
+    lfoBpmDivisionComboBox.addItem("1/4T",  7);
+    lfoBpmDivisionComboBox.addItem("1/8T",  8);
+    lfoBpmDivisionComboBox.addItem("1/16T", 9);
+    lfoBpmDivisionAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.parameters, "lfoBpmDivision", lfoBpmDivisionComboBox);
+
+    addAndMakeVisible(lfoBpmDivisionLabel);
+    lfoBpmDivisionLabel.setText("Division", juce::dontSendNotification);
+    lfoBpmDivisionLabel.setJustificationType(juce::Justification::centred);
+    lfoBpmDivisionLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+    lfoBpmDivisionLabel.setFont(juce::Font(10.0f * fs, juce::Font::bold));
+
     // Setup waveshaper mix knob
     setupSlider(waveshaperSlider, waveshaperLabel, "Wave Mix",
         waveshaperAttachment, "waveshaperMix");
@@ -522,6 +555,7 @@ PluginEditor::~PluginEditor()
     compRatioComboBox.setLookAndFeel(nullptr);
     lfoWaveformComboBox.setLookAndFeel(nullptr);
     lfoDestinationComboBox.setLookAndFeel(nullptr);
+    lfoBpmDivisionComboBox.setLookAndFeel(nullptr);
     presetSelector.setLookAndFeel(nullptr);
 }
 
@@ -703,6 +737,11 @@ void PluginEditor::resized()
         lfoRateSlider.setBounds(lx, expandedY, sKnob, sKnob);
         lfoRateLabel.setBounds(lx, expandedY + sKnob, sKnob, S(13));
         lfoRateLock.setBounds(lx + sKnob - S(12) - S(2), expandedY + S(2), S(12), S(12));
+        // Division dropdown overlaps the rate knob area when BPM sync is ON
+        lfoBpmDivisionComboBox.setBounds(lx, expandedY + (sKnob - S(16)) / 2, sKnob, S(16));
+        lfoBpmDivisionLabel.setBounds(lx, expandedY + sKnob, sKnob, S(13));
+        // SYNC toggle button sits below the rate label row, always in the rate column
+        lfoBpmSyncButton.setBounds(lx, expandedY + sKnob + S(13), sKnob, S(13));
         lx += sKnob + sSpacing;
 
         lfoDepthSlider.setBounds(lx, expandedY, sKnob, sKnob);
@@ -913,22 +952,27 @@ void PluginEditor::updateCompressionVisibility()
 void PluginEditor::updateLFOVisibility()
 {
     const bool visible = isLFOExpanded;
+    const bool bpmSync = visible &&
+        audioProcessor.parameters.getParameter("lfoBpmSync")->getValue() > 0.5f;
 
-    // Knobs + labels
-    lfoRateSlider.setVisible(visible);
-    lfoRateLabel.setVisible(visible);
+    // Rate knob shown only when BPM sync is OFF; division dropdown shown when ON
+    lfoRateSlider.setVisible(visible && !bpmSync);
+    lfoRateLabel.setVisible(visible && !bpmSync);
+    lfoBpmDivisionComboBox.setVisible(bpmSync);
+    lfoBpmDivisionLabel.setVisible(bpmSync);
+
     lfoDepthSlider.setVisible(visible);
     lfoDepthLabel.setVisible(visible);
 
-    // Dropdowns
     lfoWaveformComboBox.setVisible(visible);
     lfoWaveformLabel.setVisible(visible);
-    lfoDestinationComboBox.setVisible(visible);   // NEW
-    lfoDestinationLabel.setVisible(visible);      // NEW
-    lfoDestinationLock.setVisible(visible);       // NEW
+    lfoDestinationComboBox.setVisible(visible);
+    lfoDestinationLabel.setVisible(visible);
+    lfoDestinationLock.setVisible(visible);
 
-    // Lock icons (toggle + lock always visible, handled separately)
-    lfoRateLock.setVisible(visible);
+    lfoBpmSyncButton.setVisible(visible);
+
+    lfoRateLock.setVisible(visible && !bpmSync);
     lfoDepthLock.setVisible(visible);
 }
 
