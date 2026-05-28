@@ -173,6 +173,7 @@ class PluginProcessor : public juce::AudioProcessor,
     friend class CompressionDSPTests;
     friend class CleanBoostTests;
     friend class LFOTests;
+    friend class LFOBpmSyncTests;
     friend class ProcessBlockTests;
     friend class ParameterTests;
     friend class SampleRateTests;

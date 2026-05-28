@@ -122,6 +122,14 @@ private:
     void testDestination(int destIndex, const juce::String& paramID, float centerValue);
 };
 
+/** Tests for LFO BPM sync toggle and division parameter */
+class LFOBpmSyncTests : public juce::UnitTest
+{
+public:
+    LFOBpmSyncTests() : UnitTest("LFO BPM Sync", TestCategories::DSP) {}
+    void runTest() override;
+};
+
 //==============================================================================
 // Integration Tests
 //==============================================================================
@@ -456,6 +464,7 @@ inline void registerAllTests()
     static OutputLimiterTests outputLimiterTests;
     static LFOTests lfoTests;
     static LFODestinationTests lfoDestinationTests;
+    static LFOBpmSyncTests lfoBpmSyncTests;
     static ProcessBlockTests processBlockTests;
     static ParameterTests parameterTests;
     static SampleRateTests sampleRateTests;

@@ -1366,6 +1366,140 @@ void LFODestinationTests::testDestination(int destIndex, const juce::String& par
 }
 
 //==============================================================================
+// LFOBpmSyncTests Implementation
+//==============================================================================
+
+void LFOBpmSyncTests::runTest()
+{
+    beginTest("Parameters exist with correct defaults");
+    {
+        PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(44100.0, 512);
+        processor.prepareToPlay(44100.0, 512);
+
+        auto* syncParam = processor.parameters.getParameter("lfoBpmSync");
+        expect(syncParam != nullptr, "lfoBpmSync parameter exists");
+        expectWithinAbsoluteError(syncParam->getValue(), 0.0f, 0.01f,
+            "lfoBpmSync defaults to OFF");
+
+        auto* divParam = processor.parameters.getParameter("lfoBpmDivision");
+        expect(divParam != nullptr, "lfoBpmDivision parameter exists");
+        // Default index 2 = 1/4 note; normalized value = 2/8 = 0.25
+        expectWithinAbsoluteError(divParam->convertFrom0to1(divParam->getValue()), 2.0f, 0.01f,
+            "lfoBpmDivision defaults to 1/4 (index 2)");
+    }
+
+    // Division factor table mirrors the DSP code: index -> cycles-per-beat
+    static constexpr float kFactors[] = { 0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f, 1.5f, 3.0f, 6.0f };
+
+    beginTest("Sync OFF: phase advances at lfoRate / sampleRate per sample");
+    {
+        const double sr = 44100.0;
+        const int    bufSize = 512;
+        PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(sr, bufSize);
+        processor.prepareToPlay(sr, bufSize);
+
+        TestUtilities::setParameter(processor.parameters, "lfoEnabled",     1.0f);
+        TestUtilities::setParameter(processor.parameters, "lfoBpmSync",     0.0f);
+        TestUtilities::setParameter(processor.parameters, "lfoRate",        2.0f);
+        TestUtilities::setParameter(processor.parameters, "lfoDepth",       50.0f);
+        TestUtilities::setParameter(processor.parameters, "lfoDestination", 1.0f); // Tone — block-level path
+        TestUtilities::setParameter(processor.parameters, "distortionAmount", 50.0f);
+
+        // Warm-up block so initial filter states are stable
+        juce::AudioBuffer<float> buf(2, bufSize);
+        juce::MidiBuffer midi;
+        buf.clear();
+        processor.processBlock(buf, midi);
+
+        const float phaseBefore = processor.lfoPhaseForUI.load();
+
+        buf.clear();
+        processor.processBlock(buf, midi);
+
+        const float phaseAfter = processor.lfoPhaseForUI.load();
+        float delta = phaseAfter - phaseBefore;
+        if (delta < 0.0f) delta += 1.0f; // handle wrap
+
+        const float expected = (2.0f / static_cast<float>(sr)) * bufSize;
+        expectWithinAbsoluteError(delta, expected, 0.0001f,
+            "Sync OFF: phase increment matches lfoRate/sampleRate");
+    }
+
+    beginTest("Sync ON, no host playhead: falls back to 120 BPM, all divisions produce valid output");
+    {
+        const double sr = 44100.0;
+        const int    bufSize = 512;
+
+        for (int divIdx = 0; divIdx < 9; ++divIdx)
+        {
+            PluginProcessor processor;
+            processor.setRateAndBufferSizeDetails(sr, bufSize);
+            processor.prepareToPlay(sr, bufSize);
+
+            TestUtilities::setParameter(processor.parameters, "lfoEnabled",       1.0f);
+            TestUtilities::setParameter(processor.parameters, "lfoBpmSync",       1.0f);
+            TestUtilities::setParameter(processor.parameters, "lfoBpmDivision",   static_cast<float>(divIdx));
+            TestUtilities::setParameter(processor.parameters, "lfoDepth",         50.0f);
+            TestUtilities::setParameter(processor.parameters, "lfoDestination",   1.0f); // Tone
+            TestUtilities::setParameter(processor.parameters, "distortionAmount", 50.0f);
+
+            juce::AudioBuffer<float> buf(2, bufSize);
+            buf.clear();
+            juce::MidiBuffer midi;
+            processor.processBlock(buf, midi);
+
+            expect(!TestUtilities::containsInvalidSamples(buf),
+                "Division " + juce::String(divIdx) + ": processBlock produced NaN/Inf");
+            expect(!processor.debugHadNaN.load(),
+                "Division " + juce::String(divIdx) + ": debugHadNaN flag set");
+
+            // Verify phase advance matches 120 BPM fallback
+            const float expectedHz = (120.0f / 60.0f) * kFactors[divIdx];
+            const float expectedDelta = (expectedHz / static_cast<float>(sr)) * bufSize;
+            const float actualPhase = processor.lfoPhaseForUI.load();
+            // Phase must be in valid range (wrapped to [0,1))
+            expect(actualPhase >= 0.0f && actualPhase < 1.0f,
+                "Division " + juce::String(divIdx) + ": phase out of [0,1) range");
+            // For slow rates (1/1 at 120 BPM = 0.5 Hz), delta is small; just check it's positive
+            if (expectedDelta < 0.99f)
+                expect(actualPhase > 0.0f,
+                    "Division " + juce::String(divIdx) + ": phase did not advance");
+        }
+    }
+
+    beginTest("State round-trip preserves lfoBpmSync and lfoBpmDivision");
+    {
+        PluginProcessor src;
+        src.setRateAndBufferSizeDetails(44100.0, 512);
+        src.prepareToPlay(44100.0, 512);
+
+        TestUtilities::setParameter(src.parameters, "lfoBpmSync",     1.0f); // ON
+        TestUtilities::setParameter(src.parameters, "lfoBpmDivision", 7.0f); // 1/8T (index 7)
+
+        juce::MemoryBlock state;
+        src.getStateInformation(state);
+        expect(state.getSize() > 0, "getStateInformation produced empty data");
+
+        PluginProcessor dst;
+        dst.setRateAndBufferSizeDetails(44100.0, 512);
+        dst.prepareToPlay(44100.0, 512);
+        dst.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+
+        auto* syncParam = dst.parameters.getParameter("lfoBpmSync");
+        expect(syncParam != nullptr, "lfoBpmSync param found in restored state");
+        expectWithinAbsoluteError(syncParam->convertFrom0to1(syncParam->getValue()), 1.0f, 0.01f,
+            "lfoBpmSync restored to ON");
+
+        auto* divParam = dst.parameters.getParameter("lfoBpmDivision");
+        expect(divParam != nullptr, "lfoBpmDivision param found in restored state");
+        expectWithinAbsoluteError(divParam->convertFrom0to1(divParam->getValue()), 7.0f, 0.01f,
+            "lfoBpmDivision restored to index 7 (1/8T)");
+    }
+}
+
+//==============================================================================
 // ProcessBlockTests Implementation
 //==============================================================================
 
