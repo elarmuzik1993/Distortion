@@ -118,6 +118,17 @@ PluginEditor::PluginEditor(PluginProcessor& p)
         audioProcessor.parameters, "lfoBpmSync", lfoBpmSyncButton);
     lfoBpmSyncButton.onStateChange = [this]() { updateLFOVisibility(); };
 
+    // LFO polarity invert button
+    addAndMakeVisible(lfoInvertButton);
+    lfoInvertButton.setButtonText("INV");
+    lfoInvertButton.setClickingTogglesState(true);
+    lfoInvertButton.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xFF1A1A1A));
+    lfoInvertButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xFFFF0044));
+    lfoInvertButton.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFFFF0044));
+    lfoInvertButton.setColour(juce::TextButton::textColourOnId,  juce::Colours::white);
+    lfoInvertAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        audioProcessor.parameters, "lfoInvert", lfoInvertButton);
+
     // BPM division dropdown
     addAndMakeVisible(lfoBpmDivisionComboBox);
     lfoBpmDivisionComboBox.setLookAndFeel(&comboBoxLookAndFeel);
@@ -747,6 +758,7 @@ void PluginEditor::resized()
         lfoDepthSlider.setBounds(lx, expandedY, sKnob, sKnob);
         lfoDepthLabel.setBounds(lx, expandedY + sKnob, sKnob, S(13));
         lfoDepthLock.setBounds(lx + sKnob - S(12) - S(2), expandedY + S(2), S(12), S(12));
+        lfoInvertButton.setBounds(lx, expandedY + sKnob + S(13), sKnob, S(13));
         lx += sKnob + sSpacing;
 
         // Wave dropdown on top
@@ -963,6 +975,7 @@ void PluginEditor::updateLFOVisibility()
 
     lfoDepthSlider.setVisible(visible);
     lfoDepthLabel.setVisible(visible);
+    lfoInvertButton.setVisible(visible);
 
     lfoWaveformComboBox.setVisible(visible);
     lfoWaveformLabel.setVisible(visible);

@@ -1379,6 +1379,7 @@ private:
     juce::TextButton lfoBpmSyncButton;
     juce::ComboBox lfoBpmDivisionComboBox;
     juce::Label lfoBpmDivisionLabel;
+    juce::TextButton lfoInvertButton;
 
     CustomKnob waveshaperSlider;
     juce::Label waveshaperLabel;
@@ -1462,6 +1463,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> lfoEnableAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> lfoBpmSyncAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lfoBpmDivisionAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> lfoInvertAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> waveshaperAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> compPeakReductionAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> compMakeupGainAttachment;

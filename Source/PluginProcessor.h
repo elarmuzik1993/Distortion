@@ -367,6 +367,7 @@ private:
     std::atomic<float>* lfoDestinationParam = nullptr;  // LFO destination (0-4: Dist, Tone, Hi-Pass, Mix, Gain)
     std::atomic<float>* lfoBpmSyncParam = nullptr;       // BPM sync toggle
     std::atomic<float>* lfoBpmDivisionParam = nullptr;   // Note division when BPM sync is ON
+    std::atomic<float>* lfoInvertParam = nullptr;        // Invert LFO polarity
     std::atomic<float>* waveshaperMixParam = nullptr;  // Waveshaper wet/dry mix (0-100)
 
     // Compressor parameters
@@ -492,6 +493,7 @@ private:
     int   pb_lfoWaveform              = 0;
     float pb_lfoDepth                 = 0.0f;
     int   pb_lfoDestination           = 0;
+    float pb_lfoSign                  = 1.0f;  // 1 or -1 depending on lfoInvert
     int   pb_clipType                 = 0;
     float pb_subGuardFreq             = 0.0f;
     float pb_outGainParam             = 50.0f;  // raw, for output gain LFO modulation

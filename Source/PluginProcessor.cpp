@@ -142,6 +142,7 @@ PluginProcessor::PluginProcessor()
     lfoDestinationParam = parameters.getRawParameterValue("lfoDestination");
     lfoBpmSyncParam = parameters.getRawParameterValue("lfoBpmSync");
     lfoBpmDivisionParam = parameters.getRawParameterValue("lfoBpmDivision");
+    lfoInvertParam = parameters.getRawParameterValue("lfoInvert");
     waveshaperMixParam = parameters.getRawParameterValue("waveshaperMix");
     compPeakReductionParam = parameters.getRawParameterValue("compPeakReduction");
     compMakeupGainParam = parameters.getRawParameterValue("compMakeupGain");
@@ -159,7 +160,7 @@ PluginProcessor::PluginProcessor()
     jassert(inputGainParam && outputGainParam && distortionAmountParam
         && highPassFreqParam && subGuardFreqParam && clipTypeParam
         && lfoRateParam && lfoDepthParam && lfoWaveformParam && lfoEnabledParam && lfoDestinationParam
-        && lfoBpmSyncParam && lfoBpmDivisionParam && waveshaperMixParam
+        && lfoBpmSyncParam && lfoBpmDivisionParam && lfoInvertParam && waveshaperMixParam
         && compPeakReductionParam && compMakeupGainParam && compRatioParam && compEnabledParam
         && autoGainEnabledParam && extremeEnabledParam && globalMixParam
         && distMixParam && toneParam && waveshaperCleanParam && linearPhaseDryParam && cleanBoostParam);
@@ -1223,6 +1224,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const bool lfoEnabled = lfoEnabledParam->load() > 0.5f;
     const int lfoDestination = static_cast<int>(lfoDestinationParam->load());
     const bool lfoBpmSync = lfoBpmSyncParam->load() > 0.5f;
+    const float lfoSign = (lfoInvertParam->load() > 0.5f) ? -1.0f : 1.0f;
 
     // When BPM sync is ON, derive rate from host tempo + note division.
     // Division factors: cycles-per-beat for each choice index (see lfoBpmDivision param).
@@ -1254,6 +1256,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         lfoValue = generateLFOWaveform(lfoPhase, lfoWaveform);
         if (std::isnan(lfoValue) || std::isinf(lfoValue))
             lfoValue = 0.0f;
+        lfoValue *= lfoSign;
 
         // Advance phase for the entire block
         lfoPhase += lfoPhaseIncrement * buffer.getNumSamples();
@@ -1323,6 +1326,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     pb_lfoEnabled               = lfoEnabled;
     pb_lfoWaveform              = lfoWaveform;
     pb_lfoDepth                 = lfoDepth;
+    pb_lfoSign                  = lfoSign;
     pb_lfoDestination           = lfoDestination;
     pb_clipType                 = clipType;
     pb_subGuardFreq             = subGuardFreq;
@@ -1996,7 +2000,7 @@ bool PluginProcessor::applySubGuardSplit()
                 float sampleLfoValue = generateLFOWaveform(lfoPhase, pb_lfoWaveform);
                 if (std::isnan(sampleLfoValue) || std::isinf(sampleLfoValue))
                     sampleLfoValue = 0.0f;
-                const float sampleLfoMod = sampleLfoValue * pb_lfoDepth / 100.0f;
+                const float sampleLfoMod = sampleLfoValue * pb_lfoSign * pb_lfoDepth / 100.0f;
 
                 if (pb_lfoDestination == 0)
                 {
@@ -2837,6 +2841,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         "LFO BPM Division",
         juce::StringArray{ "1/1", "1/2", "1/4", "1/8", "1/16", "1/32", "1/4T", "1/8T", "1/16T" },
         2));  // Default 1/4 note
+
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{ "lfoInvert", 1 },
+        "LFO Invert",
+        false));  // Default OFF
 
     // Waveshaper parameter (mix knob 0-100%)
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
