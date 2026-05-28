@@ -140,6 +140,8 @@ PluginProcessor::PluginProcessor()
     lfoWaveformParam = parameters.getRawParameterValue("lfoWaveform");
     lfoEnabledParam = parameters.getRawParameterValue("lfoEnabled");
     lfoDestinationParam = parameters.getRawParameterValue("lfoDestination");
+    lfoBpmSyncParam = parameters.getRawParameterValue("lfoBpmSync");
+    lfoBpmDivisionParam = parameters.getRawParameterValue("lfoBpmDivision");
     waveshaperMixParam = parameters.getRawParameterValue("waveshaperMix");
     compPeakReductionParam = parameters.getRawParameterValue("compPeakReduction");
     compMakeupGainParam = parameters.getRawParameterValue("compMakeupGain");
@@ -156,7 +158,8 @@ PluginProcessor::PluginProcessor()
     // Verify all parameters were found
     jassert(inputGainParam && outputGainParam && distortionAmountParam
         && highPassFreqParam && subGuardFreqParam && clipTypeParam
-        && lfoRateParam && lfoDepthParam && lfoWaveformParam && lfoEnabledParam && lfoDestinationParam && waveshaperMixParam
+        && lfoRateParam && lfoDepthParam && lfoWaveformParam && lfoEnabledParam && lfoDestinationParam
+        && lfoBpmSyncParam && lfoBpmDivisionParam && waveshaperMixParam
         && compPeakReductionParam && compMakeupGainParam && compRatioParam && compEnabledParam
         && autoGainEnabledParam && extremeEnabledParam && globalMixParam
         && distMixParam && toneParam && waveshaperCleanParam && linearPhaseDryParam && cleanBoostParam);
@@ -1219,6 +1222,24 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // LFO modulation for dynamic distortion effects
     const bool lfoEnabled = lfoEnabledParam->load() > 0.5f;
     const int lfoDestination = static_cast<int>(lfoDestinationParam->load());
+    const bool lfoBpmSync = lfoBpmSyncParam->load() > 0.5f;
+
+    // When BPM sync is ON, derive rate from host tempo + note division.
+    // Division factors: cycles-per-beat for each choice index (see lfoBpmDivision param).
+    // Fallback to 120 BPM if the host provides no position info.
+    if (lfoBpmSync)
+    {
+        static constexpr float kDivisionFactors[] =
+            { 0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f, 1.5f, 3.0f, 6.0f }; // 1/1..1/32, T variants
+        const int divIndex = juce::jlimit(0, 8,
+            static_cast<int>(lfoBpmDivisionParam->load()));
+        double bpm = 120.0;
+        if (auto* ph = getPlayHead())
+            if (auto pos = ph->getPosition())
+                if (auto b = pos->getBpm())
+                    bpm = *b;
+        lfoRate = static_cast<float>((bpm / 60.0) * kDivisionFactors[divIndex]);
+    }
 
     // Determine if this destination needs per-sample LFO (0=dist, 3=mix, 4=gain)
     // or block-level LFO (1=tone, 2=hipass - filter coefficients can't change per-sample)
@@ -2805,6 +2826,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
             "Output Gain"   // 4
         },
         0));  // Default to Distortion
+
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{ "lfoBpmSync", 1 },
+        "LFO BPM Sync",
+        false));  // Default OFF - free-running Hz mode
+
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID{ "lfoBpmDivision", 1 },
+        "LFO BPM Division",
+        juce::StringArray{ "1/1", "1/2", "1/4", "1/8", "1/16", "1/32", "1/4T", "1/8T", "1/16T" },
+        2));  // Default 1/4 note
 
     // Waveshaper parameter (mix knob 0-100%)
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
