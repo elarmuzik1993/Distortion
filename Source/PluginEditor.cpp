@@ -491,11 +491,16 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addAndMakeVisible(settingsButton);
     settingsButton.onClick = [this]() { showSettingsOverlay(); };
 
+    // Setup oscilloscope view toggle (compact <-> full) — duplicates the Settings toggle
+    addAndMakeVisible(scopeButton);
+    scopeButton.onClick = [this]() { toggleOscilloscopeMode(); };
+
     // Load UI settings
     loadSettings();
     // Sync oversampling setting to processor (in case it was saved as non-default)
     audioProcessor.requestOversamplingRebuild(settingsState.oversamplingMode);
     applyOscilloscopeEnabled(settingsState.oscilloscopeEnabled);
+    scopeButton.setFullMode(settingsState.oscilloscopeEnabled);
     oscilloscope.setStereoMode(settingsState.oscilloscopeStereo);
     oscilloscope.setScopeLength(settingsState.scopeLength);
 
@@ -505,6 +510,9 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 
     // Start timer for LFO modulation visual feedback (30Hz)
     startTimerHz(60);
+
+    // Construction-time sizing is done; allow animated folds from now on
+    allowFoldAnimation = true;
 }
 
 PluginEditor::~PluginEditor()
@@ -635,6 +643,9 @@ void PluginEditor::resized()
     const int settingsBtnSize = S(24);
     settingsButton.setBounds(randomizeX + randomizeButtonWidth + presetSpacing,
                              presetY, settingsBtnSize, settingsBtnSize);
+
+    scopeButton.setBounds(settingsButton.getRight() + presetSpacing,
+                          presetY, settingsBtnSize, settingsBtnSize);
 
     // Global Mix slider - directly below preset selector
     const int mixLabelWidth = S(28);
@@ -976,6 +987,9 @@ void PluginEditor::updateModulationHighlight()
 
 void PluginEditor::timerCallback()
 {
+    if (foldAnimating)
+        stepFoldAnimation();
+
     // Update LFO modulation indicator
     updateModulationHighlight();
 }
@@ -1363,6 +1377,7 @@ void PluginEditor::showSettingsOverlay()
 
     settingsOverlay->onClose = [this]() { hideSettingsOverlay(); };
     settingsOverlay->onOscilloscopeToggled = [this](bool enabled) {
+        scopeButton.setFullMode(enabled);  // keep the toolbar duplicate in sync
         applyOscilloscopeEnabled(enabled);
     };
     settingsOverlay->onScopeChannelModeChanged = [this](bool isStereo) {
@@ -1380,7 +1395,7 @@ void PluginEditor::hideSettingsOverlay()
 {
     saveSettings();
     settingsOverlay.reset();
-    applyWindowScale(settingsState.windowScalePercent); // fold back if scope is off
+    startFoldAnimation(); // animate fold/unfold to match the current scope setting
 }
 
 void PluginEditor::applyWindowScale(int scalePercent)
@@ -1395,6 +1410,7 @@ void PluginEditor::applyOscilloscopeEnabled(bool enabled)
 {
     if (enabled)
     {
+        // Reveal scope components up front so they animate into view as the window grows
         oscilloscope.setVisible(true);
         xyMorphPad.setVisible(true);
         phaseCorrelationMeter.setVisible(true);
@@ -1402,19 +1418,97 @@ void PluginEditor::applyOscilloscopeEnabled(bool enabled)
     }
     else
     {
+        // Collapse expanded sections so compact window ends clean
+        if (isLFOExpanded)        { isLFOExpanded = false;        lfoTabHeader.setExpanded(false);        updateLFOVisibility(); }
+        if (isCompressionExpanded){ isCompressionExpanded = false; compressionTabHeader.setExpanded(false); updateCompressionVisibility(); }
+
+        // When not animating (overlay open), hide immediately as before.
+        // When animating, the scope stays visible during the shrink and is hidden
+        // once the fold completes (see finishFoldAnimation).
+        if (settingsOverlay || !allowFoldAnimation)
+        {
+            oscilloscope.stopTimer();
+            oscilloscope.setVisible(false);
+            xyMorphPad.setVisible(false);
+            phaseCorrelationMeter.setVisible(false);
+        }
+    }
+
+    // Don't resize while settings overlay is open — fold happens on close
+    if (settingsOverlay)
+    {
+        resized(); // bounds must be recalculated when visibility changes mid-session
+        return;
+    }
+
+    if (allowFoldAnimation)
+        startFoldAnimation();
+    else
+        applyWindowScale(settingsState.windowScalePercent); // instant during construction
+}
+
+void PluginEditor::toggleOscilloscopeMode()
+{
+    const bool newState = !settingsState.oscilloscopeEnabled;
+    settingsState.oscilloscopeEnabled = newState;
+    scopeButton.setFullMode(newState);
+    applyOscilloscopeEnabled(newState);
+    saveSettings();
+}
+
+void PluginEditor::startFoldAnimation()
+{
+    const float baseH = settingsState.oscilloscopeEnabled ? 564.0f : 180.0f;
+    const int targetW = juce::roundToInt(960.0f * settingsState.windowScalePercent / 100.0f);
+    const int targetH = juce::roundToInt(baseH  * settingsState.windowScalePercent / 100.0f);
+
+    // Width never changes between modes; set it instantly so only height animates.
+    if (getWidth() != targetW)
+        setSize(targetW, getHeight());
+
+    foldStartHeight  = getHeight();
+    foldTargetHeight = targetH;
+
+    if (foldStartHeight == foldTargetHeight)
+    {
+        finishFoldAnimation();
+        return;
+    }
+
+    foldStartMs   = juce::Time::getMillisecondCounterHiRes();
+    foldAnimating = true; // stepped from timerCallback() at 60Hz
+}
+
+void PluginEditor::stepFoldAnimation()
+{
+    const double now = juce::Time::getMillisecondCounterHiRes();
+    const double t = (now - foldStartMs) / foldDurationMs;
+
+    if (t >= 1.0)
+    {
+        finishFoldAnimation();
+        return;
+    }
+
+    const double e = t * t * (3.0 - 2.0 * t); // smoothstep ease in/out
+    const int h = juce::roundToInt(foldStartHeight + (foldTargetHeight - foldStartHeight) * e);
+    setSize(getWidth(), h);
+}
+
+void PluginEditor::finishFoldAnimation()
+{
+    foldAnimating = false;
+    setSize(getWidth(), foldTargetHeight);
+
+    // If we just folded to compact, hide the scope components now the shrink is done.
+    if (!settingsState.oscilloscopeEnabled)
+    {
         oscilloscope.stopTimer();
         oscilloscope.setVisible(false);
         xyMorphPad.setVisible(false);
         phaseCorrelationMeter.setVisible(false);
-        // Collapse expanded sections so compact window starts clean
-        if (isLFOExpanded)        { isLFOExpanded = false;        lfoTabHeader.setExpanded(false);        updateLFOVisibility(); }
-        if (isCompressionExpanded){ isCompressionExpanded = false; compressionTabHeader.setExpanded(false); updateCompressionVisibility(); }
+        resized();
     }
-    // Don't resize while settings overlay is open — fold happens on close
-    if (!settingsOverlay)
-        applyWindowScale(settingsState.windowScalePercent);
-    else
-        resized(); // bounds must be recalculated when visibility changes mid-session
 }
 
 void PluginEditor::updateExpansionBackdrop()
