@@ -974,15 +974,48 @@ void PluginEditor::updateCompressionVisibility()
 
 void PluginEditor::updateLFOVisibility()
 {
+    static const juce::StringArray kDivNames {
+        "1/1", "1/2", "1/4", "1/8", "1/16", "1/32", "1/4T", "1/8T", "1/16T"
+    };
+
     const bool visible = isLFOExpanded;
     const bool bpmSync = visible &&
         audioProcessor.parameters.getParameter("lfoBpmSync")->getValue() > 0.5f;
 
-    // Rate knob shown only when BPM sync is OFF; division dropdown shown when ON
-    lfoRateSlider.setVisible(visible && !bpmSync);
-    lfoRateLabel.setVisible(visible && !bpmSync);
-    lfoBpmDivisionComboBox.setVisible(bpmSync);
-    lfoBpmDivisionLabel.setVisible(bpmSync);
+    // Rate knob always shown when expanded; division combo retired — knob controls it when sync is on.
+    lfoRateSlider.setVisible(visible);
+    lfoRateLabel.setVisible(visible);
+    lfoBpmDivisionComboBox.setVisible(false);
+    lfoBpmDivisionLabel.setVisible(false);
+
+    // Swap attachment: division index (0-8, step 1) when sync on; Hz rate when sync off.
+    lfoRateAttachment.reset();
+    if (bpmSync)
+    {
+        lfoRateAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+            audioProcessor.parameters, "lfoBpmDivision", lfoRateSlider);
+        lfoRateSlider.textFromValueFunction = [](double v) {
+            return kDivNames[juce::jlimit(0, 8, (int)std::round(v))];
+        };
+        lfoRateSlider.onValueChange = [this, &kDivNames = kDivNames]() {
+            const int idx = juce::jlimit(0, 8, (int)std::round(lfoRateSlider.getValue()));
+            lfoRateLabel.setText(kDivNames[idx], juce::dontSendNotification);
+        };
+        // Show current division immediately
+        const int idx = juce::jlimit(0, 8, (int)std::round(lfoRateSlider.getValue()));
+        lfoRateLabel.setText(kDivNames[idx], juce::dontSendNotification);
+    }
+    else
+    {
+        lfoRateAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+            audioProcessor.parameters, "lfoRate", lfoRateSlider);
+        lfoRateSlider.textFromValueFunction = [](double value) {
+            return juce::String(static_cast<int>(value));
+        };
+        lfoRateSlider.onValueChange = nullptr;
+        lfoRateLabel.setText("Rate", juce::dontSendNotification);
+    }
+    lfoRateSlider.updateText();
 
     lfoDepthSlider.setVisible(visible);
     lfoDepthLabel.setVisible(visible);
@@ -1589,7 +1622,6 @@ void PluginEditor::updateExpansionBackdrop()
             grow(lfoDestinationComboBox); grow(lfoDestinationLabel);
             grow(lfoBpmSyncButton);
             grow(lfoInvertButton);
-            if (lfoBpmDivisionComboBox.isVisible()) grow(lfoBpmDivisionComboBox);
         }
         if (isCompressionExpanded)
         {
@@ -1610,7 +1642,6 @@ void PluginEditor::updateExpansionBackdrop()
             lfoDestinationComboBox.toFront(false); lfoDestinationLabel.toFront(false); lfoDestinationLock.toFront(false);
             lfoBpmSyncButton.toFront(false);
             lfoInvertButton.toFront(false);
-            lfoBpmDivisionComboBox.toFront(false); lfoBpmDivisionLabel.toFront(false);
         }
         if (isCompressionExpanded)
         {
