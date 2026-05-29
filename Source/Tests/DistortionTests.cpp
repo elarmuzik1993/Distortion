@@ -1,6 +1,7 @@
 #if JUCE_DEBUG
 
 #include "DistortionTests.h"
+#include "../CyclingComboBox.h"
 #include "../RTAllocationGuard.h"
 #include <atomic>
 #include <iostream>
@@ -3628,6 +3629,58 @@ void ProcessBlockDecompTest::runTest()
     const float maxDiff = TestUtilities::calculateMaxDifference(runA, runB);
     expect(maxDiff < 0.01f, "Output diverges beyond analog-noise envelope (maxDiff="
                             + juce::String(maxDiff, 6) + ")");
+}
+
+//==============================================================================
+// CyclingComboBoxTests Implementation
+//==============================================================================
+
+void CyclingComboBoxTests::runTest()
+{
+    beginTest("Forward cycle wraps");
+    {
+        CyclingComboBox box;
+        box.addItem("A", 1);
+        box.addItem("B", 2);
+        box.addItem("C", 3);
+        box.setSelectedItemIndex(0, juce::dontSendNotification);
+
+        box.cycleSelection(+1);
+        expect(box.getSelectedItemIndex() == 1, "should advance to index 1");
+        box.cycleSelection(+1);
+        expect(box.getSelectedItemIndex() == 2, "should advance to index 2");
+        box.cycleSelection(+1);
+        expect(box.getSelectedItemIndex() == 0, "should wrap to index 0");
+    }
+
+    beginTest("Backward cycle wraps");
+    {
+        CyclingComboBox box;
+        box.addItem("A", 1);
+        box.addItem("B", 2);
+        box.addItem("C", 3);
+        box.setSelectedItemIndex(0, juce::dontSendNotification);
+
+        box.cycleSelection(-1);
+        expect(box.getSelectedItemIndex() == 2, "should wrap back to index 2");
+    }
+
+    beginTest("Single item stays put");
+    {
+        CyclingComboBox box;
+        box.addItem("Only", 1);
+        box.setSelectedItemIndex(0, juce::dontSendNotification);
+
+        box.cycleSelection(+1);
+        expect(box.getSelectedItemIndex() == 0, "single item should not move");
+    }
+
+    beginTest("Empty box is a no-op");
+    {
+        CyclingComboBox box;
+        box.cycleSelection(+1);
+        expect(box.getSelectedItemIndex() == -1, "empty box should stay unselected");
+    }
 }
 
 #endif // JUCE_DEBUG

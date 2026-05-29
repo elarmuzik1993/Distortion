@@ -10,6 +10,7 @@
 
 #include <JuceHeader.h>
 #include "CustomKnob.h"
+#include "CyclingComboBox.h"
 #include "FontHelper.h"
 #include "PluginProcessor.h"
 
@@ -1024,8 +1025,8 @@ private:
     juce::ToggleButton antiAliasToggle;
     juce::ToggleButton autoGainToggle;
     juce::ToggleButton linearPhaseToggle;
-    juce::ComboBox oversamplingCombo;
-    juce::ComboBox windowScaleCombo;
+    CyclingComboBox oversamplingCombo;
+    CyclingComboBox windowScaleCombo;
     juce::ToggleButton tooltipsToggle;
     juce::ToggleButton oscilloscopeToggle;
     juce::ToggleButton scopeStereoToggle;
@@ -1439,9 +1440,9 @@ private:
 
     CustomKnob lfoRateSlider, lfoDepthSlider;
     juce::Label lfoRateLabel, lfoDepthLabel;
-    juce::ComboBox lfoWaveformComboBox;
+    CyclingComboBox lfoWaveformComboBox;
     juce::Label lfoWaveformLabel;
-    juce::ComboBox lfoDestinationComboBox;
+    CyclingComboBox lfoDestinationComboBox;
     juce::Label lfoDestinationLabel;
     LockIcon lfoDestinationLock;
     juce::TextButton lfoBpmSyncButton;
@@ -1454,7 +1455,7 @@ private:
 
     CustomKnob compPeakReductionSlider, compMakeupGainSlider;
     juce::Label compPeakReductionLabel, compMakeupGainLabel;
-    juce::ComboBox compRatioComboBox;
+    CyclingComboBox compRatioComboBox;
     juce::Label compRatioLabel;
     juce::ToggleButton compEnableToggle;
 
@@ -1470,7 +1471,7 @@ private:
     CustomKnob subGuardSlider;
     juce::Label subGuardLabel;
 
-    juce::ComboBox clipTypeComboBox;
+    CyclingComboBox clipTypeComboBox;
     juce::Label clipTypeLabel;
 
     juce::TextButton extremeButton;

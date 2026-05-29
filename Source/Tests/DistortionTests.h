@@ -386,6 +386,14 @@ private:
 // Sanity Test (no PluginProcessor dependency)
 //==============================================================================
 
+/** Tests for CyclingComboBox::cycleSelection — wrap + excluded-ID skipping */
+class CyclingComboBoxTests : public juce::UnitTest
+{
+public:
+    CyclingComboBoxTests() : juce::UnitTest("CyclingComboBox", "UI") {}
+    void runTest() override;
+};
+
 class SanityTests : public juce::UnitTest
 {
 public:
@@ -453,6 +461,7 @@ inline void registerAllTests()
 
     // Minimal processor test to verify basic PluginProcessor functionality
     static MinimalProcessorTest minimalProcessorTest;
+    static CyclingComboBoxTests cyclingComboBoxTests;
 
     // Working tests
     static DryWetAlignmentTests dryWetAlignmentTests;
