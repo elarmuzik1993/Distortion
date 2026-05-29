@@ -598,6 +598,57 @@ public:
     }
 };
 
+// Custom button that draws an oscilloscope waveform glyph.
+// Bright/filled when in full (Oscilloscope) mode, dim outline when compact.
+class ScopeButton : public juce::Button
+{
+public:
+    ScopeButton() : juce::Button("Oscilloscope") {}
+
+    void setFullMode(bool shouldBeFull)
+    {
+        if (fullMode != shouldBeFull) { fullMode = shouldBeFull; repaint(); }
+    }
+    bool isFullMode() const { return fullMode; }
+
+    void paintButton(juce::Graphics& g, bool isMouseOver, bool isButtonDown) override
+    {
+        auto bounds = getLocalBounds().toFloat().reduced(2.0f);
+
+        juce::Colour col = isButtonDown ? juce::Colours::white
+                         : isMouseOver  ? juce::Colour(0xFFFF4466)
+                                        : juce::Colour(0xFFFF0044);
+        if (!fullMode)
+            col = col.withAlpha(0.45f); // dim when compact
+
+        // Frame
+        g.setColour(col.withAlpha(fullMode ? 0.5f : 0.3f));
+        g.drawRoundedRectangle(bounds, 2.0f, 1.0f);
+
+        // Waveform inside the frame
+        auto wave = bounds.reduced(bounds.getWidth() * 0.14f, bounds.getHeight() * 0.20f);
+        const float midY = wave.getCentreY();
+        const float amp = wave.getHeight() * 0.5f;
+        juce::Path p;
+        const int steps = 24;
+        for (int i = 0; i <= steps; ++i)
+        {
+            const float t = (float) i / (float) steps;
+            const float x = wave.getX() + t * wave.getWidth();
+            const float y = midY - std::sin(t * juce::MathConstants<float>::twoPi * 1.5f) * amp;
+            if (i == 0) p.startNewSubPath(x, y);
+            else        p.lineTo(x, y);
+        }
+        g.setColour(col);
+        g.strokePath(p, juce::PathStrokeType(fullMode ? 1.6f : 1.0f,
+                                             juce::PathStrokeType::curved,
+                                             juce::PathStrokeType::rounded));
+    }
+
+private:
+    bool fullMode = true;
+};
+
 // Settings state for UI-only settings persisted via XML
 struct SettingsState
 {
@@ -1513,6 +1564,7 @@ private:
     // Settings overlay
     std::unique_ptr<SettingsOverlay> settingsOverlay;
     GearButton settingsButton;
+    ScopeButton scopeButton;  // Toolbar duplicate of the Settings oscilloscope toggle
     SettingsState settingsState;
 
     void showSettingsOverlay();
@@ -1523,6 +1575,18 @@ private:
     void saveSettings();
     juce::File getSettingsFile();
     void updateExpansionBackdrop();
+
+    // Toolbar oscilloscope view toggle + smooth compact<->full window fold animation
+    void toggleOscilloscopeMode();
+    void startFoldAnimation();
+    void stepFoldAnimation();
+    void finishFoldAnimation();
+    bool allowFoldAnimation = false;  // suppress animation during construction
+    bool foldAnimating = false;
+    int  foldStartHeight = 0;
+    int  foldTargetHeight = 0;
+    double foldStartMs = 0.0;
+    static constexpr double foldDurationMs = 220.0;
 
     // Opaque panel drawn over the parameter row when a tab is expanded in compact mode
     struct ExpansionBackdrop : juce::Component
