@@ -1032,7 +1032,8 @@ void PluginEditor::updateModulationHighlight()
     else
         lfoPhase = audioProcessor.lfoPhaseForUI.load(std::memory_order_relaxed);
 
-    const float depthNorm = lfoDepth;
+    const bool lfoInverted = audioProcessor.parameters.getParameter("lfoInvert")->getValue() > 0.5f;
+    const float depthNorm = lfoInverted ? -lfoDepth : lfoDepth;
 
     // Set arc on the targeted knob, clear others
     distortionAmountSlider.setLFOArc(destination == 0, lfoPhase, depthNorm);

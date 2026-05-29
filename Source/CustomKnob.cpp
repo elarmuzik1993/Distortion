@@ -98,33 +98,39 @@ void CustomKnob::paint(juce::Graphics& g)
         g.setColour(juce::Colour(0xff222222));
         g.strokePath(makeArc(cx, cy, lfoR, START, END), lfoStroke);
 
-        if (lfoArcDepth > 0.01f)
+        if (std::abs(lfoArcDepth) > 0.01f)
         {
-            // Dim arc: full modulation range (value → value + depth)
-            const float maxModPos   = juce::jlimit(0.0f, 1.0f, norm + lfoArcDepth);
-            const float maxModAngle = START + maxModPos * SWEEP;
-            if (maxModAngle - valueAngle > 0.005f)
+            const bool inverted = lfoArcDepth < 0.0f;
+
+            // Dim arc: full modulation range
+            const float extentPos   = juce::jlimit(0.0f, 1.0f, norm + lfoArcDepth);
+            const float extentAngle = START + extentPos * SWEEP;
+            const float arcA = inverted ? extentAngle : valueAngle;
+            const float arcB = inverted ? valueAngle  : extentAngle;
+            if (arcB - arcA > 0.005f)
             {
                 g.setColour(lfoColour.withAlpha(0.18f));
-                g.strokePath(makeArc(cx, cy, lfoR, valueAngle, maxModAngle), lfoStroke);
+                g.strokePath(makeArc(cx, cy, lfoR, arcA, arcB), lfoStroke);
             }
 
-            // 6/7. Animated fill sweeping at the live LFO rate (two-pass glow)
+            // Animated fill sweeping at the live LFO rate (two-pass glow)
             const float lfoSine    = std::sin(lfoArcPhase * juce::MathConstants<float>::twoPi);
             const float fillAmount = (lfoSine + 1.0f) * 0.5f;
             const float fillPos    = juce::jlimit(0.0f, 1.0f, norm + fillAmount * lfoArcDepth);
             const float fillAngle  = START + fillPos * SWEEP;
-            if (fillAngle - valueAngle > 0.005f)
+            const float fillA = inverted ? fillAngle : valueAngle;
+            const float fillB = inverted ? valueAngle : fillAngle;
+            if (fillB - fillA > 0.005f)
             {
                 g.setColour(lfoColour.withAlpha(0.22f));
-                g.strokePath(makeArc(cx, cy, lfoR, valueAngle, fillAngle),
+                g.strokePath(makeArc(cx, cy, lfoR, fillA, fillB),
                              juce::PathStrokeType(5.0f, juce::PathStrokeType::curved,
                                                         juce::PathStrokeType::rounded));
                 g.setColour(lfoColour.withAlpha(0.9f));
-                g.strokePath(makeArc(cx, cy, lfoR, valueAngle, fillAngle), lfoStroke);
+                g.strokePath(makeArc(cx, cy, lfoR, fillA, fillB), lfoStroke);
             }
 
-            // 8. Center notch dot marks the base value within the mod range
+            // Center notch dot marks the base value within the mod range
             const auto dot = ptOnCircle(cx, cy, lfoR, valueAngle);
             const float dotR = 1.8f;
             g.setColour(lfoColour);
