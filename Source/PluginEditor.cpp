@@ -1586,6 +1586,9 @@ void PluginEditor::updateExpansionBackdrop()
             grow(lfoDepthSlider); grow(lfoDepthLabel);
             grow(lfoWaveformComboBox); grow(lfoWaveformLabel);
             grow(lfoDestinationComboBox); grow(lfoDestinationLabel);
+            grow(lfoBpmSyncButton);
+            grow(lfoInvertButton);
+            if (lfoBpmDivisionComboBox.isVisible()) grow(lfoBpmDivisionComboBox);
         }
         if (isCompressionExpanded)
         {
@@ -1604,6 +1607,9 @@ void PluginEditor::updateExpansionBackdrop()
             lfoDepthSlider.toFront(false);    lfoDepthLabel.toFront(false);    lfoDepthLock.toFront(false);
             lfoWaveformComboBox.toFront(false); lfoWaveformLabel.toFront(false);
             lfoDestinationComboBox.toFront(false); lfoDestinationLabel.toFront(false); lfoDestinationLock.toFront(false);
+            lfoBpmSyncButton.toFront(false);
+            lfoInvertButton.toFront(false);
+            lfoBpmDivisionComboBox.toFront(false); lfoBpmDivisionLabel.toFront(false);
         }
         if (isCompressionExpanded)
         {
