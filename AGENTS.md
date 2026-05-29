@@ -11,6 +11,10 @@
 - **DSP Specs**: See `DSP Architecture` section below.
 - **UI Specs**: Professional custom rotary knobs (`CustomKnob`), real-time oscilloscope, and LA2A-style gain reduction meter.
 - **Compact Window Mode** (USE-48): When the oscilloscope is disabled in Settings, the plugin window folds to a compact height (180px base at 100% scale). The Settings overlay stays compact: its rows live in a `SettingsContent` component inside a `juce::Viewport`, so the content scrolls (vertical neon scrollbar) and no rows are clipped at any window size or scale. LFO/Compression tabs auto-collapse on fold; re-expanding them in compact mode shows an `ExpansionBackdrop` panel (tight bounding box, dark bg + red border) that covers the parameter knobs while controls are tweaked.
+- **Oscilloscope Toolbar Toggle**: A scope button in the title bar toggles compact ↔ full mode with an animated fold (independent of the Settings toggle — both stay in sync via `applyOscilloscopeEnabled`).
+- **LFO BPM Sync**: SYNC button in the LFO panel switches the rate knob from free-running Hz mode to BPM-locked division mode. The rate knob steps through 1/1 → 1/2 → 1/4 → 1/8 → 1/16 → 1/32 → 1/4T → 1/8T → 1/16T; the label below updates live to show the selected division. Falls back to 120 BPM when no host playhead is available.
+- **LFO INV Toggle**: Inverts LFO polarity in both DSP (`lfoSign = -1`) and the arc visualizer (arc sweeps below the knob value instead of above).
+- **CyclingComboBox** (`Source/CyclingComboBox.h`): Custom `juce::ComboBox` subclass — single-click cycles to next item (timer-debounced), double-click opens the full list. Used for clip type, LFO waveform/destination, compression ratio, and settings dropdowns.
 - **Safety**: Includes `realtime-audio-safety-checklist.md` for thread safety and DSP best practices.
 - **CI/CD**: GitHub Actions for automated Windows/Linux release artifacts.
 
@@ -62,7 +66,7 @@ python scripts/fix_moduleinfo_json.py build --all
 
 ## Build & Test
 - **Framework**: JUCE UnitTest runner.
-- **Coverage**: 2000+ assertions (100% PASS RATE).
+- **Coverage**: 2240+ assertions (100% PASS RATE).
 - **Categories**: DSP, Compression, LFO, ProcessBlock, ThreadSafety, SampleRate (44.1k-192k), State I/O.
 - **Golden Audio**: Reference file comparison tests included.
 
