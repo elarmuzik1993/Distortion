@@ -15,6 +15,12 @@
 PluginEditor::PluginEditor(PluginProcessor& p)
     : AudioProcessorEditor(&p), audioProcessor(p), oscilloscope(p), gainReductionMeter(p), phaseCorrelationMeter(p)
 {
+    // paint() fills the full bounds with black before drawing — tell JUCE so it
+    // skips the pre-paint clear. On X11 this removes a brief flash of the parent
+    // window's background that can appear between size-change and child repaints
+    // during the fold animation.
+    setOpaque (true);
+
     // Font scale factor (672/960 = 0.7)
     const float fs = 672.0f / 960.0f;
 
@@ -562,6 +568,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 PluginEditor::~PluginEditor()
 {
     stopTimer();
+    foldAnimTimer.stopTimer();
 
     // Destroy settings overlay before LookAndFeel instances
     settingsOverlay.reset();
@@ -1078,8 +1085,8 @@ void PluginEditor::updateModulationHighlight()
 
 void PluginEditor::timerCallback()
 {
-    if (foldAnimating)
-        stepFoldAnimation();
+    // Fold animation runs on its own dedicated 90Hz timer (foldAnimTimer)
+    // so the editor's 60Hz UI tick does not gate its frame rate.
 
     // Update LFO modulation indicator
     updateModulationHighlight();
@@ -1484,9 +1491,9 @@ void PluginEditor::showSettingsOverlay()
 
 void PluginEditor::hideSettingsOverlay()
 {
-    saveSettings();
     settingsOverlay.reset();
     startFoldAnimation(); // animate fold/unfold to match the current scope setting
+    juce::MessageManager::callAsync ([this] { saveSettings(); });
 }
 
 void PluginEditor::applyWindowScale(int scalePercent)
@@ -1501,11 +1508,27 @@ void PluginEditor::applyOscilloscopeEnabled(bool enabled)
 {
     if (enabled)
     {
-        // Reveal scope components up front so they animate into view as the window grows
+        const bool willAnimateFold = (allowFoldAnimation && settingsOverlay == nullptr);
+
+        // For the animated path: pre-set alpha to 0 BEFORE making them visible
+        // so the first paint after the upcoming snap-resize is transparent —
+        // then the fade ramps alpha up to 1. Without this, components would
+        // flash fully-opaque for a frame between setVisible and the first fade tick.
+        if (willAnimateFold)
+        {
+            oscilloscope.setAlpha (0.0f);
+            xyMorphPad.setAlpha (0.0f);
+            phaseCorrelationMeter.setAlpha (0.0f);
+        }
+
         oscilloscope.setVisible(true);
         xyMorphPad.setVisible(true);
         phaseCorrelationMeter.setVisible(true);
-        oscilloscope.startTimerHz(DSPConstants::SCOPE_REFRESH_RATE_HZ);
+
+        // Defer the scope's 30Hz repaint timer until the fade finishes; running
+        // it during the fade just wastes paints on a near-transparent component.
+        if (! willAnimateFold)
+            oscilloscope.startTimerHz(DSPConstants::SCOPE_REFRESH_RATE_HZ);
     }
     else
     {
@@ -1544,36 +1567,49 @@ void PluginEditor::toggleOscilloscopeMode()
     settingsState.oscilloscopeEnabled = newState;
     scopeButton.setFullMode(newState);
     applyOscilloscopeEnabled(newState);
-    saveSettings();
+    // Defer the disk write — a synchronous XML save on the message thread here
+    // would block the fold timer's first tick (~click→first-frame latency).
+    juce::MessageManager::callAsync ([this] { saveSettings(); });
 }
 
 void PluginEditor::startFoldAnimation()
 {
-    const float baseH = settingsState.oscilloscopeEnabled ? 564.0f : 180.0f;
+    // Snap + fade strategy:
+    //  - Expand:   snap the window to full size in ONE atomic resize, then fade
+    //              scope/XY/phase alpha 0 → 1.
+    //  - Collapse: fade alpha 1 → 0 with window held at full size, then snap to
+    //              compact in finishFoldAnimation().
+    // This avoids the per-frame setSize() chain that produces occasional X11
+    // resize tearing on Linux — there's at most one ConfigureNotify per toggle.
+    const bool expanding = settingsState.oscilloscopeEnabled;
+    const float baseH = expanding ? 564.0f : 180.0f;
     const int targetW = juce::roundToInt(960.0f * settingsState.windowScalePercent / 100.0f);
     const int targetH = juce::roundToInt(baseH  * settingsState.windowScalePercent / 100.0f);
 
-    // Width never changes between modes; set it instantly so only height animates.
-    if (getWidth() != targetW)
-        setSize(targetW, getHeight());
-
-    foldStartHeight  = getHeight();
-    foldTargetHeight = targetH;
-
-    if (foldStartHeight == foldTargetHeight)
+    if (expanding)
     {
-        finishFoldAnimation();
-        return;
+        // Single atomic resize. Components are already setVisible(true) with
+        // alpha 0 from applyOscilloscopeEnabled, so this snap paints them
+        // transparent — the fade ramps them in over the next ~280ms.
+        setSize (targetW, targetH);
+    }
+    else
+    {
+        // Keep window at full size while the fade-out plays. Sync width only if
+        // a scale change desynced it; height holds until finish.
+        if (getWidth() != targetW)
+            setSize (targetW, getHeight());
     }
 
     foldStartMs   = juce::Time::getMillisecondCounterHiRes();
-    foldAnimating = true; // stepped from timerCallback() at 60Hz
+    foldAnimating = true;
+    foldAnimTimer.startTimerHz (60); // matches typical display refresh
 }
 
 void PluginEditor::stepFoldAnimation()
 {
     const double now = juce::Time::getMillisecondCounterHiRes();
-    const double t = (now - foldStartMs) / foldDurationMs;
+    const double t = juce::jlimit (0.0, 1.0, (now - foldStartMs) / foldDurationMs);
 
     if (t >= 1.0)
     {
@@ -1581,24 +1617,42 @@ void PluginEditor::stepFoldAnimation()
         return;
     }
 
-    const double e = t * t * (3.0 - 2.0 * t); // smoothstep ease in/out
-    const int h = juce::roundToInt(foldStartHeight + (foldTargetHeight - foldStartHeight) * e);
-    setSize(getWidth(), h);
+    // Quintic ease-in-out: soft start, soft settle. No resize-tear risk here
+    // since we're only changing alpha — pick the smoothest-looking curve.
+    const double e = t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+    const float alpha = (float) (settingsState.oscilloscopeEnabled ? e : (1.0 - e));
+
+    oscilloscope.setAlpha (alpha);
+    xyMorphPad.setAlpha (alpha);
+    phaseCorrelationMeter.setAlpha (alpha);
 }
 
 void PluginEditor::finishFoldAnimation()
 {
     foldAnimating = false;
-    setSize(getWidth(), foldTargetHeight);
+    foldAnimTimer.stopTimer();
 
-    // If we just folded to compact, hide the scope components now the shrink is done.
-    if (!settingsState.oscilloscopeEnabled)
+    if (! settingsState.oscilloscopeEnabled)
     {
+        // Collapse: hide components, reset their alpha for next expand, then
+        // snap the window to compact size in a single resize.
         oscilloscope.stopTimer();
-        oscilloscope.setVisible(false);
-        xyMorphPad.setVisible(false);
-        phaseCorrelationMeter.setVisible(false);
-        resized();
+        oscilloscope.setAlpha (1.0f);
+        xyMorphPad.setAlpha (1.0f);
+        phaseCorrelationMeter.setAlpha (1.0f);
+        oscilloscope.setVisible (false);
+        xyMorphPad.setVisible (false);
+        phaseCorrelationMeter.setVisible (false);
+        applyWindowScale (settingsState.windowScalePercent);
+    }
+    else
+    {
+        // Expand done: lock alpha at 1.0 and kick off live scope repaints.
+        oscilloscope.setAlpha (1.0f);
+        xyMorphPad.setAlpha (1.0f);
+        phaseCorrelationMeter.setAlpha (1.0f);
+        if (! oscilloscope.isTimerRunning())
+            oscilloscope.startTimerHz (DSPConstants::SCOPE_REFRESH_RATE_HZ);
     }
 }
 

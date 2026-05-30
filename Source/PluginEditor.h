@@ -1591,10 +1591,18 @@ private:
     void finishFoldAnimation();
     bool allowFoldAnimation = false;  // suppress animation during construction
     bool foldAnimating = false;
-    int  foldStartHeight = 0;
-    int  foldTargetHeight = 0;
     double foldStartMs = 0.0;
-    static constexpr double foldDurationMs = 220.0;
+    static constexpr double foldDurationMs = 280.0;
+
+    // Dedicated 90Hz timer for the fold animation so its cadence is independent
+    // of the editor's 60Hz UI timer (smoother stepping during the collapse/expand).
+    struct FoldAnimTimer : juce::Timer
+    {
+        PluginEditor& owner;
+        explicit FoldAnimTimer (PluginEditor& o) : owner (o) {}
+        void timerCallback() override { owner.stepFoldAnimation(); }
+    };
+    FoldAnimTimer foldAnimTimer { *this };
 
     // Opaque panel drawn over the parameter row when a tab is expanded in compact mode
     struct ExpansionBackdrop : juce::Component
