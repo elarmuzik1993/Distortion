@@ -220,36 +220,21 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     // Add LFO lock icon
     addAndMakeVisible(lfoEnableLock);
 
-    // Setup Sub Guard knob with snap behavior
+    // Setup Sub Guard knob: continuous crossover frequency with a discrete OFF detent.
     setupSlider(subGuardSlider, subGuardLabel, "Sub Guard", subGuardAttachment, "subGuardFreq");
 
-    // Custom text display with mode indicators
+    // Text display: OFF below the detent, otherwise the crossover frequency. The slope
+    // is a fixed LR24 across the range, so there are no longer per-frequency mode labels.
     subGuardSlider.textFromValueFunction = [](double v) {
-        // Check for OFF position first
         if (v <= 1.0) return juce::String("OFF");
-
-        // Normal frequency display with snap points
-        juce::String text = juce::String(static_cast<int>(v)) + " Hz";
-        if (std::abs(v - 60.0) <= 8.0) text = "60Hz PRESERVE";
-        else if (std::abs(v - 100.0) <= 8.0) text = "100Hz CONTROL";
-        else if (std::abs(v - 150.0) <= 8.0) text = "150Hz AGGRO";
-        return text;
+        return juce::String(static_cast<int>(v)) + " Hz";
     };
 
-    // Snap to nearest point when value changes
+    // Keep only the discrete OFF detent near the bottom of the range; the old magnetic
+    // snaps to 60/100/150 Hz are removed so the knob sweeps the crossover continuously.
     subGuardSlider.onValueChange = [this]() {
-        double v = subGuardSlider.getValue();
-
-        // Snap to OFF if very low (creates discrete OFF position)
-        if (v <= 25.0) {
+        if (subGuardSlider.getValue() <= 25.0)
             subGuardSlider.setValue(0.0);
-            return;
-        }
-
-        // Snap to preset frequencies
-        if (std::abs(v - 60.0) <= 8.0) subGuardSlider.setValue(60.0);
-        else if (std::abs(v - 100.0) <= 8.0) subGuardSlider.setValue(100.0);
-        else if (std::abs(v - 150.0) <= 8.0) subGuardSlider.setValue(150.0);
     };
 
     addAndMakeVisible(clipTypeComboBox);

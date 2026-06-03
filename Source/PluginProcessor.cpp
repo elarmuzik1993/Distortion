@@ -2666,24 +2666,16 @@ void PluginProcessor::resetDSPState()
 
 PluginProcessor::SubGuardFilterOrder PluginProcessor::determineSubGuardFilterOrder(float freq) const
 {
-    // Determine filter order based on frequency zones with hysteresis
-    // PRESERVE zone (60 Hz): LR24 - steepest slope for maximum sub protection
-    if (freq <= 80.0f)
-        return SubGuardFilterOrder::LR24;
+    juce::ignoreUnused(freq);
 
-    // CONTROL zone (100 Hz): LR18 - balanced response
-    if (freq >= 92.0f && freq <= 125.0f)
-        return SubGuardFilterOrder::LR18;
-
-    // AGGRESSIVE zone (150 Hz): LR12 - gentle slope, more frequency overlap
-    if (freq >= 142.0f)
-        return SubGuardFilterOrder::LR12;
-
-    // Transition zones - use nearest neighbor
-    if (freq < 92.0f)
-        return SubGuardFilterOrder::LR24;  // Between PRESERVE and CONTROL
-    else
-        return SubGuardFilterOrder::LR18;  // Between CONTROL and AGGRESSIVE
+    // Fixed LR24 (4th-order Linkwitz-Riley) across the whole 50-200 Hz range.
+    // The previous variable-slope design switched order by frequency zone, but only
+    // LR24 summed flat: LR18 left a ~6 dB dip and LR12 needed a polarity flip that
+    // could click when automating across a zone boundary. A single steep, proven-flat
+    // crossover gives clean sub protection with no transitions, no flatness errors,
+    // and no polarity flip. The LR18/LR12 machinery is retained (and now correct) but
+    // intentionally unused; routing everything here is the single point of control.
+    return SubGuardFilterOrder::LR24;
 }
 
 void PluginProcessor::updateSubGuardCoefficients(float freq, double sampleRate)
