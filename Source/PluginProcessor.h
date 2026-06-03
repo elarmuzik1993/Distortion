@@ -259,8 +259,9 @@ private:
     size_t oversamplingFactor = 4;
     int currentNumChannels = 0;
 
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-    juce::dsp::IIR::Coefficients<float>> preHighPassFilter;
+    // Input multimode filter (high-pass / low-pass / band-pass). State-variable TPT
+    // topology: one structure switches type cleanly and stays stable under LFO sweeps.
+    juce::dsp::StateVariableTPTFilter<float> inputFilter;
 
     // Manual DC blocker state (simple one-pole, extremely stable)
     // y[n] = x[n] - x[n-1] + R * y[n-1], where R ≈ 0.9995 for ~3.5Hz cutoff at 44.1kHz
@@ -332,6 +333,7 @@ private:
     std::atomic<float>* outputGainParam = nullptr;
     std::atomic<float>* distortionAmountParam = nullptr;
     std::atomic<float>* highPassFreqParam = nullptr;
+    std::atomic<float>* filterModeParam = nullptr;
     std::atomic<float>* clipTypeParam = nullptr;
     std::atomic<float>* subGuardFreqParam = nullptr;  // Sub Guard crossover frequency (50-200Hz)
     std::atomic<float>* lfoRateParam = nullptr;
@@ -451,6 +453,7 @@ private:
     double pb_oversampledSR = 0.0;
 
     float pb_modulatedHighPassFreq    = 0.0f;
+    int   pb_filterMode               = 0;   // 0=High Pass, 1=Low Pass, 2=Band Pass
     float pb_modulatedDistortionParam = 0.0f;
     float pb_modulatedToneFreq        = 0.0f;
     float pb_distortionParam          = 0.0f;  // raw (pre-LFO) for per-sample modulation

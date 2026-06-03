@@ -68,6 +68,15 @@ PluginEditor::PluginEditor(PluginProcessor& p)
         outputGainAttachment, "outputGain");
     setupSlider(highPassFreqSlider, highPassFreqLabel, "Hi-Pass Filter",
         highPassFreqAttachment, "highPassFreq");
+    // Filter mode dropdown takes the knob's label slot, so hide the text label.
+    highPassFreqLabel.setVisible(false);
+    addAndMakeVisible(filterModeComboBox);
+    filterModeComboBox.setLookAndFeel(&comboBoxLookAndFeel);
+    filterModeComboBox.addItem("High Pass", 1);
+    filterModeComboBox.addItem("Low Pass", 2);
+    filterModeComboBox.addItem("Band Pass", 3);
+    filterModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.parameters, "filterMode", filterModeComboBox);
     setupSlider(lfoRateSlider, lfoRateLabel, "LFO Rate",
         lfoRateAttachment, "lfoRate");
     setupSlider(lfoDepthSlider, lfoDepthLabel, "LFO Depth",
@@ -563,6 +572,7 @@ PluginEditor::~PluginEditor()
     compEnableToggle.setLookAndFeel(nullptr);
     lfoEnableToggle.setLookAndFeel(nullptr);
     clipTypeComboBox.setLookAndFeel(nullptr);
+    filterModeComboBox.setLookAndFeel(nullptr);
     compRatioComboBox.setLookAndFeel(nullptr);
     lfoWaveformComboBox.setLookAndFeel(nullptr);
     lfoDestinationComboBox.setLookAndFeel(nullptr);
@@ -827,9 +837,9 @@ void PluginEditor::resized()
     inputGainLock.setBounds(currentX + knobSize - lockSize - lockInset, rowY + lockInset, lockSize, lockSize);
     currentX += knobSize + controlSpacing;
 
-    // Hi-Pass Filter
+    // Filter (multimode HP/LP/BP): knob with the mode dropdown in the label slot.
     highPassFreqSlider.setBounds(currentX, rowY, knobSize, knobSize);
-    highPassFreqLabel.setBounds(currentX, rowY + knobSize + lockInset, knobSize, labelHeight);
+    filterModeComboBox.setBounds(currentX, rowY + knobSize + lockInset, knobSize, labelHeight);
     highPassFreqLock.setBounds(currentX + knobSize - lockSize - lockInset, rowY + lockInset, lockSize, lockSize);
     currentX += knobSize + controlSpacing;
 
