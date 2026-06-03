@@ -27,12 +27,7 @@ namespace DSPConstants
     constexpr float SUBGUARD_FREQ_OFF = 0.0f;                 // OFF sentinel value (no band-split)
     constexpr float SUBGUARD_FREQ_MIN = 50.0f;                // Minimum crossover frequency
     constexpr float SUBGUARD_FREQ_MAX = 200.0f;               // Maximum crossover frequency
-    constexpr float SUBGUARD_FREQ_DEFAULT = 60.0f;            // Default to 60Hz LR24 (sub-preserving, Saturn 2 style)
-    constexpr float SUBGUARD_SNAP_TOLERANCE = 8.0f;           // ±8 Hz snap zone
-    constexpr float SUBGUARD_SNAP_PRESERVE = 60.0f;           // LR24 - steepest slope
-    constexpr float SUBGUARD_SNAP_CONTROL = 100.0f;           // LR18 - balanced
-    constexpr float SUBGUARD_SNAP_AGGRESSIVE = 150.0f;        // LR12 - gentle slope
-    constexpr float SUBGUARD_CROSSFADE_TIME_S = 0.010f;       // 10ms order transition crossfade
+    constexpr float SUBGUARD_FREQ_DEFAULT = 60.0f;            // Default to 60Hz (sub-preserving, Saturn 2 style)
     constexpr float SUBGUARD_FREQ_SMOOTH_TIME_S = 0.050f;     // 50ms frequency smoothing
 
     // Distortion gain scaling
@@ -251,12 +246,8 @@ public:
     std::atomic<bool> debugHadDistortionCorruption{false};
     std::atomic<bool> debugHadUnexpectedSampleRateChange{false};
 
-    // Sub Guard filter order enum (public for method signatures)
-    enum class SubGuardFilterOrder { LR12, LR18, LR24 };
-
 private:
     // Sub Guard helper methods
-    SubGuardFilterOrder determineSubGuardFilterOrder(float freq) const;
     void updateSubGuardCoefficients(float freq, double sampleRate);
 
     // Clean Boost helpers
@@ -287,24 +278,7 @@ private:
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> highPassFilter2;
 
-    // Sub Guard LR12 filters (2nd order = single stage)
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> subGuardLP12;
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> subGuardHP12;
-
-    // Sub Guard LR18 filters (1st + 2nd order cascaded = 3rd order approximation)
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> subGuardLP18_1;  // First order
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> subGuardLP18_2;  // Second order
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> subGuardHP18_1;  // First order
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> subGuardHP18_2;  // Second order
-
     // Sub Guard state tracking
-    SubGuardFilterOrder currentSubGuardOrder = SubGuardFilterOrder::LR24;
     juce::SmoothedValue<float> smoothedSubGuardFreq;
     float lastSubGuardFreq = -1.0f;
 

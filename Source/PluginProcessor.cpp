@@ -662,12 +662,12 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     emphasisFilter.reset();
     deEmphasisFilter.reset();
 
-    // Sub Guard variable-slope crossover filters (oversampled domain)
+    // Sub Guard LR24 crossover filters (4th-order Linkwitz-Riley, oversampled domain)
     const float sgFreq = subGuardFreqParam ? subGuardFreqParam->load() : DSPConstants::SUBGUARD_FREQ_DEFAULT;
     // Use safe frequency for filter initialization when OFF (prevents divide-by-zero)
     const float filterInitFreq = (sgFreq <= 1.0f) ? 60.0f : sgFreq;
 
-    // LR24 filters (4th order = 2 cascaded 2nd-order stages) - PRESERVE mode
+    // LR24 = 2 cascaded 2nd-order Butterworth stages per band; sums LP+HP flat.
     lowPassFilter1.prepare(spec);
     *lowPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq);
     lowPassFilter1.reset();
@@ -683,33 +683,6 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     highPassFilter2.prepare(spec);
     *highPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq);
     highPassFilter2.reset();
-
-    // LR12 filters (2nd order = single stage, Q=0.5 for true Linkwitz-Riley 2) - AGGRESSIVE mode
-    constexpr float lr2Q = 0.5f;
-    subGuardLP12.prepare(spec);
-    *subGuardLP12.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr2Q);
-    subGuardLP12.reset();
-
-    subGuardHP12.prepare(spec);
-    *subGuardHP12.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
-    subGuardHP12.reset();
-
-    // LR18 filters (1st + 2nd order = 3rd order approximation, Q=0.5 on 2nd-order) - CONTROL mode
-    subGuardLP18_1.prepare(spec);
-    *subGuardLP18_1.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderLowPass(spec.sampleRate, filterInitFreq);
-    subGuardLP18_1.reset();
-
-    subGuardLP18_2.prepare(spec);
-    *subGuardLP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr2Q);
-    subGuardLP18_2.reset();
-
-    subGuardHP18_1.prepare(spec);
-    *subGuardHP18_1.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(spec.sampleRate, filterInitFreq);
-    subGuardHP18_1.reset();
-
-    subGuardHP18_2.prepare(spec);
-    *subGuardHP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
-    subGuardHP18_2.reset();
 
     // Initialize Sub Guard smoothing (use actual parameter value, not filterInitFreq)
     smoothedSubGuardFreq.reset(spec.sampleRate, DSPConstants::SUBGUARD_FREQ_SMOOTH_TIME_S);
@@ -1066,10 +1039,9 @@ void PluginProcessor::rebuildOversampling(double sampleRate, int samplesPerBlock
     emphasisFilter.reset();
     deEmphasisFilter.reset();
 
-    // Re-prepare sub guard filters
+    // Re-prepare sub guard LR24 crossover filters
     const float sgFreq = subGuardFreqParam ? subGuardFreqParam->load() : DSPConstants::SUBGUARD_FREQ_DEFAULT;
     const float filterInitFreq = (sgFreq <= 1.0f) ? 60.0f : sgFreq;
-    constexpr float lr2Q = 0.5f;
 
     lowPassFilter1.prepare(spec);
     *lowPassFilter1.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq);
@@ -1083,24 +1055,6 @@ void PluginProcessor::rebuildOversampling(double sampleRate, int samplesPerBlock
     highPassFilter2.prepare(spec);
     *highPassFilter2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq);
     highPassFilter2.reset();
-    subGuardLP12.prepare(spec);
-    *subGuardLP12.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr2Q);
-    subGuardLP12.reset();
-    subGuardHP12.prepare(spec);
-    *subGuardHP12.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
-    subGuardHP12.reset();
-    subGuardLP18_1.prepare(spec);
-    *subGuardLP18_1.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderLowPass(spec.sampleRate, filterInitFreq);
-    subGuardLP18_1.reset();
-    subGuardLP18_2.prepare(spec);
-    *subGuardLP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr2Q);
-    subGuardLP18_2.reset();
-    subGuardHP18_1.prepare(spec);
-    *subGuardHP18_1.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(spec.sampleRate, filterInitFreq);
-    subGuardHP18_1.reset();
-    subGuardHP18_2.prepare(spec);
-    *subGuardHP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
-    subGuardHP18_2.reset();
 
     lastOversampledSampleRate = spec.sampleRate;
 
@@ -2049,8 +2003,6 @@ bool PluginProcessor::applySubGuardSplit()
         lastSubGuardFreq = currentSubGuardFreq;
     }
 
-    const SubGuardFilterOrder filterOrder = determineSubGuardFilterOrder(currentSubGuardFreq);
-
     // SAFETY CHECK: Ensure we have enough buffer space
     const int requiredBufferSize = static_cast<int>(pb_numSamples);
     if (requiredBufferSize > lowBandBuffer.getNumSamples() || requiredBufferSize > highBandBuffer.getNumSamples())
@@ -2076,26 +2028,12 @@ bool PluginProcessor::applySubGuardSplit()
     auto lowBlock  = juce::dsp::AudioBlock<float>(lowBandBuffer ).getSubBlock(0, pb_numSamples);
     auto highBlock = juce::dsp::AudioBlock<float>(highBandBuffer).getSubBlock(0, pb_numSamples);
 
-    switch (filterOrder)
-    {
-        case SubGuardFilterOrder::LR12:
-            subGuardLP12.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
-            subGuardHP12.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
-            break;
-        case SubGuardFilterOrder::LR18:
-            subGuardLP18_1.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
-            subGuardLP18_2.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
-            subGuardHP18_1.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
-            subGuardHP18_2.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
-            break;
-        case SubGuardFilterOrder::LR24:
-        default:
-            lowPassFilter1.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
-            lowPassFilter2.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
-            highPassFilter1.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
-            highPassFilter2.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
-            break;
-    }
+    // LR24 crossover: two cascaded 2nd-order stages per band. LP keeps the clean low,
+    // HP feeds the distortion. LP+HP sum flat (in phase), so the recombine adds directly.
+    lowPassFilter1.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
+    lowPassFilter2.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
+    highPassFilter1.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
+    highPassFilter2.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
 
     // ========== AUTO-GAIN: Measure high-band input RMS (post-crossover, pre-distortion) ==========
     // Matches the band the output RMS is measured on (high band only, after the clean low
@@ -2164,14 +2102,7 @@ bool PluginProcessor::applySubGuardSplit()
         }
     }
 
-    // Recombine: Clean low + Distorted high.
-    // LR2 (LR12 zone) puts the two bands 180° out of phase at the crossover, so the
-    // high band must be subtracted for a flat sum — adding it would null the crossover
-    // frequency entirely. LR18 (3rd-order Butterworth) and LR24 (LR4) sum in phase, so
-    // they add normally. This sign propagates correctly: downstream stages only ever
-    // re-reference the clean low band, never the high band, so flipping it here is the
-    // single source of truth for the high-band polarity.
-    const float highSign = (filterOrder == SubGuardFilterOrder::LR12) ? -1.0f : 1.0f;
+    // Recombine: clean low + distorted high. LR24 bands sum in phase, so add directly.
     for (size_t channel = 0; channel < pb_numChannels; ++channel)
     {
         auto* outputData = pb_oversampledBlock.getChannelPointer(channel);
@@ -2179,7 +2110,7 @@ bool PluginProcessor::applySubGuardSplit()
         const auto* highData = highBandBuffer.getReadPointer(static_cast<int>(channel));
 
         for (size_t sample = 0; sample < pb_numSamples; ++sample)
-            outputData[sample] = lowData[sample] + highSign * highData[sample];
+            outputData[sample] = lowData[sample] + highData[sample];
     }
 
     return true;
@@ -2664,20 +2595,6 @@ void PluginProcessor::resetDSPState()
 // Sub Guard Helper Methods
 //==============================================================================
 
-PluginProcessor::SubGuardFilterOrder PluginProcessor::determineSubGuardFilterOrder(float freq) const
-{
-    juce::ignoreUnused(freq);
-
-    // Fixed LR24 (4th-order Linkwitz-Riley) across the whole 50-200 Hz range.
-    // The previous variable-slope design switched order by frequency zone, but only
-    // LR24 summed flat: LR18 left a ~6 dB dip and LR12 needed a polarity flip that
-    // could click when automating across a zone boundary. A single steep, proven-flat
-    // crossover gives clean sub protection with no transitions, no flatness errors,
-    // and no polarity flip. The LR18/LR12 machinery is retained (and now correct) but
-    // intentionally unused; routing everything here is the single point of control.
-    return SubGuardFilterOrder::LR24;
-}
-
 void PluginProcessor::updateSubGuardCoefficients(float freq, double sampleRate)
 {
     // RT-safe in-place coefficient update. Every per-channel IIR::Filter was
@@ -2685,9 +2602,12 @@ void PluginProcessor::updateSubGuardCoefficients(float freq, double sampleRate)
     // so writing through .state here updates what each channel's process()
     // reads on the next block. No allocation; no standby swap. See
     // docs/Architecture Contract.md "RT-safety" for the rationale.
+    //
+    // LR24 = two cascaded 2nd-order Butterworth stages per band. LP+HP sum to a
+    // pure allpass (flat magnitude), so the recombine in applySubGuardSplit adds
+    // the bands directly.
     constexpr double butterworthQ = 0.7071067811865476;
 
-    // LR24 filters (2 cascaded 2nd-order stages)
     if (lowPassFilter1.state != nullptr)
         writeSecondOrderLowPassCoeffs(*lowPassFilter1.state, sampleRate, freq, butterworthQ);
     if (lowPassFilter2.state != nullptr)
@@ -2696,30 +2616,6 @@ void PluginProcessor::updateSubGuardCoefficients(float freq, double sampleRate)
         writeSecondOrderHighPassCoeffs(*highPassFilter1.state, sampleRate, freq, butterworthQ);
     if (highPassFilter2.state != nullptr)
         writeSecondOrderHighPassCoeffs(*highPassFilter2.state, sampleRate, freq, butterworthQ);
-
-    // LR12 filters (single 2nd-order stage with Q=0.5 for true Linkwitz-Riley 2).
-    // LR2's two outputs are 180° out of phase at the crossover, so the recombine
-    // subtracts the high band (see applySubGuardSplit). With that polarity the sum
-    // is flat; a naive LP+HP add would null completely at the crossover frequency.
-    constexpr float lr2Q = 0.5f;
-    if (subGuardLP12.state != nullptr)
-        writeSecondOrderLowPassCoeffs(*subGuardLP12.state, sampleRate, freq, lr2Q);
-    if (subGuardHP12.state != nullptr)
-        writeSecondOrderHighPassCoeffs(*subGuardHP12.state, sampleRate, freq, lr2Q);
-
-    // LR18 filters (1st + 2nd order cascaded = 3rd-order Butterworth). The 2nd-order
-    // section must use the Butterworth Q (1.0), NOT 0.5: a 3rd-order Butterworth
-    // crossover sums LP+HP to a pure allpass (flat magnitude). Q=0.5 here made the
-    // pole pair critically damped, leaving a ~6 dB dip at the crossover frequency.
-    constexpr float butterworth3rdQ = 1.0f;
-    if (subGuardLP18_1.state != nullptr)
-        writeFirstOrderLowPassCoeffs(*subGuardLP18_1.state, sampleRate, freq);
-    if (subGuardLP18_2.state != nullptr)
-        writeSecondOrderLowPassCoeffs(*subGuardLP18_2.state, sampleRate, freq, butterworth3rdQ);
-    if (subGuardHP18_1.state != nullptr)
-        writeFirstOrderHighPassCoeffs(*subGuardHP18_1.state, sampleRate, freq);
-    if (subGuardHP18_2.state != nullptr)
-        writeSecondOrderHighPassCoeffs(*subGuardHP18_2.state, sampleRate, freq, butterworth3rdQ);
 }
 
 void PluginProcessor::updateCleanBoostCoefficients(float depth, double sampleRate)
