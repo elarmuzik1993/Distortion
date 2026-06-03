@@ -1555,7 +1555,14 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     applyPreCompression();
 
     // ========== AUTO-GAIN COMPENSATION: Measure input RMS ==========
-    if (autoGainEnabled)
+    // When Sub Guard is active the clean low band is removed before the output RMS
+    // is measured (see applyAutoGainAndISP), so a full-range input reference here
+    // would carry sub energy the output no longer has — inflating the input/output
+    // ratio and dumping excess makeup gain onto the distorted high band (harshness).
+    // In that case the high-band input reference is measured inside applySubGuardSplit
+    // (post-crossover, pre-distortion) so both envelopes share the same band.
+    const bool subGuardWillBeActive = (pb_subGuardFreq > 1.0f);
+    if (autoGainEnabled && !subGuardWillBeActive)
     {
         // Calculate input RMS for auto-gain compensation (before distortion)
         float inputSumSquares = 0.0f;
@@ -2142,6 +2149,28 @@ bool PluginProcessor::applySubGuardSplit()
             sgCrossfadeActive = false;
             currentSubGuardOrder = sgToOrder;
         }
+    }
+
+    // ========== AUTO-GAIN: Measure high-band input RMS (post-crossover, pre-distortion) ==========
+    // Matches the band the output RMS is measured on (high band only, after the clean low
+    // is stripped). Keeping both envelopes on the same band stops auto-gain from over-boosting
+    // the distorted highs — the cause of harshness with Sub Guard engaged. Mirrors the
+    // asymmetric one-pole follower used for the full-range path in processBlock.
+    if (pb_autoGainEnabled)
+    {
+        float inputSumSquares = 0.0f;
+        for (size_t ch = 0; ch < pb_numChannels; ++ch)
+        {
+            const float* data = highBandBuffer.getReadPointer(static_cast<int>(ch));
+            for (size_t i = 0; i < pb_numSamples; ++i)
+                inputSumSquares += data[i] * data[i];
+        }
+        const float inputRms = std::sqrt(inputSumSquares / (pb_numSamples * pb_numChannels));
+
+        if (inputRms > autoGainInputEnvelope)
+            autoGainInputEnvelope = autoGainAttackCoeff * autoGainInputEnvelope + (1.0f - autoGainAttackCoeff) * inputRms;
+        else
+            autoGainInputEnvelope = autoGainReleaseCoeff * autoGainInputEnvelope + (1.0f - autoGainReleaseCoeff) * inputRms;
     }
 
     // Apply studio distortion ONLY to the (possibly blended) high band
