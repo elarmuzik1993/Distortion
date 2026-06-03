@@ -1305,9 +1305,18 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Bypass state detection
     const bool bypassed = (modulatedDistortionParam < 0.5f && !compEnabled);
 
-    // TRUE BYPASS MODE: Pass through with output gain only
+    // TRUE BYPASS MODE: Pass through with output gain only.
     if (bypassed)
     {
+        // The input filter still runs here (at base rate) when it's doing something,
+        // so it works as a standalone HP/LP/BP even with distortion and comp off.
+        // A filter at its transparent default leaves bypass bit-clean as before.
+        if (isInputFilterActive())
+        {
+            juce::dsp::AudioBlock<float> filterBlock(buffer);
+            applyInputFilter(filterBlock);
+        }
+
         for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
         {
             const float currentOutputGain = smoothedOutputGain.getNextValue();
@@ -1819,12 +1828,23 @@ void PluginProcessor::setStateInformation(const void* data, int sizeInBytes)
 // PR-8: processBlock stage helpers
 // =============================================================================
 
-void PluginProcessor::applyPreHighpass(juce::AudioBuffer<float>& buffer)
+// Whether the input filter is actually shaping the signal (vs. effectively flat).
+// High-pass near the subsonic floor and low-pass near Nyquist are treated as
+// transparent so a "default" filter still allows true bypass; band-pass always cuts.
+bool PluginProcessor::isInputFilterActive() const
 {
-    pb_inputBlock = juce::dsp::AudioBlock<float>(buffer);
+    switch (pb_filterMode)
+    {
+        case 1:  return pb_modulatedHighPassFreq < 19000.0f;  // Low Pass: cutting highs
+        case 2:  return true;                                 // Band Pass: always cuts
+        default: return pb_modulatedHighPassFreq > 25.0f;     // High Pass: cutting lows
+    }
+}
 
-    // Input multimode filter at BASE sample rate. setType/setCutoffFrequency are
-    // RT-safe (no allocation); the SVF recomputes its internal coefficients in place.
+// Apply the multimode filter at BASE sample rate. setType/setCutoffFrequency are
+// RT-safe (no allocation); the SVF recomputes its internal coefficients in place.
+void PluginProcessor::applyInputFilter(juce::dsp::AudioBlock<float>& block)
+{
     const double baseSampleRate = getSampleRate();
 
     switch (pb_filterMode)
@@ -1843,8 +1863,14 @@ void PluginProcessor::applyPreHighpass(juce::AudioBuffer<float>& buffer)
         lastHighPassFreq = pb_modulatedHighPassFreq;
     }
 
-    juce::dsp::ProcessContextReplacing<float> ctx(pb_inputBlock);
+    juce::dsp::ProcessContextReplacing<float> ctx(block);
     inputFilter.process(ctx);
+}
+
+void PluginProcessor::applyPreHighpass(juce::AudioBuffer<float>& buffer)
+{
+    pb_inputBlock = juce::dsp::AudioBlock<float>(buffer);
+    applyInputFilter(pb_inputBlock);
 
     pb_oversampledBlock = oversampling
         ? oversampling->processSamplesUp(pb_inputBlock)

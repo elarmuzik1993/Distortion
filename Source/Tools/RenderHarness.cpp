@@ -358,6 +358,9 @@ int verifyFilter()
         proc.setRateAndBufferSizeDetails(kSampleRate, kBlockSize);
         proc.prepareToPlay(kSampleRate, kBlockSize);
         configureClean(proc);
+        // Force the plugin's TRUE-BYPASS state (no distortion, no compressor) to prove
+        // the input filter now works as a standalone HP/LP/BP with everything else off.
+        setParam(proc.parameters, "compEnabled", 0.0f);
         setParam(proc.parameters, "filterMode", static_cast<float>(modeIdx));
         setParam(proc.parameters, "highPassFreq", cutoff);
 
