@@ -2164,7 +2164,14 @@ bool PluginProcessor::applySubGuardSplit()
         }
     }
 
-    // Recombine: Clean low + Distorted high
+    // Recombine: Clean low + Distorted high.
+    // LR2 (LR12 zone) puts the two bands 180° out of phase at the crossover, so the
+    // high band must be subtracted for a flat sum — adding it would null the crossover
+    // frequency entirely. LR18 (3rd-order Butterworth) and LR24 (LR4) sum in phase, so
+    // they add normally. This sign propagates correctly: downstream stages only ever
+    // re-reference the clean low band, never the high band, so flipping it here is the
+    // single source of truth for the high-band polarity.
+    const float highSign = (filterOrder == SubGuardFilterOrder::LR12) ? -1.0f : 1.0f;
     for (size_t channel = 0; channel < pb_numChannels; ++channel)
     {
         auto* outputData = pb_oversampledBlock.getChannelPointer(channel);
@@ -2172,7 +2179,7 @@ bool PluginProcessor::applySubGuardSplit()
         const auto* highData = highBandBuffer.getReadPointer(static_cast<int>(channel));
 
         for (size_t sample = 0; sample < pb_numSamples; ++sample)
-            outputData[sample] = lowData[sample] + highData[sample];
+            outputData[sample] = lowData[sample] + highSign * highData[sample];
     }
 
     return true;
@@ -2698,23 +2705,29 @@ void PluginProcessor::updateSubGuardCoefficients(float freq, double sampleRate)
     if (highPassFilter2.state != nullptr)
         writeSecondOrderHighPassCoeffs(*highPassFilter2.state, sampleRate, freq, butterworthQ);
 
-    // LR12 filters (single 2nd-order stage with Q=0.5 for true Linkwitz-Riley 2)
-    // Default Butterworth Q=0.707 causes +3dB boost at crossover; LR2 Q=0.5 sums flat
+    // LR12 filters (single 2nd-order stage with Q=0.5 for true Linkwitz-Riley 2).
+    // LR2's two outputs are 180° out of phase at the crossover, so the recombine
+    // subtracts the high band (see applySubGuardSplit). With that polarity the sum
+    // is flat; a naive LP+HP add would null completely at the crossover frequency.
     constexpr float lr2Q = 0.5f;
     if (subGuardLP12.state != nullptr)
         writeSecondOrderLowPassCoeffs(*subGuardLP12.state, sampleRate, freq, lr2Q);
     if (subGuardHP12.state != nullptr)
         writeSecondOrderHighPassCoeffs(*subGuardHP12.state, sampleRate, freq, lr2Q);
 
-    // LR18 filters (1st + 2nd order cascaded, Q=0.5 on 2nd-order stage for flat sum)
+    // LR18 filters (1st + 2nd order cascaded = 3rd-order Butterworth). The 2nd-order
+    // section must use the Butterworth Q (1.0), NOT 0.5: a 3rd-order Butterworth
+    // crossover sums LP+HP to a pure allpass (flat magnitude). Q=0.5 here made the
+    // pole pair critically damped, leaving a ~6 dB dip at the crossover frequency.
+    constexpr float butterworth3rdQ = 1.0f;
     if (subGuardLP18_1.state != nullptr)
         writeFirstOrderLowPassCoeffs(*subGuardLP18_1.state, sampleRate, freq);
     if (subGuardLP18_2.state != nullptr)
-        writeSecondOrderLowPassCoeffs(*subGuardLP18_2.state, sampleRate, freq, lr2Q);
+        writeSecondOrderLowPassCoeffs(*subGuardLP18_2.state, sampleRate, freq, butterworth3rdQ);
     if (subGuardHP18_1.state != nullptr)
         writeFirstOrderHighPassCoeffs(*subGuardHP18_1.state, sampleRate, freq);
     if (subGuardHP18_2.state != nullptr)
-        writeSecondOrderHighPassCoeffs(*subGuardHP18_2.state, sampleRate, freq, lr2Q);
+        writeSecondOrderHighPassCoeffs(*subGuardHP18_2.state, sampleRate, freq, butterworth3rdQ);
 }
 
 void PluginProcessor::updateCleanBoostCoefficients(float depth, double sampleRate)
