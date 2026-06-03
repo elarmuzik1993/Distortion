@@ -14,31 +14,6 @@
 
 namespace
 {
-void writeFirstOrderHighPassCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
-                                   const double sampleRate,
-                                   const double cutoffHz) noexcept
-{
-    const auto n = std::tan(juce::MathConstants<double>::pi * cutoffHz / sampleRate);
-    const auto invA0 = 1.0 / (n + 1.0);
-    auto* coeffs = dest.getRawCoefficients();
-
-    coeffs[0] = static_cast<float>(invA0);
-    coeffs[1] = static_cast<float>(-invA0);
-    coeffs[2] = static_cast<float>((n - 1.0) * invA0);
-}
-
-void writeFirstOrderLowPassCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
-                                  const double sampleRate,
-                                  const double cutoffHz) noexcept
-{
-    const auto n = std::tan(juce::MathConstants<double>::pi * cutoffHz / sampleRate);
-    const auto invA0 = 1.0 / (n + 1.0);
-    auto* coeffs = dest.getRawCoefficients();
-
-    coeffs[0] = static_cast<float>(n * invA0);
-    coeffs[1] = static_cast<float>(n * invA0);
-    coeffs[2] = static_cast<float>((n - 1.0) * invA0);
-}
 
 void writeSecondOrderLowPassCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
                                    const double sampleRate,
@@ -133,6 +108,7 @@ PluginProcessor::PluginProcessor()
     outputGainParam = parameters.getRawParameterValue("outputGain");
     distortionAmountParam = parameters.getRawParameterValue("distortionAmount");
     highPassFreqParam = parameters.getRawParameterValue("highPassFreq");
+    filterModeParam = parameters.getRawParameterValue("filterMode");
     subGuardFreqParam = parameters.getRawParameterValue("subGuardFreq");
     clipTypeParam = parameters.getRawParameterValue("clipType");
     lfoRateParam = parameters.getRawParameterValue("lfoRate");
@@ -158,7 +134,7 @@ PluginProcessor::PluginProcessor()
     cleanBoostParam = parameters.getRawParameterValue("cleanBoost");
     // Verify all parameters were found
     jassert(inputGainParam && outputGainParam && distortionAmountParam
-        && highPassFreqParam && subGuardFreqParam && clipTypeParam
+        && highPassFreqParam && filterModeParam && subGuardFreqParam && clipTypeParam
         && lfoRateParam && lfoDepthParam && lfoWaveformParam && lfoEnabledParam && lfoDestinationParam
         && lfoBpmSyncParam && lfoBpmDivisionParam && lfoInvertParam && waveshaperMixParam
         && compPeakReductionParam && compMakeupGainParam && compRatioParam && compEnabledParam
@@ -636,11 +612,13 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     baseSpec.maximumBlockSize = static_cast<juce::uint32>(samplesPerBlock);
     baseSpec.numChannels = static_cast<juce::uint32>(numChannels);
 
-    // Initialize with default frequency at BASE sample rate
-    // CRITICAL: Use first-order filter for numerical stability at low frequencies
-    preHighPassFilter.prepare(baseSpec);
-    *preHighPassFilter.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(baseSpec.sampleRate, DSPConstants::DEFAULT_HIPASS_FREQ);
-    preHighPassFilter.reset();
+    // Input multimode filter at BASE sample rate. Default to high-pass at the
+    // subsonic default; a fixed flat (Butterworth) resonance keeps every mode clean.
+    inputFilter.prepare(baseSpec);
+    inputFilter.setType(juce::dsp::StateVariableTPTFilterType::highpass);
+    inputFilter.setResonance(juce::MathConstants<float>::sqrt2 * 0.5f);  // 0.707, no peak
+    inputFilter.setCutoffFrequency(DSPConstants::DEFAULT_HIPASS_FREQ);
+    inputFilter.reset();
 
     // Force filter update on first processBlock (especially important for DAW state restoration)
     lastHighPassFreq = -1.0f;
@@ -811,7 +789,7 @@ void PluginProcessor::releaseResources()
     cancelPendingUpdate();
     oversampling.reset();
     dryOversampling.reset();
-    preHighPassFilter.reset();
+    inputFilter.reset();
     toneFilter.reset();
     toneFilterLow.reset();
 
@@ -1225,6 +1203,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         return;  // Skip this block to prevent NaN propagation
     }
     auto highPassFreq = highPassFreqParam->load();
+    const int filterMode = static_cast<int>(filterModeParam->load());
     const float subGuardFreq = subGuardFreqParam->load();
     const int clipType = static_cast<int>(clipTypeParam->load());
     auto lfoRate = lfoRateParam->load();
@@ -1326,11 +1305,11 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             }
             break;
 
-        case 2:  // Hi-Pass Filter (20-500 Hz) - Logarithmic
+        case 2:  // Input Filter cutoff (20-20000 Hz) - Logarithmic
             {
                 const float centerFreqLog = std::log2(juce::jmax(20.0f, highPassFreq));
-                const float modulatedFreqLog = juce::jlimit(4.32f, 8.97f,
-                    centerFreqLog + (lfoModulation * 1.5f));  // ±1.5 octaves, pre-clamped
+                const float modulatedFreqLog = juce::jlimit(4.32f, 14.29f,
+                    centerFreqLog + (lfoModulation * 1.5f));  // ±1.5 octaves, clamped 20Hz-20kHz
                 modulatedHighPassFreq = std::pow(2.0f, modulatedFreqLog);
             }
             break;
@@ -1342,6 +1321,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
     // Publish preamble parameters to block-scope members for stage helpers (PR-8)
     pb_modulatedHighPassFreq    = modulatedHighPassFreq;
+    pb_filterMode               = filterMode;
     pb_modulatedDistortionParam = modulatedDistortionParam;
     pb_modulatedToneFreq        = modulatedToneFreq;
     pb_distortionParam          = distortionParam;
@@ -1875,23 +1855,28 @@ void PluginProcessor::applyPreHighpass(juce::AudioBuffer<float>& buffer)
 {
     pb_inputBlock = juce::dsp::AudioBlock<float>(buffer);
 
-    // Update filter coefficients if frequency changed (at BASE sample rate).
-    // In-place write through .state — see docs/Architecture Contract.md.
+    // Input multimode filter at BASE sample rate. setType/setCutoffFrequency are
+    // RT-safe (no allocation); the SVF recomputes its internal coefficients in place.
     const double baseSampleRate = getSampleRate();
-    if (std::abs(pb_modulatedHighPassFreq - lastHighPassFreq) > 0.5f)
+
+    switch (pb_filterMode)
     {
-        if (baseSampleRate >= 1000.0 && baseSampleRate <= 500000.0 &&
-            pb_modulatedHighPassFreq >= 1.0f &&
-            pb_modulatedHighPassFreq <= (baseSampleRate / 2.0f) &&
-            preHighPassFilter.state != nullptr)
-        {
-            writeFirstOrderHighPassCoeffs(*preHighPassFilter.state, baseSampleRate, pb_modulatedHighPassFreq);
-            lastHighPassFreq = pb_modulatedHighPassFreq;
-        }
+        case 1:  inputFilter.setType(juce::dsp::StateVariableTPTFilterType::lowpass);  break;
+        case 2:  inputFilter.setType(juce::dsp::StateVariableTPTFilterType::bandpass); break;
+        default: inputFilter.setType(juce::dsp::StateVariableTPTFilterType::highpass); break;
     }
 
-    if (preHighPassFilter.state)
-        preHighPassFilter.process(juce::dsp::ProcessContextReplacing<float>(pb_inputBlock));
+    if (std::abs(pb_modulatedHighPassFreq - lastHighPassFreq) > 0.5f &&
+        baseSampleRate >= 1000.0 && baseSampleRate <= 500000.0 &&
+        pb_modulatedHighPassFreq >= 1.0f &&
+        pb_modulatedHighPassFreq <= (baseSampleRate * 0.5))
+    {
+        inputFilter.setCutoffFrequency(pb_modulatedHighPassFreq);
+        lastHighPassFreq = pb_modulatedHighPassFreq;
+    }
+
+    juce::dsp::ProcessContextReplacing<float> ctx(pb_inputBlock);
+    inputFilter.process(ctx);
 
     pb_oversampledBlock = oversampling
         ? oversampling->processSamplesUp(pb_inputBlock)
@@ -2656,8 +2641,7 @@ void PluginProcessor::applyAutoGainAndISP(juce::AudioBuffer<float>& buffer)
 void PluginProcessor::resetDSPState()
 {
     // Reset all filters when loading state to prevent stale coefficients/state
-    if (preHighPassFilter.state)
-        preHighPassFilter.reset();
+    inputFilter.reset();
     if (lowPassFilter1.state)
         lowPassFilter1.reset();
     if (lowPassFilter2.state)
@@ -2923,11 +2907,24 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         juce::NormalisableRange<float>(0.0f, 100.0f),
         0.0f));
 
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID{ "highPassFreq", 1 },
-        "High Pass Frequency",
-        juce::NormalisableRange<float>(20.0f, 500.0f, 1.0f),
-        DSPConstants::DEFAULT_HIPASS_FREQ));
+    // Input filter cutoff/centre. Full-range so low-pass and band-pass modes are usable
+    // across the spectrum; log-style skew (centre ~1 kHz) keeps the knob musical. The ID
+    // stays "highPassFreq" for state/preset compatibility even though it now drives any mode.
+    {
+        juce::NormalisableRange<float> filterFreqRange(20.0f, 20000.0f, 1.0f);
+        filterFreqRange.setSkewForCentre(1000.0f);
+        params.push_back(std::make_unique<juce::AudioParameterFloat>(
+            juce::ParameterID{ "highPassFreq", 1 },
+            "Filter Frequency",
+            filterFreqRange,
+            DSPConstants::DEFAULT_HIPASS_FREQ));
+    }
+
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID{ "filterMode", 1 },
+        "Filter Mode",
+        juce::StringArray{ "High Pass", "Low Pass", "Band Pass" },
+        0));  // Default High Pass (preserves prior behaviour)
 
     // Sub Guard continuous crossover frequency (replaces 808-Safe toggle)
     params.push_back(std::make_unique<juce::AudioParameterFloat>(

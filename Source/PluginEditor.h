@@ -1474,6 +1474,10 @@ private:
     CyclingComboBox clipTypeComboBox;
     juce::Label clipTypeLabel;
 
+    // Input filter mode selector (High Pass / Low Pass / Band Pass). Sits in the
+    // filter knob's label slot; its selected text labels the column.
+    CyclingComboBox filterModeComboBox;
+
     juce::TextButton extremeButton;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> extremeAttachment;
 
@@ -1524,6 +1528,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> toneAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> subGuardAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> clipTypeAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> filterModeAttachment;
     juce::Image backgroundImage;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoRateAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoDepthAttachment;

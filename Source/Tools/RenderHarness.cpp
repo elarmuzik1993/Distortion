@@ -23,6 +23,7 @@
 #include <JuceHeader.h>
 #include "../PluginProcessor.h"
 
+#include <array>
 #include <cmath>
 #include <iostream>
 #include <map>
@@ -227,17 +228,27 @@ std::vector<float> magnitudeSpectrum(const juce::AudioBuffer<float>& buffer, int
 void configureClean(PluginProcessor& proc)
 {
     auto& p = proc.parameters;
-    setParam(p, "inputGain", 0.0f);
-    setParam(p, "outputGain", 0.0f);
+    // Inputs/outputs at unity, fully wet.
+    setParam(p, "inputGain", 50.0f);      // unity (gain curve centres at 50)
+    setParam(p, "outputGain", 50.0f);     // unity
     setParam(p, "globalMix", 100.0f);     // fully wet
-    setParam(p, "distortionAmount", 0.0f);
-    setParam(p, "distMix", 0.0f);         // distortion dry => transparent
     setParam(p, "tone", 20000.0f);        // tone LP wide open
+
+    // No nonlinear coloration: distortion and waveshaper fully dry/off.
+    setParam(p, "distortionAmount", 0.0f);
+    setParam(p, "distMix", 0.0f);
+    setParam(p, "waveshaperMix", 0.0f);
     setParam(p, "autoGainEnabled", 0.0f);
-    setParam(p, "compEnabled", 0.0f);
     setParam(p, "cleanBoost", 0.0f);
     setParam(p, "extremeEnabled", 0.0f);
     setParam(p, "lfoEnabled", 0.0f);
+
+    // CRITICAL: the plugin true-bypasses (skipping the input filter AND Sub Guard)
+    // when distortionAmount < 0.5 and the compressor is off. Enable the compressor
+    // with zero peak reduction: it returns early (no gain change) but keeps the full
+    // DSP chain running so the filter/crossover are actually exercised.
+    setParam(p, "compEnabled", 1.0f);
+    setParam(p, "compPeakReduction", 0.0f);
 }
 
 //==============================================================================
@@ -333,6 +344,75 @@ int verifySubGuard(float crossoverHz)
 }
 
 //==============================================================================
+// Verify the input multimode filter shapes the spectrum as expected.
+int verifyFilter()
+{
+    juce::Random rng(20240603);
+    const int numSamples = 1 << 16;
+    const auto noise = generateWhiteNoise(numSamples, 0.25f, rng);
+    const float cutoff = 1000.0f;
+
+    auto bandEnergyDb = [&](int modeIdx) -> std::array<float, 3>
+    {
+        PluginProcessor proc;
+        proc.setRateAndBufferSizeDetails(kSampleRate, kBlockSize);
+        proc.prepareToPlay(kSampleRate, kBlockSize);
+        configureClean(proc);
+        setParam(proc.parameters, "filterMode", static_cast<float>(modeIdx));
+        setParam(proc.parameters, "highPassFreq", cutoff);
+
+        juce::AudioBuffer<float> buf(2, numSamples);
+        for (int ch = 0; ch < 2; ++ch)
+            buf.copyFrom(ch, 0, noise, ch, 0, numSamples);
+        runPlugin(proc, buf);
+
+        constexpr int fftOrder = 15;
+        const auto spec = magnitudeSpectrum(buf, fftOrder);
+        const double binHz = kSampleRate / (1 << fftOrder);
+        auto band = [&](double lo, double hi)
+        {
+            double sum = 0.0; int n = 0;
+            for (size_t b = 1; b < spec.size(); ++b)
+            {
+                const double f = b * binHz;
+                if (f >= lo && f < hi) { sum += spec[b] * spec[b]; ++n; }
+            }
+            return n ? juce::Decibels::gainToDecibels(static_cast<float>(std::sqrt(sum / n))) : -120.0f;
+        };
+        return { band(150, 250), band(900, 1100), band(4000, 6000) };   // low / mid / high
+    };
+
+    const char* names[] = { "High Pass", "Low Pass", "Band Pass" };
+    std::cout << "\n  Input filter check  (cutoff = 1000 Hz, white noise)\n\n";
+    std::cout << "    Mode         ~200Hz    ~1kHz    ~5kHz\n";
+    std::cout << "    ---------    ------    -----    -----\n";
+
+    std::array<std::array<float, 3>, 3> e;
+    for (int m = 0; m < 3; ++m)
+    {
+        e[m] = bandEnergyDb(m);
+        char line[128];
+        std::snprintf(line, sizeof(line), "    %-9s   %+6.1f   %+6.1f   %+6.1f\n",
+                      names[m], e[m][0], e[m][1], e[m][2]);
+        std::cout << line;
+    }
+
+    // Expectations: HP cuts lows, LP cuts highs, BP cuts both vs centre. The margin
+    // is 10 dB — a 2nd-order band-pass rejects ~11-12 dB at 2.5 octaves from centre.
+    const bool hpOk = (e[0][1] - e[0][0]) > 10.0f;
+    const bool lpOk = (e[1][1] - e[1][2]) > 10.0f;
+    const bool bpOk = (e[2][1] - e[2][0]) > 10.0f && (e[2][1] - e[2][2]) > 10.0f;
+    const bool pass = hpOk && lpOk && bpOk;
+
+    std::cout << "\n    High Pass cuts lows:   " << (hpOk ? "PASS" : "FAIL") << "\n";
+    std::cout << "    Low Pass cuts highs:   " << (lpOk ? "PASS" : "FAIL") << "\n";
+    std::cout << "    Band Pass cuts both:   " << (bpOk ? "PASS" : "FAIL") << "\n";
+    std::cout << (pass ? "  RESULT: PASS - all modes shape correctly\n"
+                       : "  RESULT: FAIL\n");
+    return pass ? 0 : 1;
+}
+
+//==============================================================================
 int renderToFile(const Args& args)
 {
     const auto signal   = args.str("signal", "kickbass");
@@ -373,6 +453,13 @@ int renderToFile(const Args& args)
     setParam(proc.parameters, "distortionAmount", drive);
     setParam(proc.parameters, "distMix", mix);
 
+    // Input filter: --mode hp|lp|bp, --filterfreq <Hz>
+    const auto mode = args.str("mode", "hp");
+    const float filterModeIdx = (mode == "lp") ? 1.0f : (mode == "bp") ? 2.0f : 0.0f;
+    setParam(proc.parameters, "filterMode", filterModeIdx);
+    if (args.has("filterfreq"))
+        setParam(proc.parameters, "highPassFreq", args.num("filterfreq", 20.0f));
+
     runPlugin(proc, input);
 
     const auto outFile = juce::File::getCurrentWorkingDirectory().getChildFile(outPath);
@@ -402,7 +489,9 @@ int main(int argc, char* argv[])
         std::cout <<
             "Offline render harness for Monolit Distortion\n\n"
             "  --verify-subguard [--subguard <Hz>]   crossover flatness check (default 60 Hz)\n"
+            "  --verify-filter                       input filter HP/LP/BP shaping check\n"
             "  --signal noise|sweep|kickbass         synthetic input (default kickbass)\n"
+            "  --mode hp|lp|bp  --filterfreq <Hz>    input filter mode / cutoff\n"
             "  --in <file.wav>                       use a WAV file as input\n"
             "  --subguard <Hz|off>                   Sub Guard crossover frequency\n"
             "  --drive <0-100>  --mix <0-100>        distortion amount / wet mix\n"
@@ -413,6 +502,9 @@ int main(int argc, char* argv[])
 
     if (args.has("verify-subguard"))
         return verifySubGuard(args.num("subguard", 60.0f));
+
+    if (args.has("verify-filter"))
+        return verifyFilter();
 
     return renderToFile(args);
 }
