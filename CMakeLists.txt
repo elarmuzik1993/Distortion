@@ -209,6 +209,57 @@ add_custom_target(run_tests
 )
 
 # ============================================================================
+# Offline Render Harness (Console Application)
+# Headless tool to render audio through the real PluginProcessor and to verify
+# the Sub Guard crossover is magnitude-flat. See Source/Tools/RenderHarness.cpp.
+# ============================================================================
+juce_add_console_app(DistortionRender
+    COMPANY_NAME "Boris Miscenco"
+    BUNDLE_ID "com.monolitbeatz.MonolitDistortionRender"
+    PRODUCT_NAME "DistortionRender"
+)
+
+target_sources(DistortionRender PRIVATE
+    ${PLUGIN_SOURCES}
+    Source/Tools/RenderHarness.cpp
+)
+
+juce_generate_juce_header(DistortionRender)
+
+target_compile_definitions(DistortionRender
+    PRIVATE
+        JucePlugin_Name="Distortion"
+        JucePlugin_IsSynth=0
+        JucePlugin_WantsMidiInput=0
+        JucePlugin_ProducesMidiOutput=0
+        JucePlugin_IsMidiEffect=0
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_STRICT_REFCOUNTEDPOINTER=1
+        JUCE_STANDALONE_APPLICATION=1
+)
+
+target_link_libraries(DistortionRender
+    PRIVATE
+        DistortionData
+        juce::juce_audio_basics
+        juce::juce_audio_devices
+        juce::juce_audio_formats
+        juce::juce_audio_processors
+        juce::juce_audio_utils
+        juce::juce_core
+        juce::juce_data_structures
+        juce::juce_dsp
+        juce::juce_events
+        juce::juce_graphics
+        juce::juce_gui_basics
+        juce::juce_gui_extra
+    PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+)
+
+# ============================================================================
 # Install targets
 # ============================================================================
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
