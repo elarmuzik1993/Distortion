@@ -3942,4 +3942,190 @@ void CyclingComboBoxTests::runTest()
     }
 }
 
+//==============================================================================
+// Sub Guard / Input Filter Spectral Tests
+//==============================================================================
+
+namespace
+{
+    // Mono-sum magnitude-spectrum band energy (dB) over the first power-of-two window.
+    float bandEnergyDb(const juce::AudioBuffer<float>& buf, double sampleRate,
+                       double loHz, double hiHz, int fftOrder = 15)
+    {
+        const int fftSize = 1 << fftOrder;
+        juce::dsp::FFT fft(fftOrder);
+        std::vector<float> data(static_cast<size_t>(fftSize) * 2, 0.0f);
+
+        const int rch = buf.getNumChannels() > 1 ? 1 : 0;
+        const int avail = juce::jmin(fftSize, buf.getNumSamples());
+        for (int n = 0; n < avail; ++n)
+        {
+            const float mono = 0.5f * (buf.getSample(0, n) + buf.getSample(rch, n));
+            const float w = 0.5f - 0.5f * std::cos(2.0f * juce::MathConstants<float>::pi
+                                                    * n / (fftSize - 1));   // Hann
+            data[static_cast<size_t>(n)] = mono * w;
+        }
+
+        fft.performFrequencyOnlyForwardTransform(data.data());
+
+        double sum = 0.0; int count = 0;
+        for (int bin = 1; bin < fftSize / 2; ++bin)
+        {
+            const double f = bin * sampleRate / fftSize;
+            if (f >= loHz && f < hiHz) { sum += data[(size_t) bin] * data[(size_t) bin]; ++count; }
+        }
+        return count ? juce::Decibels::gainToDecibels(static_cast<float>(std::sqrt(sum / count)))
+                     : -120.0f;
+    }
+
+    // Process a buffer through the plugin in place, block by block.
+    void runInBlocks(PluginProcessor& proc, juce::AudioBuffer<float>& buffer, int blockSize = 512)
+    {
+        juce::MidiBuffer midi;
+        const int total = buffer.getNumSamples();
+        for (int start = 0; start < total; start += blockSize)
+        {
+            const int len = juce::jmin(blockSize, total - start);
+            juce::AudioBuffer<float> block(buffer.getArrayOfWritePointers(),
+                                           buffer.getNumChannels(), start, len);
+            midi.clear();
+            proc.processBlock(block, midi);
+        }
+    }
+
+    // Transparent processing (no nonlinear coloration). When defeatBypass is true the
+    // compressor is enabled at zero reduction so the full chain runs (needed to exercise
+    // Sub Guard, which lives inside the distortion path); when false the plugin stays in
+    // true bypass (used to prove the input filter works with everything else off).
+    void configureCleanProcessor(PluginProcessor& proc, bool defeatBypass)
+    {
+        auto& p = proc.parameters;
+        setParameter(p, "inputGain", 50.0f);   // unity
+        setParameter(p, "outputGain", 50.0f);  // unity
+        setParameter(p, "globalMix", 100.0f);  // fully wet
+        setParameter(p, "tone", 20000.0f);     // tone LP wide open
+        setParameter(p, "distortionAmount", 0.0f);
+        setParameter(p, "distMix", 0.0f);
+        setParameter(p, "waveshaperMix", 0.0f);
+        setParameter(p, "autoGainEnabled", 0.0f);
+        setParameter(p, "cleanBoost", 0.0f);
+        setParameter(p, "extremeEnabled", 0.0f);
+        setParameter(p, "lfoEnabled", 0.0f);
+        setParameter(p, "compEnabled", defeatBypass ? 1.0f : 0.0f);
+        setParameter(p, "compPeakReduction", 0.0f);
+    }
+}
+
+void SubGuardFlatnessTest::runTest()
+{
+    constexpr double sr = 44100.0;
+    const int numSamples = 1 << 16;
+
+    // One noise realisation, reused for both renders so the spectral ratio reflects
+    // only the crossover (the input cancels exactly).
+    juce::AudioBuffer<float> noise(2, numSamples);
+    {
+        juce::Random rng(20240603);
+        for (int n = 0; n < numSamples; ++n)
+        {
+            const float s = 0.25f * (rng.nextFloat() * 2.0f - 1.0f);
+            noise.setSample(0, n, s);
+            noise.setSample(1, n, s);
+        }
+    }
+
+    auto render = [&](float subGuardFreq)
+    {
+        PluginProcessor proc;
+        proc.setRateAndBufferSizeDetails(sr, 512);
+        proc.prepareToPlay(sr, 512);
+        configureCleanProcessor(proc, /*defeatBypass*/ true);
+        setParameter(proc.parameters, "subGuardFreq", subGuardFreq);
+
+        juce::AudioBuffer<float> buf(2, numSamples);
+        for (int ch = 0; ch < 2; ++ch) buf.copyFrom(ch, 0, noise, ch, 0, numSamples);
+        runInBlocks(proc, buf);
+        return buf;
+    };
+
+    const float edges[] = { 30, 40, 50, 60, 80, 100, 130, 160, 200, 300, 500, 1000, 2000 };
+    constexpr int numEdges = sizeof(edges) / sizeof(edges[0]);
+
+    for (float crossover : { 60.0f, 150.0f })
+    {
+        beginTest("Crossover flat at " + juce::String((int) crossover) + " Hz");
+
+        const auto outOff = render(0.0f);
+        const auto outOn  = render(crossover);
+
+        float worst = 0.0f;
+        for (int i = 0; i + 1 < numEdges; ++i)
+        {
+            const float on  = bandEnergyDb(outOn,  sr, edges[i], edges[i + 1]);
+            const float off = bandEnergyDb(outOff, sr, edges[i], edges[i + 1]);
+            worst = std::max(worst, std::abs(on - off));
+        }
+        expect(worst < 0.5f,
+               "Sub Guard altered the spectrum by " + juce::String(worst, 2)
+               + " dB at " + juce::String((int) crossover) + " Hz (expected flat)");
+    }
+}
+
+void InputFilterModeTest::runTest()
+{
+    constexpr double sr = 44100.0;
+    const int numSamples = 1 << 16;
+    const float cutoff = 1000.0f;
+
+    auto bands = [&](int modeIdx)
+    {
+        PluginProcessor proc;
+        proc.setRateAndBufferSizeDetails(sr, 512);
+        proc.prepareToPlay(sr, 512);
+        // True bypass (compressor off) so we also prove the filter runs without distortion.
+        configureCleanProcessor(proc, /*defeatBypass*/ false);
+        setParameter(proc.parameters, "filterMode", static_cast<float>(modeIdx));
+        setParameter(proc.parameters, "highPassFreq", cutoff);
+
+        juce::Random rng(7);
+        juce::AudioBuffer<float> buf(2, numSamples);
+        for (int ch = 0; ch < 2; ++ch)
+            for (int n = 0; n < numSamples; ++n)
+                buf.setSample(ch, n, 0.25f * (rng.nextFloat() * 2.0f - 1.0f));
+        runInBlocks(proc, buf);
+
+        struct BandEnergies { float low, mid, high; };
+        return BandEnergies {
+            bandEnergyDb(buf, sr, 150, 250),
+            bandEnergyDb(buf, sr, 900, 1100),
+            bandEnergyDb(buf, sr, 4000, 6000)
+        };
+    };
+
+    // ~10 dB margin: a 2nd-order band-pass rejects ~11-12 dB at 2.5 octaves from centre.
+    beginTest("High Pass cuts lows");
+    {
+        const auto e = bands(0);
+        expect((e.mid - e.low) > 10.0f,
+               "High Pass did not attenuate lows (low=" + juce::String(e.low, 1)
+               + " mid=" + juce::String(e.mid, 1) + " dB)");
+    }
+
+    beginTest("Low Pass cuts highs");
+    {
+        const auto e = bands(1);
+        expect((e.mid - e.high) > 10.0f,
+               "Low Pass did not attenuate highs (mid=" + juce::String(e.mid, 1)
+               + " high=" + juce::String(e.high, 1) + " dB)");
+    }
+
+    beginTest("Band Pass cuts both sides");
+    {
+        const auto e = bands(2);
+        expect((e.mid - e.low) > 10.0f && (e.mid - e.high) > 10.0f,
+               "Band Pass did not attenuate both sides (low=" + juce::String(e.low, 1)
+               + " mid=" + juce::String(e.mid, 1) + " high=" + juce::String(e.high, 1) + " dB)");
+    }
+}
+
 #endif // JUCE_DEBUG
