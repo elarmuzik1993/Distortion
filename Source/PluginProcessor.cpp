@@ -2072,17 +2072,41 @@ bool PluginProcessor::applySubGuardSplit()
     switch (filterOrder)
     {
         case SubGuardFilterOrder::LR12:
+        {
+            // LP filter the low band, then derive HP as complement: HP = input - LP(input).
+            // A single 2nd-order LP+HP (Q=0.5) sums to zero at the crossover frequency
+            // (LP(jωc)=−j/2, HP(jωc)=+j/2), creating a complete null. Using the complement
+            // guarantees LP + HP = input at every frequency with no crossover artifact.
             subGuardLP12.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
-            subGuardHP12.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
+            for (size_t ch = 0; ch < pb_numChannels; ++ch)
+            {
+                const auto* lowData  = lowBandBuffer .getReadPointer (static_cast<int>(ch));
+                auto*       highData = highBandBuffer.getWritePointer(static_cast<int>(ch));
+                for (size_t i = 0; i < pb_numSamples; ++i)
+                    highData[i] -= lowData[i];  // highBandBuffer was pre-loaded with input
+            }
             break;
+        }
         case SubGuardFilterOrder::LR18:
+        {
+            // LP filter the low band, then derive HP as complement: HP = input - LP(input).
+            // The cascaded 1st+2nd-order LP+HP sums to −6 dB at the crossover frequency.
+            // The complement gives perfect reconstruction at every frequency.
             subGuardLP18_1.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
             subGuardLP18_2.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
-            subGuardHP18_1.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
-            subGuardHP18_2.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
+            for (size_t ch = 0; ch < pb_numChannels; ++ch)
+            {
+                const auto* lowData  = lowBandBuffer .getReadPointer (static_cast<int>(ch));
+                auto*       highData = highBandBuffer.getWritePointer(static_cast<int>(ch));
+                for (size_t i = 0; i < pb_numSamples; ++i)
+                    highData[i] -= lowData[i];  // highBandBuffer was pre-loaded with input
+            }
             break;
+        }
         case SubGuardFilterOrder::LR24:
         default:
+            // LR24 (two cascaded Butterworth stages, Q=0.7071) already sums flat:
+            // LP²(jω) + HP²(jω) = 1 at all frequencies. No fix needed here.
             lowPassFilter1.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
             lowPassFilter2.process(juce::dsp::ProcessContextReplacing<float>(lowBlock));
             highPassFilter1.process(juce::dsp::ProcessContextReplacing<float>(highBlock));
