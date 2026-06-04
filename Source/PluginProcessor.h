@@ -356,12 +356,13 @@ private:
     juce::AudioBuffer<float> highBandBufferB;
     juce::AudioBuffer<float> dryBuffer;       // For global wet/dry mix
 
-    // Fractional dry-path delay to compensate for oversampler latency before the
-    // global wet/dry mix. Without this, the dry sums against a delayed wet signal
-    // and produces comb filtering. State holds the tail of the previous block's
-    // dry samples for negative-index reads during interpolation.
-    float dryDelaySamples = 0.0f;
-    juce::AudioBuffer<float> dryDelayState;
+    // Phase-matched dry path for the global wet/dry mix. The dry is routed through a
+    // second oversampler (identical config, no inner processing: up then down) so it
+    // picks up the SAME allpass phase and latency as the wet path. A plain fractional
+    // delay cannot align the minimum-phase IIR oversampler and comb-filters the blend
+    // at partial mix; routing the dry through a matched oversampler aligns every
+    // frequency, for both the IIR and FIR (linear-phase) oversampling modes.
+    std::unique_ptr<juce::dsp::Oversampling<float>> dryOversampling;
 
     juce::SmoothedValue<float> smoothedOutputGain;  // Only output gain uses SmoothedValue (normal rate)
     juce::SmoothedValue<float> smoothedGlobalMix;

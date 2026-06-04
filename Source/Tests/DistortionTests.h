@@ -171,6 +171,7 @@ private:
     void testNoCombFiltering();
     void testFullyWetPathUnaffected();
     void testOversamplingReinit();
+    void testIirPartialMixCoherence();
 };
 
 /** Tests for all parameters - ranges and smoothing */

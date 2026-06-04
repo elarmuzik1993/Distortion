@@ -795,14 +795,8 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // (truncating loses up to ~1 sample of PDC accuracy vs other tracks).
     setLatencySamples(static_cast<int>(std::lround(oversamplingLatencyFractional)));
 
-    // Capture fractional latency for internal dry-path alignment (compensates the
-    // global wet/dry mix; host compensation above remains integer-only).
-    dryDelaySamples = oversampling ? oversampling->getLatencyInSamples() : 0.0f;
-    if (! std::isfinite(dryDelaySamples) || dryDelaySamples < 0.0f)
-        dryDelaySamples = 0.0f;
-    const int dryStateLen = static_cast<int>(std::ceil(dryDelaySamples)) + 2;
-    dryDelayState.setSize(numChannels, dryStateLen, false, false, true);
-    dryDelayState.clear();
+    // The dry path for the global mix is phase-aligned by routing it through the matched
+    // dryOversampling instance (built in rebuildOversampling), not a fractional delay.
 
     lowBandBuffer.setSize(numChannels, worstCaseOversampledBlockSize, false, false, true);
     highBandBuffer.setSize(numChannels, worstCaseOversampledBlockSize, false, false, true);
@@ -816,6 +810,7 @@ void PluginProcessor::releaseResources()
 {
     cancelPendingUpdate();
     oversampling.reset();
+    dryOversampling.reset();
     preHighPassFilter.reset();
     toneFilter.reset();
     toneFilterLow.reset();
@@ -1027,6 +1022,7 @@ void PluginProcessor::rebuildOversampling(double sampleRate, int samplesPerBlock
         if (stages == 0)
         {
             oversampling.reset();
+            dryOversampling.reset();
             oversamplingFactor = 1;
         }
         else
@@ -1039,12 +1035,23 @@ void PluginProcessor::rebuildOversampling(double sampleRate, int samplesPerBlock
             );
             oversampling->initProcessing(static_cast<size_t>(currentBlockSize));
             oversamplingFactor = oversampling->getOversamplingFactor();
+
+            // Matched oversampler for the phase-aligned dry path (same config).
+            dryOversampling = std::make_unique<juce::dsp::Oversampling<float>>(
+                numChannels, stages, filterType, false, false
+            );
+            dryOversampling->initProcessing(static_cast<size_t>(currentBlockSize));
         }
     }
     else if (oversampling)
     {
         oversampling->reset();
         oversampling->initProcessing(static_cast<size_t>(currentBlockSize));
+        if (dryOversampling)
+        {
+            dryOversampling->reset();
+            dryOversampling->initProcessing(static_cast<size_t>(currentBlockSize));
+        }
     }
     currentNumChannels = numChannels;
 
@@ -1144,13 +1151,8 @@ void PluginProcessor::rebuildOversampling(double sampleRate, int samplesPerBlock
     setLatencySamples(oversampling
         ? static_cast<int>(std::lround(oversampling->getLatencyInSamples())) : 0);
 
-    // Refresh fractional dry-delay state for the new oversampling factor
-    dryDelaySamples = oversampling ? oversampling->getLatencyInSamples() : 0.0f;
-    if (! std::isfinite(dryDelaySamples) || dryDelaySamples < 0.0f)
-        dryDelaySamples = 0.0f;
-    const int dryStateLen = static_cast<int>(std::ceil(dryDelaySamples)) + 2;
-    dryDelayState.setSize(numChannels, dryStateLen, false, false, true);
-    dryDelayState.clear();
+    // The dry global-mix path is phase-aligned via the matched dryOversampling instance
+    // (rebuilt above), so it inherits the same latency automatically — no manual delay.
 
     // Reset all DSP state
     resetDSPState();
@@ -1668,77 +1670,32 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     }
 
     // ========== GLOBAL MIX (Active path) ==========
-    // Delay the dry path by the oversampler's (fractional) latency so it aligns
-    // with the wet path at the mix point. Without this, non-zero oversampling
-    // latency causes comb filtering at any mix < 100% wet.
+    // Phase-align the dry path with the wet by routing it through the matched
+    // dryOversampling instance (up then down, no processing). The wet path went
+    // through the same oversampler, so both now share the identical allpass phase
+    // and latency — the blend is comb-free at every frequency for both the IIR and
+    // FIR oversampling modes. A plain delay only matches the bulk group delay and
+    // leaves the IIR's frequency-dependent phase uncompensated.
     if (needsGlobalMix)
     {
-        const float delay = dryDelaySamples;
         const int numSamp = buffer.getNumSamples();
         const int numCh = buffer.getNumChannels();
 
-        if (delay < 1.0e-4f)
+        if (dryOversampling)
         {
-            // No oversampling latency — direct mix, no interpolation needed.
-            for (int sample = 0; sample < numSamp; ++sample)
-            {
-                const float currentMix = smoothedGlobalMix.getNextValue();
-                for (int channel = 0; channel < numCh; ++channel)
-                {
-                    auto* channelData = buffer.getWritePointer(channel);
-                    const float drySample = dryBuffer.getSample(channel, sample);
-                    channelData[sample] = drySample * (1.0f - currentMix) + channelData[sample] * currentMix;
-                }
-            }
+            auto dryBlock = juce::dsp::AudioBlock<float>(dryBuffer).getSubBlock(0, static_cast<size_t>(numSamp));
+            dryOversampling->processSamplesUp(dryBlock);     // fills the internal oversampled buffer
+            dryOversampling->processSamplesDown(dryBlock);   // identity round-trip: matched phase + latency
         }
-        else
+
+        for (int sample = 0; sample < numSamp; ++sample)
         {
-            const float intPart = std::floor(delay);
-            const float frac = delay - intPart;
-            const int intDelay = static_cast<int>(intPart);
-            const int stateLen = dryDelayState.getNumSamples();
-
-            // Linear interpolation between the integer-delay sample and the one
-            // before it. Negative positions read from dryDelayState (the tail of
-            // the previous block's dry signal).
-            for (int sample = 0; sample < numSamp; ++sample)
-            {
-                const float currentMix = smoothedGlobalMix.getNextValue();
-                const int readBase = sample - intDelay;
-
-                for (int channel = 0; channel < numCh; ++channel)
-                {
-                    auto* channelData = buffer.getWritePointer(channel);
-
-                    auto readDry = [&] (int pos) -> float
-                    {
-                        if (pos >= 0)
-                            return dryBuffer.getSample(channel, pos);
-                        const int statePos = stateLen + pos;
-                        return (statePos >= 0) ? dryDelayState.getSample(channel, statePos) : 0.0f;
-                    };
-
-                    const float s0 = readDry(readBase);
-                    const float sM1 = readDry(readBase - 1);
-                    const float drySample = s0 * (1.0f - frac) + sM1 * frac;
-
-                    channelData[sample] = drySample * (1.0f - currentMix) + channelData[sample] * currentMix;
-                }
-            }
-
-            // Update dry-delay state with the last `stateLen` samples of the dry
-            // signal so the next block can read across the boundary.
-            const int srcStart = numSamp - stateLen;
+            const float currentMix = smoothedGlobalMix.getNextValue();
             for (int channel = 0; channel < numCh; ++channel)
             {
-                for (int i = 0; i < stateLen; ++i)
-                {
-                    const int src = srcStart + i;
-                    const float v = (src >= 0)
-                        ? dryBuffer.getSample(channel, src)
-                        : dryDelayState.getSample(channel, stateLen + src);
-                    dryDelayState.setSample(channel, i, v);
-                }
+                auto* channelData = buffer.getWritePointer(channel);
+                const float drySample = dryBuffer.getSample(channel, sample);
+                channelData[sample] = drySample * (1.0f - currentMix) + channelData[sample] * currentMix;
             }
         }
     }
@@ -2713,9 +2670,9 @@ void PluginProcessor::resetDSPState()
         manualDCBlockerPrevOutput[ch] = 0.0f;
     }
 
-    // Clear fractional dry-delay history to avoid replaying stale samples
-    if (dryDelayState.getNumSamples() > 0)
-        dryDelayState.clear();
+    // Clear the matched dry-path oversampler so the global mix doesn't replay stale tails
+    if (dryOversampling)
+        dryOversampling->reset();
 
     // Abort any in-flight Sub Guard order crossfade; the next active block re-seeds
     // the order from the current frequency (OFF->ON snap path).

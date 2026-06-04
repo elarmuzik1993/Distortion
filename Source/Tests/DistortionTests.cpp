@@ -1837,6 +1837,82 @@ void DryWetAlignmentTests::runTest()
 
     beginTest("State valid across oversampling reinit");
     testOversamplingReinit();
+
+    beginTest("IIR partial-mix is phase-coherent across the spectrum");
+    testIirPartialMixCoherence();
+}
+
+void DryWetAlignmentTests::testIirPartialMixCoherence()
+{
+    // With the default minimum-phase IIR oversampler, a plain delay only matches the
+    // bulk group delay; the dry then sums against a wet whose phase is frequency-
+    // dependent, comb-filtering the blend (worst near the top of the band). Routing the
+    // dry through a matched oversampler aligns every frequency. We drive the distortion
+    // stage as an identity (distMix = 0) so wet == dry through the same oversampler, and
+    // verify that 50% mix preserves the level (== fully wet) at every probe frequency.
+    const double sr = 44100.0;
+    const int blockSize = 512;
+    const float amp = 0.2f;
+
+    auto measureRms = [&](double freq, float mixPct) -> float
+    {
+        PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(sr, blockSize);
+        processor.prepareToPlay(sr, blockSize);
+
+        setParameter(processor.parameters, "distortionAmount", 50.0f);
+        setParameter(processor.parameters, "distMix",          0.0f);   // identity distortion
+        setParameter(processor.parameters, "waveshaperMix",    0.0f);
+        setParameter(processor.parameters, "highPassFreq",     20.0f);
+        setParameter(processor.parameters, "tone",             20000.0f);
+        setParameter(processor.parameters, "compEnabled",      0.0f);
+        setParameter(processor.parameters, "autoGainEnabled",  0.0f);
+        setParameter(processor.parameters, "cleanBoost",       0.0f);
+        setParameter(processor.parameters, "subGuardFreq",     0.0f);
+        setParameter(processor.parameters, "linearPhaseDry",   0.0f);   // IIR oversampler
+        setParameter(processor.parameters, "globalMix",        mixPct);
+
+        juce::MidiBuffer midi;
+        const double phaseInc = juce::MathConstants<double>::twoPi * freq / sr;
+        double phase = 0.0;
+
+        const int warmupBlocks = 16, measureBlocks = 8;
+        float sumSquares = 0.0f; int count = 0;
+        for (int b = 0; b < warmupBlocks + measureBlocks; ++b)
+        {
+            juce::AudioBuffer<float> buffer(2, blockSize);
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                auto* data = buffer.getWritePointer(ch);
+                double p = phase;
+                for (int s = 0; s < blockSize; ++s) { data[s] = amp * static_cast<float>(std::sin(p)); p += phaseInc; }
+            }
+            processor.processBlock(buffer, midi);
+            if (b >= warmupBlocks)
+            {
+                const auto* d = buffer.getReadPointer(0);
+                for (int s = 0; s < blockSize; ++s) { sumSquares += d[s] * d[s]; ++count; }
+            }
+            phase += phaseInc * blockSize;
+            phase = std::fmod(phase, juce::MathConstants<double>::twoPi);
+        }
+        return count > 0 ? std::sqrt(sumSquares / static_cast<float>(count)) : 0.0f;
+    };
+
+    const double freqs[] = { 1000.0, 5000.0, 10000.0, 14000.0, 16000.0 };
+    for (double f : freqs)
+    {
+        const float wetRms = measureRms(f, 100.0f);
+        const float mixRms = measureRms(f, 50.0f);
+        expect(wetRms > 1.0e-4f, "Fully-wet reference should be non-trivial at " + juce::String(f) + " Hz");
+
+        // Coherent blend: 50% of (dry == wet) keeps the full level. A phase-misaligned
+        // dry would partially cancel here, dipping the level (most at high frequencies).
+        const float ratioDb = juce::Decibels::gainToDecibels(mixRms / juce::jmax(wetRms, 1.0e-9f));
+        expect(ratioDb > -0.5f,
+               "50% mix dipped at " + juce::String(f) + " Hz (phase-incoherent dry): "
+               + juce::String(ratioDb, 3) + " dB");
+    }
 }
 
 void DryWetAlignmentTests::testDryOnlyLatency()
@@ -2020,9 +2096,9 @@ void DryWetAlignmentTests::testFullyWetPathUnaffected()
 
 void DryWetAlignmentTests::testOversamplingReinit()
 {
-    // Changing oversampling stages triggers reinitializeOversampling, which
-    // must reallocate dryDelayState to the new latency. Process under two
-    // different oversampling factors and confirm no invalid samples.
+    // Changing oversampling stages rebuilds both the wet and the matched dry
+    // oversampler. Process under two different oversampling factors (and off) and
+    // confirm no invalid samples.
     PluginProcessor processor;
     const double sr = 44100.0;
     const int blockSize = 512;
