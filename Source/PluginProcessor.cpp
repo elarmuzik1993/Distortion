@@ -2001,7 +2001,11 @@ bool PluginProcessor::applySubGuardSplit()
             float sampleMixAmount   = distMixRamp.advance();
             float sampleDistortionParam = pb_modulatedDistortionParam;
 
-            if (pb_perSampleLFO && pb_lfoEnabled && pb_lfoPhaseIncrement > 0.0f)
+            // Only destinations 0 (distortion) and 3 (mix) are modulated here. Destination 4
+            // (output gain) is handled in the output-gain stage; advancing lfoPhase here too
+            // would double-advance it and run the tremolo at ~2x rate.
+            if (pb_lfoEnabled && pb_lfoPhaseIncrement > 0.0f
+                && (pb_lfoDestination == 0 || pb_lfoDestination == 3))
             {
                 float sampleLfoValue = generateLFOWaveform(lfoPhase, pb_lfoWaveform);
                 if (std::isnan(sampleLfoValue) || std::isinf(sampleLfoValue))
@@ -2194,12 +2198,16 @@ bool PluginProcessor::applySubGuardSplit()
         float sampleMixAmount   = distMixRamp.advance();
         float sampleDistortionParam = pb_modulatedDistortionParam;
 
-        if (pb_perSampleLFO && pb_lfoEnabled && pb_lfoPhaseIncrement > 0.0f)
+        // Only destinations 0 (distortion) and 3 (mix) are modulated here. Destination 4
+        // (output gain) is handled in the output-gain stage; advancing lfoPhase here too
+        // would double-advance it and run the tremolo at ~2x rate.
+        if (pb_lfoEnabled && pb_lfoPhaseIncrement > 0.0f
+            && (pb_lfoDestination == 0 || pb_lfoDestination == 3))
         {
             float sampleLfoValue = generateLFOWaveform(lfoPhase, pb_lfoWaveform);
             if (std::isnan(sampleLfoValue) || std::isinf(sampleLfoValue))
                 sampleLfoValue = 0.0f;
-            const float sampleLfoMod = sampleLfoValue * pb_lfoDepth / 100.0f;
+            const float sampleLfoMod = sampleLfoValue * pb_lfoSign * pb_lfoDepth / 100.0f;
 
             if (pb_lfoDestination == 0)
             {
@@ -2638,7 +2646,7 @@ void PluginProcessor::applyAutoGainAndISP(juce::AudioBuffer<float>& buffer)
             float sampleLfoValue = generateLFOWaveform(lfoPhase, pb_lfoWaveform);
             if (std::isnan(sampleLfoValue) || std::isinf(sampleLfoValue))
                 sampleLfoValue = 0.0f;
-            const float sampleLfoMod = sampleLfoValue * pb_lfoDepth / 100.0f;
+            const float sampleLfoMod = sampleLfoValue * pb_lfoSign * pb_lfoDepth / 100.0f;
 
             // Modulate output gain: ±25% swing (±4.5dB tremolo)
             const float modOutGainParam = juce::jlimit(0.0f, 100.0f,
