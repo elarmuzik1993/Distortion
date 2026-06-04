@@ -262,6 +262,13 @@ private:
     // Sub Guard helper methods
     SubGuardFilterOrder determineSubGuardFilterOrder(float freq) const;
     void updateSubGuardCoefficients(float freq, double sampleRate);
+    // Filter lowBuf/highBuf in place through the given order's bank and bake the
+    // LR12 flat-sum polarity (inverts the high band for 2nd-order Linkwitz-Riley).
+    void filterSubGuardBands(SubGuardFilterOrder order,
+                             juce::AudioBuffer<float>& lowBuf,
+                             juce::AudioBuffer<float>& highBuf);
+    // Clear just one order's filter state (incoming bank at a crossfade start).
+    void resetSubGuardOrderFilters(SubGuardFilterOrder order);
 
     // Clean Boost helpers
     void updateCleanBoostCoefficients(float depth, double sampleRate);
@@ -314,6 +321,15 @@ private:
     juce::SmoothedValue<float> smoothedSubGuardFreq;
     float lastSubGuardFreq = -1.0f;
 
+    // Sub Guard order-change crossfade. When the slope order switches (zone boundary),
+    // both the outgoing and incoming banks run for SUBGUARD_CROSSFADE_TIME_S and their
+    // band-split outputs are linearly blended, so the switch is click-free.
+    bool  sgCrossfadeActive = false;
+    int   sgCrossfadePos    = 0;           // samples elapsed in the current crossfade
+    SubGuardFilterOrder sgFromOrder = SubGuardFilterOrder::LR24;
+    SubGuardFilterOrder sgToOrder   = SubGuardFilterOrder::LR24;
+    bool  sgWasActive       = false;       // Sub Guard active last block? (OFF->ON snaps, no crossfade)
+
     // Post-distortion tone filter (oversampled rate)
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> toneFilter;
@@ -335,6 +351,9 @@ private:
 
     juce::AudioBuffer<float> lowBandBuffer;   // For clean low frequencies
     juce::AudioBuffer<float> highBandBuffer;  // For distorted high frequencies
+    // Secondary band buffers — hold the incoming order's split during an order crossfade.
+    juce::AudioBuffer<float> lowBandBufferB;
+    juce::AudioBuffer<float> highBandBufferB;
     juce::AudioBuffer<float> dryBuffer;       // For global wet/dry mix
 
     // Fractional dry-path delay to compensate for oversampler latency before the
@@ -504,7 +523,6 @@ private:
     float pb_subGuardFreq             = 0.0f;
     float pb_outGainParam             = 50.0f;  // raw, for output gain LFO modulation
     bool  pb_subGuardActive           = false;  // set by applySubGuardSplit
-    bool  pb_subGuardInvertHigh       = false;  // LR12 (2nd-order LR) needs one band inverted for a flat sum
     bool  pb_cleanBoostOn             = false;  // boost requested this block (gated with distortion active)
     bool  pb_boostProcessedThisBlock  = false;  // emphasis ran → de-emphasis must run too (pairs the shelves)
     // (Per-sample interpolation moved to inputGainRamp/driveRamp/distMixRamp — see LinearRamp.h)

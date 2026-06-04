@@ -264,6 +264,15 @@ public:
     void runTest() override;
 };
 
+// Verifies that sweeping the Sub Guard crossover frequency across the slope-order
+// boundaries (92 Hz, 142 Hz) is click-free thanks to the order crossfade.
+class SubGuardOrderCrossfadeTest : public juce::UnitTest
+{
+public:
+    SubGuardOrderCrossfadeTest() : UnitTest("Sub Guard Order Crossfade", TestCategories::DSP) {}
+    void runTest() override;
+};
+
 class RTCleanToneSweepTest : public juce::UnitTest
 {
 public:
@@ -493,6 +502,7 @@ inline void registerAllTests()
     static RTCleanPreHighPassTest rtCleanPreHighPassTest;
     static RTCleanSubGuardTest rtCleanSubGuardTest;
     static SubGuardCrossoverFlatnessTest subGuardCrossoverFlatnessTest;
+    static SubGuardOrderCrossfadeTest subGuardOrderCrossfadeTest;
     static RTCleanOversamplingTest rtCleanOversamplingTest;
     static RTCleanToneSweepTest rtCleanToneSweepTest;
     static RTCleanSampleRateDriftTest rtCleanSampleRateDriftTest;

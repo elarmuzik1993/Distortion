@@ -3228,6 +3228,92 @@ void SubGuardCrossoverFlatnessTest::runTest()
     }
 }
 
+void SubGuardOrderCrossfadeTest::runTest()
+{
+    // Sweeping the crossover frequency moves through the slope-order zones (LR24 ->
+    // LR18 at 92 Hz, LR18 -> LR12 at 142 Hz). A hard order switch starts the incoming
+    // bank from stale state and jumps the magnitude/phase, producing a click. The order
+    // crossfade should keep the output smooth. We drive a clean low sine (distortion as
+    // identity so the output slew is dominated by the tone itself) and assert the peak
+    // sample-to-sample step during the sweep stays small.
+    beginTest("Click-free crossover frequency sweep across order boundaries");
+
+    const double sr = 44100.0;
+    const int blockSize = 256;
+    const double sineFreq = 80.0;   // sits near the crossover, exercises both bands
+    const float amp = 0.1f;
+
+    PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(sr, blockSize);
+    processor.prepareToPlay(sr, blockSize);
+
+    setParameter(processor.parameters, "distortionAmount", 50.0f);
+    setParameter(processor.parameters, "distMix",          0.0f);   // identity distortion
+    setParameter(processor.parameters, "waveshaperMix",    0.0f);
+    setParameter(processor.parameters, "globalMix",        100.0f);
+    setParameter(processor.parameters, "highPassFreq",     20.0f);
+    setParameter(processor.parameters, "tone",             20000.0f);
+    setParameter(processor.parameters, "compEnabled",      0.0f);
+    setParameter(processor.parameters, "autoGainEnabled",  0.0f);
+    setParameter(processor.parameters, "cleanBoost",       0.0f);
+    setParameter(processor.parameters, "subGuardFreq",     60.0f);
+
+    juce::MidiBuffer midi;
+    const double phaseInc = juce::MathConstants<double>::twoPi * sineFreq / sr;
+    double phase = 0.0;
+
+    auto runBlock = [&](float subGuardFreq) -> float
+    {
+        setParameter(processor.parameters, "subGuardFreq", subGuardFreq);
+
+        juce::AudioBuffer<float> buffer(2, blockSize);
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            auto* data = buffer.getWritePointer(ch);
+            double p = phase;
+            for (int s = 0; s < blockSize; ++s) { data[s] = amp * static_cast<float>(std::sin(p)); p += phaseInc; }
+        }
+        processor.processBlock(buffer, midi);
+
+        phase += phaseInc * blockSize;
+        phase = std::fmod(phase, juce::MathConstants<double>::twoPi);
+
+        // Peak inter-sample step in this block's output (channel 0).
+        float maxStep = 0.0f;
+        const auto* out = buffer.getReadPointer(0);
+        for (int s = 1; s < blockSize; ++s)
+            maxStep = std::max(maxStep, std::abs(out[s] - out[s - 1]));
+        return maxStep;
+    };
+
+    // Warm up and establish the intrinsic per-sample slew at a fixed crossover.
+    for (int b = 0; b < 24; ++b) runBlock(60.0f);
+    float baselineStep = 0.0f;
+    for (int b = 0; b < 8; ++b) baselineStep = std::max(baselineStep, runBlock(60.0f));
+
+    // Sweep up across both order boundaries, then back down, a small step per block.
+    float sweepStep = 0.0f;
+    const int sweepBlocks = 80;
+    for (int b = 0; b <= sweepBlocks; ++b)
+    {
+        const float fc = 60.0f + (200.0f - 60.0f) * static_cast<float>(b) / static_cast<float>(sweepBlocks);
+        sweepStep = std::max(sweepStep, runBlock(fc));
+    }
+    for (int b = 0; b <= sweepBlocks; ++b)
+    {
+        const float fc = 200.0f - (200.0f - 60.0f) * static_cast<float>(b) / static_cast<float>(sweepBlocks);
+        sweepStep = std::max(sweepStep, runBlock(fc));
+    }
+
+    juce::ignoreUnused(baselineStep);
+
+    // A click from a hard order switch is on the order of the band amplitude (~0.05-0.1).
+    // The crossfade should keep the sweep's peak step close to the fixed-crossover slew.
+    expect(sweepStep < 0.02f,
+           "Crossover frequency sweep produced a discontinuity (peak step "
+           + juce::String(sweepStep, 5) + ", baseline " + juce::String(baselineStep, 5) + ")");
+}
+
 void RTCleanOversamplingTest::runTest()
 {
 #if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD
