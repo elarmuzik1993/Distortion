@@ -494,6 +494,13 @@ void PluginProcessor::updateSampleRateDependentCoefficients(double sampleRate)
         outputLimiterReleaseCoeff = 0.9995f;  // Safe fallback (~45ms at 44.1kHz)
     }
 
+    // Manual DC blocker pole, sample-rate-compensated so the ~3.5Hz corner is
+    // constant at every rate (a fixed R drifts the corner up to ~15Hz at 192kHz).
+    dcBlockerR = std::exp(-2.0f * juce::MathConstants<float>::pi
+                          * DSPConstants::DC_BLOCKER_CUTOFF_HZ / static_cast<float>(sampleRate));
+    if (!std::isfinite(dcBlockerR) || dcBlockerR < 0.0f || dcBlockerR >= 1.0f)
+        dcBlockerR = 0.9995f;
+
     // Store the sample rate to detect changes
     lastSampleRate = sampleRate;
 }
@@ -694,13 +701,17 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     *subGuardHP12.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
     subGuardHP12.reset();
 
-    // LR18 filters (1st + 2nd order = 3rd order approximation, Q=0.5 on 2nd-order) - CONTROL mode
+    // LR18 filters (1st + 2nd order = true 3rd-order Butterworth) - CONTROL mode.
+    // The 2nd-order section MUST use Butterworth Q=1.0 (not 0.5): a 3rd-order
+    // Butterworth LP+HP sums to allpass (flat) with the same polarity. Q=0.5 gives
+    // three coincident real poles, whose LP+HP scoops ~6dB at the crossover.
+    constexpr float lr18Q = 1.0f;
     subGuardLP18_1.prepare(spec);
     *subGuardLP18_1.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderLowPass(spec.sampleRate, filterInitFreq);
     subGuardLP18_1.reset();
 
     subGuardLP18_2.prepare(spec);
-    *subGuardLP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr2Q);
+    *subGuardLP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr18Q);
     subGuardLP18_2.reset();
 
     subGuardHP18_1.prepare(spec);
@@ -708,11 +719,16 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     subGuardHP18_1.reset();
 
     subGuardHP18_2.prepare(spec);
-    *subGuardHP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
+    *subGuardHP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr18Q);
     subGuardHP18_2.reset();
 
-    // Initialize Sub Guard smoothing (use actual parameter value, not filterInitFreq)
-    smoothedSubGuardFreq.reset(spec.sampleRate, DSPConstants::SUBGUARD_FREQ_SMOOTH_TIME_S);
+    // Initialize Sub Guard smoothing (use actual parameter value, not filterInitFreq).
+    // This smoother is consumed once PER BLOCK (see applySubGuardSplit), so it must be
+    // reset at the block rate, not the (oversampled) sample rate. Resetting at the
+    // sample rate made the 50ms ramp take ~8820 blocks (~100s) to settle, so the
+    // crossover barely tracked the knob. Block rate = baseSampleRate / blockSize.
+    const double subGuardBlockRate = sampleRate / static_cast<double>(std::max(1, samplesPerBlock));
+    smoothedSubGuardFreq.reset(subGuardBlockRate, DSPConstants::SUBGUARD_FREQ_SMOOTH_TIME_S);
     smoothedSubGuardFreq.setCurrentAndTargetValue(sgFreq);
     lastSubGuardFreq = sgFreq;
 
@@ -766,11 +782,12 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // 1. Internal filter latency compensation
     // 2. Sample rate (44.1kHz vs 48kHz have different characteristics)
     // 3. Block size alignment requirements
-    const size_t oversamplingLatencySamples = oversampling
-        ? static_cast<size_t>(oversampling->getLatencyInSamples()) : 0;
+    const float oversamplingLatencyFractional = oversampling
+        ? oversampling->getLatencyInSamples() : 0.0f;
 
-    // Report latency to host for proper delay compensation
-    setLatencySamples(static_cast<int>(oversamplingLatencySamples));
+    // Report latency to host for proper delay compensation. Round to nearest sample
+    // (truncating loses up to ~1 sample of PDC accuracy vs other tracks).
+    setLatencySamples(static_cast<int>(std::lround(oversamplingLatencyFractional)));
 
     // Capture fractional latency for internal dry-path alignment (compensates the
     // global wet/dry mix; host compensation above remains integer-only).
@@ -1089,17 +1106,18 @@ void PluginProcessor::rebuildOversampling(double sampleRate, int samplesPerBlock
     subGuardHP12.prepare(spec);
     *subGuardHP12.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
     subGuardHP12.reset();
+    constexpr float lr18Q = 1.0f;  // Butterworth Q for the LR18 2nd-order section (flat 3rd-order sum)
     subGuardLP18_1.prepare(spec);
     *subGuardLP18_1.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderLowPass(spec.sampleRate, filterInitFreq);
     subGuardLP18_1.reset();
     subGuardLP18_2.prepare(spec);
-    *subGuardLP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr2Q);
+    *subGuardLP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(spec.sampleRate, filterInitFreq, lr18Q);
     subGuardLP18_2.reset();
     subGuardHP18_1.prepare(spec);
     *subGuardHP18_1.state = *juce::dsp::IIR::Coefficients<float>::makeFirstOrderHighPass(spec.sampleRate, filterInitFreq);
     subGuardHP18_1.reset();
     subGuardHP18_2.prepare(spec);
-    *subGuardHP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr2Q);
+    *subGuardHP18_2.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(spec.sampleRate, filterInitFreq, lr18Q);
     subGuardHP18_2.reset();
 
     lastOversampledSampleRate = spec.sampleRate;
@@ -1107,13 +1125,14 @@ void PluginProcessor::rebuildOversampling(double sampleRate, int samplesPerBlock
     // Reallocate band-split buffers at new oversampled block size
     const size_t expectedOversampledSize = static_cast<size_t>(currentBlockSize) * oversamplingFactor;
     const size_t latSamples = oversampling
-        ? static_cast<size_t>(oversampling->getLatencyInSamples()) : 0;
+        ? static_cast<size_t>(std::ceil(oversampling->getLatencyInSamples())) : 0;
     const int oversampledBlockSize = static_cast<int>((expectedOversampledSize + latSamples) * 2 + 128);
     lowBandBuffer.setSize(numChannels, oversampledBlockSize, false, false, true);
     highBandBuffer.setSize(numChannels, oversampledBlockSize, false, false, true);
 
-    // Report updated latency
-    setLatencySamples(static_cast<int>(latSamples));
+    // Report updated latency (round to nearest sample for accurate host PDC)
+    setLatencySamples(oversampling
+        ? static_cast<int>(std::lround(oversampling->getLatencyInSamples())) : 0);
 
     // Refresh fractional dry-delay state for the new oversampling factor
     dryDelaySamples = oversampling ? oversampling->getLatencyInSamples() : 0.0f;
@@ -1981,6 +2000,7 @@ float PluginProcessor::applyDistortionStage(float inputSample, int channel,
 bool PluginProcessor::applySubGuardSplit()
 {
     pb_subGuardActive = (pb_subGuardFreq > 1.0f);
+    pb_subGuardInvertHigh = false;  // only LR12 (2nd-order LR) needs the flip; set below
 
     // === SUB GUARD OFF: Full-range distortion (no band-split) ===
     if (!pb_subGuardActive)
@@ -2043,6 +2063,12 @@ bool PluginProcessor::applySubGuardSplit()
     }
 
     const SubGuardFilterOrder filterOrder = determineSubGuardFilterOrder(currentSubGuardFreq);
+
+    // LR12 is a 2nd-order Linkwitz-Riley: its LP and HP are 180 deg out of phase at
+    // the crossover, so a same-polarity sum produces a deep notch there. The flat
+    // (allpass) sum is LP - HP, so the high band is inverted at the final recombine.
+    // LR18 (3rd-order Butterworth) and LR24 (4th-order LR) both sum flat same-polarity.
+    pb_subGuardInvertHigh = (filterOrder == SubGuardFilterOrder::LR12);
 
     // SAFETY CHECK: Ensure we have enough buffer space
     const int requiredBufferSize = static_cast<int>(pb_numSamples);
@@ -2478,7 +2504,13 @@ void PluginProcessor::applyAutoGainAndISP(juce::AudioBuffer<float>& buffer)
 
     // ========== SUB GUARD: Add clean low band back after all nonlinear processing ==========
     // The clean sub bypasses: auto-gain, waveshaper, compressor, and soft clipper
-    // (tone filter is mirrored above for phase coherence at recombine)
+    // (tone filter is mirrored above for phase coherence at recombine).
+    // At this point pb_oversampledBlock holds the fully-processed high band (the low
+    // band was subtracted out before post-processing). For LR12 the flat sum is
+    // low - high (the high band is inverted to undo the 2nd-order LR phase flip);
+    // for LR18/LR24 it is the plain low + high. Inverting here, after all nonlinear
+    // stages, keeps their character intact and preserves absolute bass polarity
+    // (at DC the sum reduces to the clean low band, in phase with the input).
     if (pb_subGuardActive)
     {
         for (size_t channel = 0; channel < pb_numChannels; ++channel)
@@ -2486,9 +2518,15 @@ void PluginProcessor::applyAutoGainAndISP(juce::AudioBuffer<float>& buffer)
             auto* outputData = pb_oversampledBlock.getChannelPointer(channel);
             const auto* lowData = lowBandBuffer.getReadPointer(static_cast<int>(channel));
 
-            for (size_t sample = 0; sample < pb_numSamples; ++sample)
+            if (pb_subGuardInvertHigh)
             {
-                outputData[sample] += lowData[sample];
+                for (size_t sample = 0; sample < pb_numSamples; ++sample)
+                    outputData[sample] = lowData[sample] - outputData[sample];
+            }
+            else
+            {
+                for (size_t sample = 0; sample < pb_numSamples; ++sample)
+                    outputData[sample] += lowData[sample];
             }
         }
     }
@@ -2501,9 +2539,10 @@ void PluginProcessor::applyAutoGainAndISP(juce::AudioBuffer<float>& buffer)
     // This eliminates aliasing from harmonic generation
 
     // Manual DC blocker - simple one-pole filter that's extremely stable
-    // y[n] = x[n] - x[n-1] + R * y[n-1], where R ≈ 0.9995 for ~3.5Hz cutoff at 44.1kHz
-    // Previous value 0.995 (~35Hz) was stealing 2.5dB at 40Hz and 1.2dB at 60Hz
-    constexpr float R = 0.9995f;  // ~3.5Hz cutoff: removes DC without touching sub
+    // y[n] = x[n] - x[n-1] + R * y[n-1]; R is sample-rate-compensated (see
+    // updateSampleRateDependentCoefficients) so the ~3.5Hz corner holds at every
+    // rate. Previous fixed 0.9995 drifted the corner up to ~15Hz at 192kHz.
+    const float R = dcBlockerR;  // ~3.5Hz cutoff: removes DC without touching sub
     // CRITICAL: Clamp to 2 channels max to prevent array out-of-bounds access
     // (manualDCBlockerPrevInput/Output arrays are fixed size [2])
     const int dcBlockerChannels = juce::jmin(buffer.getNumChannels(), 2);
@@ -2677,15 +2716,18 @@ void PluginProcessor::updateSubGuardCoefficients(float freq, double sampleRate)
     if (subGuardHP12.state != nullptr)
         writeSecondOrderHighPassCoeffs(*subGuardHP12.state, sampleRate, freq, lr2Q);
 
-    // LR18 filters (1st + 2nd order cascaded, Q=0.5 on 2nd-order stage for flat sum)
+    // LR18 filters (1st + 2nd order cascaded = true 3rd-order Butterworth).
+    // The 2nd-order section uses Butterworth Q=1.0 so LP+HP sums flat (allpass);
+    // Q=0.5 (coincident poles) would scoop ~6dB at the crossover.
+    constexpr float lr18Q = 1.0f;
     if (subGuardLP18_1.state != nullptr)
         writeFirstOrderLowPassCoeffs(*subGuardLP18_1.state, sampleRate, freq);
     if (subGuardLP18_2.state != nullptr)
-        writeSecondOrderLowPassCoeffs(*subGuardLP18_2.state, sampleRate, freq, lr2Q);
+        writeSecondOrderLowPassCoeffs(*subGuardLP18_2.state, sampleRate, freq, lr18Q);
     if (subGuardHP18_1.state != nullptr)
         writeFirstOrderHighPassCoeffs(*subGuardHP18_1.state, sampleRate, freq);
     if (subGuardHP18_2.state != nullptr)
-        writeSecondOrderHighPassCoeffs(*subGuardHP18_2.state, sampleRate, freq, lr2Q);
+        writeSecondOrderHighPassCoeffs(*subGuardHP18_2.state, sampleRate, freq, lr18Q);
 }
 
 void PluginProcessor::updateCleanBoostCoefficients(float depth, double sampleRate)

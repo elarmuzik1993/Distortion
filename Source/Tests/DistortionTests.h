@@ -254,6 +254,16 @@ public:
     void runTest() override;
 };
 
+// Verifies the Sub Guard band-split sums flat (no notch/dip) at the crossover for
+// every filter order: LR12 (2nd-order LR, needs the high-band polarity flip),
+// LR18 (3rd-order Butterworth, Q=1.0), and LR24 (4th-order LR).
+class SubGuardCrossoverFlatnessTest : public juce::UnitTest
+{
+public:
+    SubGuardCrossoverFlatnessTest() : UnitTest("Sub Guard Crossover Flatness", TestCategories::DSP) {}
+    void runTest() override;
+};
+
 class RTCleanToneSweepTest : public juce::UnitTest
 {
 public:
@@ -482,6 +492,7 @@ inline void registerAllTests()
     static RTBufferPreallocTest rtBufferPreallocTest;
     static RTCleanPreHighPassTest rtCleanPreHighPassTest;
     static RTCleanSubGuardTest rtCleanSubGuardTest;
+    static SubGuardCrossoverFlatnessTest subGuardCrossoverFlatnessTest;
     static RTCleanOversamplingTest rtCleanOversamplingTest;
     static RTCleanToneSweepTest rtCleanToneSweepTest;
     static RTCleanSampleRateDriftTest rtCleanSampleRateDriftTest;

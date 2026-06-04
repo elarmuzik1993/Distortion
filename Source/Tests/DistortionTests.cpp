@@ -3131,6 +3131,103 @@ void RTCleanSubGuardTest::runTest()
 #endif
 }
 
+void SubGuardCrossoverFlatnessTest::runTest()
+{
+    // The Sub Guard splits the signal into a clean low band and a distorted high band
+    // and sums them back. A correct crossover sums flat (no notch/dip) at fc. We drive
+    // the distortion stage as an identity (distMix = 0, so the high band stays linear)
+    // and compare the on-crossover tone level to the same chain with Sub Guard off.
+    //
+    // Before the fix: LR12 summed same-polarity -> deep null at fc; LR18 used Q=0.5
+    // (coincident poles) -> ~6dB dip. Both now sum flat (LR12 inverts the high band,
+    // LR18 is a true 3rd-order Butterworth with Q=1.0).
+    const double sr = 44100.0;
+    const int blockSize = 512;
+    const float amp = 0.1f;  // low enough that the soft clipper / limiter stay linear
+
+    auto measureOutputRms = [&](float crossoverFreq, double sineFreq) -> float
+    {
+        PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(sr, blockSize);
+        processor.prepareToPlay(sr, blockSize);
+
+        // Distortion engaged (so we are not in true-bypass) but fully dry-mixed, which
+        // makes the distortion stage an identity. Everything else that colours level off.
+        setParameter(processor.parameters, "distortionAmount", 50.0f);
+        setParameter(processor.parameters, "distMix",          0.0f);
+        setParameter(processor.parameters, "waveshaperMix",    0.0f);
+        setParameter(processor.parameters, "globalMix",        100.0f);
+        setParameter(processor.parameters, "highPassFreq",     20.0f);
+        setParameter(processor.parameters, "tone",             20000.0f);
+        setParameter(processor.parameters, "compEnabled",      0.0f);
+        setParameter(processor.parameters, "autoGainEnabled",  0.0f);
+        setParameter(processor.parameters, "cleanBoost",       0.0f);
+        setParameter(processor.parameters, "extremeEnabled",   0.0f);
+        setParameter(processor.parameters, "subGuardFreq",     crossoverFreq);
+
+        juce::MidiBuffer midi;
+        const double phaseInc = juce::MathConstants<double>::twoPi * sineFreq / sr;
+        double phase = 0.0;
+
+        const int warmupBlocks = 16;   // settle IIR filters + 50ms freq smoothing
+        const int measureBlocks = 8;
+        float sumSquares = 0.0f;
+        int count = 0;
+
+        for (int b = 0; b < warmupBlocks + measureBlocks; ++b)
+        {
+            juce::AudioBuffer<float> buffer(2, blockSize);
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                auto* data = buffer.getWritePointer(ch);
+                double p = phase;
+                for (int s = 0; s < blockSize; ++s)
+                {
+                    data[s] = amp * static_cast<float>(std::sin(p));
+                    p += phaseInc;
+                }
+            }
+
+            processor.processBlock(buffer, midi);
+
+            if (b >= warmupBlocks)
+            {
+                for (int ch = 0; ch < 2; ++ch)
+                {
+                    const auto* d = buffer.getReadPointer(ch);
+                    for (int s = 0; s < blockSize; ++s) { sumSquares += d[s] * d[s]; ++count; }
+                }
+            }
+
+            phase += phaseInc * blockSize;
+            phase = std::fmod(phase, juce::MathConstants<double>::twoPi);
+        }
+
+        return count > 0 ? std::sqrt(sumSquares / static_cast<float>(count)) : 0.0f;
+    };
+
+    struct Case { float fc; const char* order; };
+    const Case cases[] = { { 60.0f, "LR24" }, { 100.0f, "LR18" }, { 150.0f, "LR12" } };
+
+    for (const auto& c : cases)
+    {
+        beginTest(juce::String("Crossover flat at ") + juce::String(c.fc, 0) + " Hz (" + c.order + ")");
+
+        const float offRms    = measureOutputRms(0.0f, c.fc);   // Sub Guard off (baseline)
+        const float activeRms = measureOutputRms(c.fc, c.fc);   // Sub Guard on, tone at fc
+
+        expect(offRms > 1.0e-4f, "Baseline (Sub Guard off) output should be non-trivial");
+
+        const float ratioDb = juce::Decibels::gainToDecibels(activeRms / juce::jmax(offRms, 1.0e-9f));
+
+        // A flat-summing crossover keeps the on-crossover tone within ~3dB of the
+        // bypassed level. The old LR12 notch was ~ -inf; the old LR18 dip was ~ -6dB.
+        expect(ratioDb > -3.0f,
+               juce::String("Crossover sum dipped at fc (") + c.order + "): "
+               + juce::String(ratioDb, 2) + " dB vs Sub Guard off");
+    }
+}
+
 void RTCleanOversamplingTest::runTest()
 {
 #if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD

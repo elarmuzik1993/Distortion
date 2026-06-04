@@ -44,6 +44,10 @@ namespace DSPConstants
     // 20Hz provides good DC removal while being numerically stable
     constexpr float DC_BLOCKING_FREQ = 20.0f;                 // Remove DC offset at 20Hz (subsonic)
 
+    // Manual one-pole DC blocker corner (applied after downsampling, at base rate).
+    // Kept constant across sample rates by deriving R = exp(-2*pi*fc/fs) per rate.
+    constexpr float DC_BLOCKER_CUTOFF_HZ = 3.5f;             // ~R=0.9995 at 44.1kHz
+
     // LA-2A Compressor optical cell simulation (time constants in seconds)
     constexpr float COMP_ATTACK_TIME_S = 0.010f;              // 10ms attack (fast optical response)
     constexpr float COMP_RELEASE_TIME_S = 0.500f;             // 500ms release (slow optical decay)
@@ -272,9 +276,11 @@ private:
     juce::dsp::IIR::Coefficients<float>> preHighPassFilter;
 
     // Manual DC blocker state (simple one-pole, extremely stable)
-    // y[n] = x[n] - x[n-1] + R * y[n-1], where R ≈ 0.9995 for ~3.5Hz cutoff at 44.1kHz
+    // y[n] = x[n] - x[n-1] + R * y[n-1]; R is derived from the sample rate so the
+    // ~3.5Hz corner stays constant at every rate (see updateSampleRateDependentCoefficients).
     float manualDCBlockerPrevInput[2] = { 0.0f, 0.0f };
     float manualDCBlockerPrevOutput[2] = { 0.0f, 0.0f };
+    float dcBlockerR = 0.9995f;  // ~3.5Hz at 44.1kHz; recomputed per sample rate
 
     // Sub Guard LR24 filters (4th order = 2 cascaded 2nd-order stages).
     // Coefficient updates mutate .state in place (see updateSubGuardCoefficients).
@@ -498,6 +504,7 @@ private:
     float pb_subGuardFreq             = 0.0f;
     float pb_outGainParam             = 50.0f;  // raw, for output gain LFO modulation
     bool  pb_subGuardActive           = false;  // set by applySubGuardSplit
+    bool  pb_subGuardInvertHigh       = false;  // LR12 (2nd-order LR) needs one band inverted for a flat sum
     bool  pb_cleanBoostOn             = false;  // boost requested this block (gated with distortion active)
     bool  pb_boostProcessedThisBlock  = false;  // emphasis ran → de-emphasis must run too (pairs the shelves)
     // (Per-sample interpolation moved to inputGainRamp/driveRamp/distMixRamp — see LinearRamp.h)
