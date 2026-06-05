@@ -1228,6 +1228,9 @@ void PluginEditor::savePreset(const juce::String& presetName)
 
     // Save all parameter values
     auto state = audioProcessor.parameters.copyState();
+    // Stamp the schema version so presets migrate the same way host state does.
+    state.setProperty(PluginProcessor::stateVersionAttribute,
+                      PluginProcessor::currentStateVersion, nullptr);
     auto stateXml = state.createXml();
     if (stateXml != nullptr)
         preset.addChildElement(stateXml.release());
@@ -1260,6 +1263,7 @@ void PluginEditor::loadPreset(const juce::String& presetName)
             {
                 juce::ValueTree state = juce::ValueTree::fromXml(*stateXml);
                 audioProcessor.parameters.replaceState(state);
+                audioProcessor.migrateState(*stateXml);
             }
 
             // Load lock states

@@ -233,6 +233,19 @@ public:
     void getStateInformation(juce::MemoryBlock& destData) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
 
+    // State schema versioning. Bump currentStateVersion whenever the serialized
+    // layout changes in a way that needs a migration, and add the corresponding
+    // step in migrateState(). State saved before this stamp existed carries no
+    // attribute and is treated as version 0 (the bare/legacy format).
+    static constexpr const char* stateVersionAttribute = "stateVersion";
+    static constexpr int currentStateVersion = 1;
+
+    // Reads the schema version from a freshly-restored state element and applies
+    // any migrations needed to bring the live parameter tree up to
+    // currentStateVersion, then stamps the tree with the current version. Must be
+    // called AFTER replaceState so the parameters being migrated exist.
+    void migrateState(const juce::XmlElement& xmlState);
+
     //==============================================================================
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     juce::AudioProcessorValueTreeState parameters;
