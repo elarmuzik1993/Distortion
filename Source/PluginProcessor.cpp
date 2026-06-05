@@ -51,6 +51,36 @@ void writeSecondOrderHighPassCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
     coeffs[4] = static_cast<float>(c1 * (1.0 - invQ * n + nSquared));
 }
 
+// First-order Butterworth sections, written in place (a0-normalized) so we never
+// allocate on the audio thread. These mirror juce::dsp::IIR::Coefficients
+// makeFirstOrderLowPass / makeFirstOrderHighPass exactly, so live coefficient
+// updates match the prepare-time initialisation bit-for-bit.
+void writeFirstOrderLowPassCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
+                                  const double sampleRate,
+                                  const double cutoffHz) noexcept
+{
+    const auto n = std::tan(juce::MathConstants<double>::pi * cutoffHz / sampleRate);
+    const auto a0inv = 1.0 / (n + 1.0);
+    auto* coeffs = dest.getRawCoefficients();
+
+    coeffs[0] = static_cast<float>(n * a0inv);
+    coeffs[1] = static_cast<float>(n * a0inv);
+    coeffs[2] = static_cast<float>((n - 1.0) * a0inv);
+}
+
+void writeFirstOrderHighPassCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
+                                   const double sampleRate,
+                                   const double cutoffHz) noexcept
+{
+    const auto n = std::tan(juce::MathConstants<double>::pi * cutoffHz / sampleRate);
+    const auto a0inv = 1.0 / (n + 1.0);
+    auto* coeffs = dest.getRawCoefficients();
+
+    coeffs[0] = static_cast<float>( 1.0 * a0inv);
+    coeffs[1] = static_cast<float>(-1.0 * a0inv);
+    coeffs[2] = static_cast<float>((n - 1.0) * a0inv);
+}
+
 // RBJ high-shelf, written in place (a0-normalized) so we never allocate on the
 // audio thread. gainDb > 0 boosts highs above cutoffHz; < 0 cuts them.
 void writeHighShelfCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
@@ -1824,6 +1854,9 @@ juce::AudioProcessorEditor* PluginProcessor::createEditor()
 void PluginProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
     auto state = parameters.copyState();
+    // Stamp the schema version so future loads can migrate deterministically
+    // instead of sniffing for the presence of individual attributes.
+    state.setProperty(stateVersionAttribute, currentStateVersion, nullptr);
     std::unique_ptr<juce::XmlElement> xml(state.createXml());
     copyXmlToBinary(*xml, destData);
 }
@@ -1835,25 +1868,37 @@ void PluginProcessor::setStateInformation(const void* data, int sizeInBytes)
     {
         parameters.replaceState(juce::ValueTree::fromXml(*xmlState));
 
-        // BACKWARD COMPATIBILITY: Migrate old bandSplitEnabled (bool) to subGuardFreq (float)
-        if (xmlState->hasAttribute("bandSplitEnabled"))
-        {
-            bool oldBandSplitEnabled = xmlState->getBoolAttribute("bandSplitEnabled", false);
-            // Map old boolean to new frequency range with OFF position:
-            // false (OFF) → 0.0 Hz (OFF - no band-split, full-range distortion)
-            // true (ON) → 150.0 Hz (AGGRESSIVE - old 808-Safe behavior)
-            float migratedFreq = oldBandSplitEnabled ? 150.0f : 0.0f;
-
-            if (auto* param = parameters.getParameter("subGuardFreq"))
-            {
-                float normalized = param->convertTo0to1(migratedFreq);
-                param->setValueNotifyingHost(normalized);
-            }
-        }
+        migrateState(*xmlState);
 
         // Signal audio thread to reset state (thread-safe handoff)
         stateNeedsReset.store(true, std::memory_order_release);
     }
+}
+
+void PluginProcessor::migrateState(const juce::XmlElement& xmlState)
+{
+    // No attribute ⇒ pre-versioning "bare" format ⇒ version 0.
+    const int loadedVersion = xmlState.getIntAttribute(stateVersionAttribute, 0);
+
+    // --- v0 → v1 -------------------------------------------------------------
+    // Old bandSplitEnabled (bool) became subGuardFreq (float, 0=OFF / 50-200Hz).
+    //   false (OFF) → 0.0 Hz   (no band-split, full-range distortion)
+    //   true  (ON)  → 150.0 Hz (AGGRESSIVE - old 808-Safe behaviour)
+    if (loadedVersion < 1 && xmlState.hasAttribute("bandSplitEnabled"))
+    {
+        const bool oldBandSplitEnabled = xmlState.getBoolAttribute("bandSplitEnabled", false);
+        const float migratedFreq = oldBandSplitEnabled ? 150.0f : 0.0f;
+
+        if (auto* param = parameters.getParameter("subGuardFreq"))
+            param->setValueNotifyingHost(param->convertTo0to1(migratedFreq));
+    }
+
+    // --- future migrations go here -------------------------------------------
+    // if (loadedVersion < 2) { ... }
+
+    // Upgrade the live tree to the current version so the next save is written
+    // in the latest format regardless of where this state originated.
+    parameters.state.setProperty(stateVersionAttribute, currentStateVersion, nullptr);
 }
 
 // =============================================================================

@@ -2485,6 +2485,12 @@ void StateIOTests::runTest()
 
     beginTest("Invalid Data Handling");
     testInvalidDataHandling();
+
+    beginTest("State Version Stamp");
+    testVersionStamp();
+
+    beginTest("Legacy State Migration");
+    testLegacyMigration();
 }
 
 void StateIOTests::testGetStateInformation()
@@ -2579,6 +2585,59 @@ void StateIOTests::testInvalidDataHandling()
     processor.processBlock(buffer, midi);
 
     expect(!containsInvalidSamples(buffer), "Processor broken after invalid state data");
+}
+
+void StateIOTests::testVersionStamp()
+{
+    // Saving must stamp the current schema version, and loading must surface it
+    // on the live parameter tree so subsequent saves stay in the latest format.
+    PluginProcessor src;
+    src.setRateAndBufferSizeDetails(44100.0, 512);
+    src.prepareToPlay(44100.0, 512);
+
+    juce::MemoryBlock stateData;
+    src.getStateInformation(stateData);
+
+    PluginProcessor dst;
+    dst.setRateAndBufferSizeDetails(44100.0, 512);
+    dst.prepareToPlay(44100.0, 512);
+    dst.setStateInformation(stateData.getData(), static_cast<int>(stateData.getSize()));
+
+    expectEquals(static_cast<int>(dst.parameters.state
+                     .getProperty(PluginProcessor::stateVersionAttribute, -1)),
+                 PluginProcessor::currentStateVersion,
+                 "Round-tripped state missing current version stamp");
+}
+
+void StateIOTests::testLegacyMigration()
+{
+    // A bare (pre-versioning) state has no stateVersion attribute and is treated
+    // as version 0, so the v0→v1 bandSplitEnabled → subGuardFreq migration must
+    // still fire and the tree must then be upgraded to the current version.
+    PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
+    processor.prepareToPlay(44100.0, 512);
+
+    juce::XmlElement legacyOn("Parameters");
+    legacyOn.setAttribute("bandSplitEnabled", true);
+    processor.migrateState(legacyOn);
+
+    expect(processor.subGuardFreqParam != nullptr, "subGuardFreq param null");
+    expectWithinAbsoluteError(processor.subGuardFreqParam->load(), 150.0f, 0.5f,
+        "Legacy bandSplitEnabled=true did not migrate to 150Hz subGuardFreq");
+
+    expectEquals(static_cast<int>(processor.parameters.state
+                     .getProperty(PluginProcessor::stateVersionAttribute, -1)),
+                 PluginProcessor::currentStateVersion,
+                 "migrateState did not stamp current version after legacy load");
+
+    // OFF should map to 0 Hz (full-range distortion, no band-split).
+    juce::XmlElement legacyOff("Parameters");
+    legacyOff.setAttribute("bandSplitEnabled", false);
+    processor.migrateState(legacyOff);
+
+    expectWithinAbsoluteError(processor.subGuardFreqParam->load(), 0.0f, 0.5f,
+        "Legacy bandSplitEnabled=false did not migrate to 0Hz (OFF) subGuardFreq");
 }
 
 //==============================================================================

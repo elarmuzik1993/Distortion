@@ -324,6 +324,8 @@ private:
     void testSetStateInformation();
     void testRoundTrip();
     void testInvalidDataHandling();
+    void testVersionStamp();
+    void testLegacyMigration();
 };
 
 //==============================================================================
