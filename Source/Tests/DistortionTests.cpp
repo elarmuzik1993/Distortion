@@ -1837,6 +1837,82 @@ void DryWetAlignmentTests::runTest()
 
     beginTest("State valid across oversampling reinit");
     testOversamplingReinit();
+
+    beginTest("IIR partial-mix is phase-coherent across the spectrum");
+    testIirPartialMixCoherence();
+}
+
+void DryWetAlignmentTests::testIirPartialMixCoherence()
+{
+    // With the default minimum-phase IIR oversampler, a plain delay only matches the
+    // bulk group delay; the dry then sums against a wet whose phase is frequency-
+    // dependent, comb-filtering the blend (worst near the top of the band). Routing the
+    // dry through a matched oversampler aligns every frequency. We drive the distortion
+    // stage as an identity (distMix = 0) so wet == dry through the same oversampler, and
+    // verify that 50% mix preserves the level (== fully wet) at every probe frequency.
+    const double sr = 44100.0;
+    const int blockSize = 512;
+    const float amp = 0.2f;
+
+    auto measureRms = [&](double freq, float mixPct) -> float
+    {
+        PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(sr, blockSize);
+        processor.prepareToPlay(sr, blockSize);
+
+        setParameter(processor.parameters, "distortionAmount", 50.0f);
+        setParameter(processor.parameters, "distMix",          0.0f);   // identity distortion
+        setParameter(processor.parameters, "waveshaperMix",    0.0f);
+        setParameter(processor.parameters, "highPassFreq",     20.0f);
+        setParameter(processor.parameters, "tone",             20000.0f);
+        setParameter(processor.parameters, "compEnabled",      0.0f);
+        setParameter(processor.parameters, "autoGainEnabled",  0.0f);
+        setParameter(processor.parameters, "cleanBoost",       0.0f);
+        setParameter(processor.parameters, "subGuardFreq",     0.0f);
+        setParameter(processor.parameters, "linearPhaseDry",   0.0f);   // IIR oversampler
+        setParameter(processor.parameters, "globalMix",        mixPct);
+
+        juce::MidiBuffer midi;
+        const double phaseInc = juce::MathConstants<double>::twoPi * freq / sr;
+        double phase = 0.0;
+
+        const int warmupBlocks = 16, measureBlocks = 8;
+        float sumSquares = 0.0f; int count = 0;
+        for (int b = 0; b < warmupBlocks + measureBlocks; ++b)
+        {
+            juce::AudioBuffer<float> buffer(2, blockSize);
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                auto* data = buffer.getWritePointer(ch);
+                double p = phase;
+                for (int s = 0; s < blockSize; ++s) { data[s] = amp * static_cast<float>(std::sin(p)); p += phaseInc; }
+            }
+            processor.processBlock(buffer, midi);
+            if (b >= warmupBlocks)
+            {
+                const auto* d = buffer.getReadPointer(0);
+                for (int s = 0; s < blockSize; ++s) { sumSquares += d[s] * d[s]; ++count; }
+            }
+            phase += phaseInc * blockSize;
+            phase = std::fmod(phase, juce::MathConstants<double>::twoPi);
+        }
+        return count > 0 ? std::sqrt(sumSquares / static_cast<float>(count)) : 0.0f;
+    };
+
+    const double freqs[] = { 1000.0, 5000.0, 10000.0, 14000.0, 16000.0 };
+    for (double f : freqs)
+    {
+        const float wetRms = measureRms(f, 100.0f);
+        const float mixRms = measureRms(f, 50.0f);
+        expect(wetRms > 1.0e-4f, "Fully-wet reference should be non-trivial at " + juce::String(f) + " Hz");
+
+        // Coherent blend: 50% of (dry == wet) keeps the full level. A phase-misaligned
+        // dry would partially cancel here, dipping the level (most at high frequencies).
+        const float ratioDb = juce::Decibels::gainToDecibels(mixRms / juce::jmax(wetRms, 1.0e-9f));
+        expect(ratioDb > -0.5f,
+               "50% mix dipped at " + juce::String(f) + " Hz (phase-incoherent dry): "
+               + juce::String(ratioDb, 3) + " dB");
+    }
 }
 
 void DryWetAlignmentTests::testDryOnlyLatency()
@@ -2020,9 +2096,9 @@ void DryWetAlignmentTests::testFullyWetPathUnaffected()
 
 void DryWetAlignmentTests::testOversamplingReinit()
 {
-    // Changing oversampling stages triggers reinitializeOversampling, which
-    // must reallocate dryDelayState to the new latency. Process under two
-    // different oversampling factors and confirm no invalid samples.
+    // Changing oversampling stages rebuilds both the wet and the matched dry
+    // oversampler. Process under two different oversampling factors (and off) and
+    // confirm no invalid samples.
     PluginProcessor processor;
     const double sr = 44100.0;
     const int blockSize = 512;
@@ -3131,6 +3207,189 @@ void RTCleanSubGuardTest::runTest()
 #endif
 }
 
+void SubGuardCrossoverFlatnessTest::runTest()
+{
+    // The Sub Guard splits the signal into a clean low band and a distorted high band
+    // and sums them back. A correct crossover sums flat (no notch/dip) at fc. We drive
+    // the distortion stage as an identity (distMix = 0, so the high band stays linear)
+    // and compare the on-crossover tone level to the same chain with Sub Guard off.
+    //
+    // Before the fix: LR12 summed same-polarity -> deep null at fc; LR18 used Q=0.5
+    // (coincident poles) -> ~6dB dip. Both now sum flat (LR12 inverts the high band,
+    // LR18 is a true 3rd-order Butterworth with Q=1.0).
+    const double sr = 44100.0;
+    const int blockSize = 512;
+    const float amp = 0.1f;  // low enough that the soft clipper / limiter stay linear
+
+    auto measureOutputRms = [&](float crossoverFreq, double sineFreq) -> float
+    {
+        PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(sr, blockSize);
+        processor.prepareToPlay(sr, blockSize);
+
+        // Distortion engaged (so we are not in true-bypass) but fully dry-mixed, which
+        // makes the distortion stage an identity. Everything else that colours level off.
+        setParameter(processor.parameters, "distortionAmount", 50.0f);
+        setParameter(processor.parameters, "distMix",          0.0f);
+        setParameter(processor.parameters, "waveshaperMix",    0.0f);
+        setParameter(processor.parameters, "globalMix",        100.0f);
+        setParameter(processor.parameters, "highPassFreq",     20.0f);
+        setParameter(processor.parameters, "tone",             20000.0f);
+        setParameter(processor.parameters, "compEnabled",      0.0f);
+        setParameter(processor.parameters, "autoGainEnabled",  0.0f);
+        setParameter(processor.parameters, "cleanBoost",       0.0f);
+        setParameter(processor.parameters, "extremeEnabled",   0.0f);
+        setParameter(processor.parameters, "subGuardFreq",     crossoverFreq);
+
+        juce::MidiBuffer midi;
+        const double phaseInc = juce::MathConstants<double>::twoPi * sineFreq / sr;
+        double phase = 0.0;
+
+        const int warmupBlocks = 16;   // settle IIR filters + 50ms freq smoothing
+        const int measureBlocks = 8;
+        float sumSquares = 0.0f;
+        int count = 0;
+
+        for (int b = 0; b < warmupBlocks + measureBlocks; ++b)
+        {
+            juce::AudioBuffer<float> buffer(2, blockSize);
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                auto* data = buffer.getWritePointer(ch);
+                double p = phase;
+                for (int s = 0; s < blockSize; ++s)
+                {
+                    data[s] = amp * static_cast<float>(std::sin(p));
+                    p += phaseInc;
+                }
+            }
+
+            processor.processBlock(buffer, midi);
+
+            if (b >= warmupBlocks)
+            {
+                for (int ch = 0; ch < 2; ++ch)
+                {
+                    const auto* d = buffer.getReadPointer(ch);
+                    for (int s = 0; s < blockSize; ++s) { sumSquares += d[s] * d[s]; ++count; }
+                }
+            }
+
+            phase += phaseInc * blockSize;
+            phase = std::fmod(phase, juce::MathConstants<double>::twoPi);
+        }
+
+        return count > 0 ? std::sqrt(sumSquares / static_cast<float>(count)) : 0.0f;
+    };
+
+    struct Case { float fc; const char* order; };
+    const Case cases[] = { { 60.0f, "LR24" }, { 100.0f, "LR18" }, { 150.0f, "LR12" } };
+
+    for (const auto& c : cases)
+    {
+        beginTest(juce::String("Crossover flat at ") + juce::String(c.fc, 0) + " Hz (" + c.order + ")");
+
+        const float offRms    = measureOutputRms(0.0f, c.fc);   // Sub Guard off (baseline)
+        const float activeRms = measureOutputRms(c.fc, c.fc);   // Sub Guard on, tone at fc
+
+        expect(offRms > 1.0e-4f, "Baseline (Sub Guard off) output should be non-trivial");
+
+        const float ratioDb = juce::Decibels::gainToDecibels(activeRms / juce::jmax(offRms, 1.0e-9f));
+
+        // A flat-summing crossover keeps the on-crossover tone within ~3dB of the
+        // bypassed level. The old LR12 notch was ~ -inf; the old LR18 dip was ~ -6dB.
+        expect(ratioDb > -3.0f,
+               juce::String("Crossover sum dipped at fc (") + c.order + "): "
+               + juce::String(ratioDb, 2) + " dB vs Sub Guard off");
+    }
+}
+
+void SubGuardOrderCrossfadeTest::runTest()
+{
+    // Sweeping the crossover frequency moves through the slope-order zones (LR24 ->
+    // LR18 at 92 Hz, LR18 -> LR12 at 142 Hz). A hard order switch starts the incoming
+    // bank from stale state and jumps the magnitude/phase, producing a click. The order
+    // crossfade should keep the output smooth. We drive a clean low sine (distortion as
+    // identity so the output slew is dominated by the tone itself) and assert the peak
+    // sample-to-sample step during the sweep stays small.
+    beginTest("Click-free crossover frequency sweep across order boundaries");
+
+    const double sr = 44100.0;
+    const int blockSize = 256;
+    const double sineFreq = 80.0;   // sits near the crossover, exercises both bands
+    const float amp = 0.1f;
+
+    PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(sr, blockSize);
+    processor.prepareToPlay(sr, blockSize);
+
+    setParameter(processor.parameters, "distortionAmount", 50.0f);
+    setParameter(processor.parameters, "distMix",          0.0f);   // identity distortion
+    setParameter(processor.parameters, "waveshaperMix",    0.0f);
+    setParameter(processor.parameters, "globalMix",        100.0f);
+    setParameter(processor.parameters, "highPassFreq",     20.0f);
+    setParameter(processor.parameters, "tone",             20000.0f);
+    setParameter(processor.parameters, "compEnabled",      0.0f);
+    setParameter(processor.parameters, "autoGainEnabled",  0.0f);
+    setParameter(processor.parameters, "cleanBoost",       0.0f);
+    setParameter(processor.parameters, "subGuardFreq",     60.0f);
+
+    juce::MidiBuffer midi;
+    const double phaseInc = juce::MathConstants<double>::twoPi * sineFreq / sr;
+    double phase = 0.0;
+
+    auto runBlock = [&](float subGuardFreq) -> float
+    {
+        setParameter(processor.parameters, "subGuardFreq", subGuardFreq);
+
+        juce::AudioBuffer<float> buffer(2, blockSize);
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            auto* data = buffer.getWritePointer(ch);
+            double p = phase;
+            for (int s = 0; s < blockSize; ++s) { data[s] = amp * static_cast<float>(std::sin(p)); p += phaseInc; }
+        }
+        processor.processBlock(buffer, midi);
+
+        phase += phaseInc * blockSize;
+        phase = std::fmod(phase, juce::MathConstants<double>::twoPi);
+
+        // Peak inter-sample step in this block's output (channel 0).
+        float maxStep = 0.0f;
+        const auto* out = buffer.getReadPointer(0);
+        for (int s = 1; s < blockSize; ++s)
+            maxStep = std::max(maxStep, std::abs(out[s] - out[s - 1]));
+        return maxStep;
+    };
+
+    // Warm up and establish the intrinsic per-sample slew at a fixed crossover.
+    for (int b = 0; b < 24; ++b) runBlock(60.0f);
+    float baselineStep = 0.0f;
+    for (int b = 0; b < 8; ++b) baselineStep = std::max(baselineStep, runBlock(60.0f));
+
+    // Sweep up across both order boundaries, then back down, a small step per block.
+    float sweepStep = 0.0f;
+    const int sweepBlocks = 80;
+    for (int b = 0; b <= sweepBlocks; ++b)
+    {
+        const float fc = 60.0f + (200.0f - 60.0f) * static_cast<float>(b) / static_cast<float>(sweepBlocks);
+        sweepStep = std::max(sweepStep, runBlock(fc));
+    }
+    for (int b = 0; b <= sweepBlocks; ++b)
+    {
+        const float fc = 200.0f - (200.0f - 60.0f) * static_cast<float>(b) / static_cast<float>(sweepBlocks);
+        sweepStep = std::max(sweepStep, runBlock(fc));
+    }
+
+    juce::ignoreUnused(baselineStep);
+
+    // A click from a hard order switch is on the order of the band amplitude (~0.05-0.1).
+    // The crossfade should keep the sweep's peak step close to the fixed-crossover slew.
+    expect(sweepStep < 0.02f,
+           "Crossover frequency sweep produced a discontinuity (peak step "
+           + juce::String(sweepStep, 5) + ", baseline " + juce::String(baselineStep, 5) + ")");
+}
+
 void RTCleanOversamplingTest::runTest()
 {
 #if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD
@@ -3680,6 +3939,192 @@ void CyclingComboBoxTests::runTest()
         CyclingComboBox box;
         box.cycleSelection(+1);
         expect(box.getSelectedItemIndex() == -1, "empty box should stay unselected");
+    }
+}
+
+//==============================================================================
+// Sub Guard / Input Filter Spectral Tests
+//==============================================================================
+
+namespace
+{
+    // Mono-sum magnitude-spectrum band energy (dB) over the first power-of-two window.
+    float bandEnergyDb(const juce::AudioBuffer<float>& buf, double sampleRate,
+                       double loHz, double hiHz, int fftOrder = 15)
+    {
+        const int fftSize = 1 << fftOrder;
+        juce::dsp::FFT fft(fftOrder);
+        std::vector<float> data(static_cast<size_t>(fftSize) * 2, 0.0f);
+
+        const int rch = buf.getNumChannels() > 1 ? 1 : 0;
+        const int avail = juce::jmin(fftSize, buf.getNumSamples());
+        for (int n = 0; n < avail; ++n)
+        {
+            const float mono = 0.5f * (buf.getSample(0, n) + buf.getSample(rch, n));
+            const float w = 0.5f - 0.5f * std::cos(2.0f * juce::MathConstants<float>::pi
+                                                    * n / (fftSize - 1));   // Hann
+            data[static_cast<size_t>(n)] = mono * w;
+        }
+
+        fft.performFrequencyOnlyForwardTransform(data.data());
+
+        double sum = 0.0; int count = 0;
+        for (int bin = 1; bin < fftSize / 2; ++bin)
+        {
+            const double f = bin * sampleRate / fftSize;
+            if (f >= loHz && f < hiHz) { sum += data[(size_t) bin] * data[(size_t) bin]; ++count; }
+        }
+        return count ? juce::Decibels::gainToDecibels(static_cast<float>(std::sqrt(sum / count)))
+                     : -120.0f;
+    }
+
+    // Process a buffer through the plugin in place, block by block.
+    void runInBlocks(PluginProcessor& proc, juce::AudioBuffer<float>& buffer, int blockSize = 512)
+    {
+        juce::MidiBuffer midi;
+        const int total = buffer.getNumSamples();
+        for (int start = 0; start < total; start += blockSize)
+        {
+            const int len = juce::jmin(blockSize, total - start);
+            juce::AudioBuffer<float> block(buffer.getArrayOfWritePointers(),
+                                           buffer.getNumChannels(), start, len);
+            midi.clear();
+            proc.processBlock(block, midi);
+        }
+    }
+
+    // Transparent processing (no nonlinear coloration). When defeatBypass is true the
+    // compressor is enabled at zero reduction so the full chain runs (needed to exercise
+    // Sub Guard, which lives inside the distortion path); when false the plugin stays in
+    // true bypass (used to prove the input filter works with everything else off).
+    void configureCleanProcessor(PluginProcessor& proc, bool defeatBypass)
+    {
+        auto& p = proc.parameters;
+        setParameter(p, "inputGain", 50.0f);   // unity
+        setParameter(p, "outputGain", 50.0f);  // unity
+        setParameter(p, "globalMix", 100.0f);  // fully wet
+        setParameter(p, "tone", 20000.0f);     // tone LP wide open
+        setParameter(p, "distortionAmount", 0.0f);
+        setParameter(p, "distMix", 0.0f);
+        setParameter(p, "waveshaperMix", 0.0f);
+        setParameter(p, "autoGainEnabled", 0.0f);
+        setParameter(p, "cleanBoost", 0.0f);
+        setParameter(p, "extremeEnabled", 0.0f);
+        setParameter(p, "lfoEnabled", 0.0f);
+        setParameter(p, "compEnabled", defeatBypass ? 1.0f : 0.0f);
+        setParameter(p, "compPeakReduction", 0.0f);
+    }
+}
+
+void SubGuardFlatnessTest::runTest()
+{
+    constexpr double sr = 44100.0;
+    const int numSamples = 1 << 16;
+
+    // One noise realisation, reused for both renders so the spectral ratio reflects
+    // only the crossover (the input cancels exactly).
+    juce::AudioBuffer<float> noise(2, numSamples);
+    {
+        juce::Random rng(20240603);
+        for (int n = 0; n < numSamples; ++n)
+        {
+            const float s = 0.25f * (rng.nextFloat() * 2.0f - 1.0f);
+            noise.setSample(0, n, s);
+            noise.setSample(1, n, s);
+        }
+    }
+
+    auto render = [&](float subGuardFreq)
+    {
+        PluginProcessor proc;
+        proc.setRateAndBufferSizeDetails(sr, 512);
+        proc.prepareToPlay(sr, 512);
+        configureCleanProcessor(proc, /*defeatBypass*/ true);
+        setParameter(proc.parameters, "subGuardFreq", subGuardFreq);
+
+        juce::AudioBuffer<float> buf(2, numSamples);
+        for (int ch = 0; ch < 2; ++ch) buf.copyFrom(ch, 0, noise, ch, 0, numSamples);
+        runInBlocks(proc, buf);
+        return buf;
+    };
+
+    const float edges[] = { 30, 40, 50, 60, 80, 100, 130, 160, 200, 300, 500, 1000, 2000 };
+    constexpr int numEdges = sizeof(edges) / sizeof(edges[0]);
+
+    for (float crossover : { 60.0f, 150.0f })
+    {
+        beginTest("Crossover flat at " + juce::String((int) crossover) + " Hz");
+
+        const auto outOff = render(0.0f);
+        const auto outOn  = render(crossover);
+
+        float worst = 0.0f;
+        for (int i = 0; i + 1 < numEdges; ++i)
+        {
+            const float on  = bandEnergyDb(outOn,  sr, edges[i], edges[i + 1]);
+            const float off = bandEnergyDb(outOff, sr, edges[i], edges[i + 1]);
+            worst = std::max(worst, std::abs(on - off));
+        }
+        expect(worst < 0.5f,
+               "Sub Guard altered the spectrum by " + juce::String(worst, 2)
+               + " dB at " + juce::String((int) crossover) + " Hz (expected flat)");
+    }
+}
+
+void InputFilterModeTest::runTest()
+{
+    constexpr double sr = 44100.0;
+    const int numSamples = 1 << 16;
+    const float cutoff = 1000.0f;
+
+    auto bands = [&](int modeIdx)
+    {
+        PluginProcessor proc;
+        proc.setRateAndBufferSizeDetails(sr, 512);
+        proc.prepareToPlay(sr, 512);
+        // True bypass (compressor off) so we also prove the filter runs without distortion.
+        configureCleanProcessor(proc, /*defeatBypass*/ false);
+        setParameter(proc.parameters, "filterMode", static_cast<float>(modeIdx));
+        setParameter(proc.parameters, "highPassFreq", cutoff);
+
+        juce::Random rng(7);
+        juce::AudioBuffer<float> buf(2, numSamples);
+        for (int ch = 0; ch < 2; ++ch)
+            for (int n = 0; n < numSamples; ++n)
+                buf.setSample(ch, n, 0.25f * (rng.nextFloat() * 2.0f - 1.0f));
+        runInBlocks(proc, buf);
+
+        struct BandEnergies { float low, mid, high; };
+        return BandEnergies {
+            bandEnergyDb(buf, sr, 150, 250),
+            bandEnergyDb(buf, sr, 900, 1100),
+            bandEnergyDb(buf, sr, 4000, 6000)
+        };
+    };
+
+    // ~10 dB margin: a 2nd-order band-pass rejects ~11-12 dB at 2.5 octaves from centre.
+    beginTest("High Pass cuts lows");
+    {
+        const auto e = bands(0);
+        expect((e.mid - e.low) > 10.0f,
+               "High Pass did not attenuate lows (low=" + juce::String(e.low, 1)
+               + " mid=" + juce::String(e.mid, 1) + " dB)");
+    }
+
+    beginTest("Low Pass cuts highs");
+    {
+        const auto e = bands(1);
+        expect((e.mid - e.high) > 10.0f,
+               "Low Pass did not attenuate highs (mid=" + juce::String(e.mid, 1)
+               + " high=" + juce::String(e.high, 1) + " dB)");
+    }
+
+    beginTest("Band Pass cuts both sides");
+    {
+        const auto e = bands(2);
+        expect((e.mid - e.low) > 10.0f && (e.mid - e.high) > 10.0f,
+               "Band Pass did not attenuate both sides (low=" + juce::String(e.low, 1)
+               + " mid=" + juce::String(e.mid, 1) + " high=" + juce::String(e.high, 1) + " dB)");
     }
 }
 

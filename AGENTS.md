@@ -43,19 +43,20 @@ python scripts/fix_moduleinfo_json.py build --all
 ```
 
 ## Architecture & Signal Chain
-1. **Input Stage** → Pre Hi-Pass (20-500Hz)
+1. **Input Stage** → Multimode Input Filter (HP/LP/BP, 20-20kHz, Butterworth TPT).
 2. **Oversampling** → 4x Polyphase IIR
 3. **Pre-Distortion Transient Tamer** → Hardcoded (1ms attack, 50ms release, 2.5:1 ratio, -12dB threshold)
 4. **Sub Guard Band-Split** (Optional) → 50-200Hz crossover protecting low band from distortion.
 5. **Distortion Stage** → 7 Professional Clip Types (Brutal Fuzz, Tube, Bit Crusher, Tape, Transformer, Diode, Decimator).
-6. **Tone Filter & Waveshaper** → Order depends on "Clean Mode" toggle.
+6. **Tone Filter & Waveshaper** → Order depends on "Clean Mode" toggle. Runs in oversampled domain.
 7. **Auto-Gain Compensation** → RMS-based (±12dB).
-8. **Soft Clipper** → ISP protection at -0.3dBFS.
-9. **Downsampling** → Return to original sample rate.
-10. **LA2A Compression** → Optical cell simulation (Attack 10ms, Release 500ms, 2dB knee, Tube harmonics).
-11. **DC Blocking** → One-pole (~35Hz cutoff) + secondary stages.
-12. **Output Limiter** → Safety limiter (-0.5dBFS).
-13. **Output Stage** → Final gain staging (±9dB).
+8. **LA2A Compression** → Optical cell simulation in oversampled domain (Attack 10ms, Release 500ms, 2dB knee, Tube harmonics).
+9. **Soft Clipper** → ISP protection at -0.3dBFS (oversampled domain).
+10. **Sub Guard Recombine** → Phase-matched toneFilterLow applied to low band, then summed.
+11. **Downsampling** → Return to original sample rate.
+12. **DC Blocking** → One-pole (~3.5Hz cutoff).
+13. **Output Limiter** → Safety limiter (-0.5dBFS).
+14. **Output Stage** → Final gain staging (±9dB).
 
 ## Engineering Standards
 - **Memory**: No dynamic allocation in `processBlock`.

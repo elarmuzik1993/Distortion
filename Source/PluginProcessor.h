@@ -44,6 +44,10 @@ namespace DSPConstants
     // 20Hz provides good DC removal while being numerically stable
     constexpr float DC_BLOCKING_FREQ = 20.0f;                 // Remove DC offset at 20Hz (subsonic)
 
+    // Manual one-pole DC blocker corner (applied after downsampling, at base rate).
+    // Kept constant across sample rates by deriving R = exp(-2*pi*fc/fs) per rate.
+    constexpr float DC_BLOCKER_CUTOFF_HZ = 3.5f;             // ~R=0.9995 at 44.1kHz
+
     // LA-2A Compressor optical cell simulation (time constants in seconds)
     constexpr float COMP_ATTACK_TIME_S = 0.010f;              // 10ms attack (fast optical response)
     constexpr float COMP_RELEASE_TIME_S = 0.500f;             // 500ms release (slow optical decay)
@@ -258,6 +262,13 @@ private:
     // Sub Guard helper methods
     SubGuardFilterOrder determineSubGuardFilterOrder(float freq) const;
     void updateSubGuardCoefficients(float freq, double sampleRate);
+    // Filter lowBuf/highBuf in place through the given order's bank and bake the
+    // LR12 flat-sum polarity (inverts the high band for 2nd-order Linkwitz-Riley).
+    void filterSubGuardBands(SubGuardFilterOrder order,
+                             juce::AudioBuffer<float>& lowBuf,
+                             juce::AudioBuffer<float>& highBuf);
+    // Clear just one order's filter state (incoming bank at a crossfade start).
+    void resetSubGuardOrderFilters(SubGuardFilterOrder order);
 
     // Clean Boost helpers
     void updateCleanBoostCoefficients(float depth, double sampleRate);
@@ -268,13 +279,16 @@ private:
     size_t oversamplingFactor = 4;
     int currentNumChannels = 0;
 
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-    juce::dsp::IIR::Coefficients<float>> preHighPassFilter;
+    // Input multimode filter (high-pass / low-pass / band-pass). State-variable TPT
+    // topology: one structure switches type cleanly and stays stable under LFO sweeps.
+    juce::dsp::StateVariableTPTFilter<float> inputFilter;
 
     // Manual DC blocker state (simple one-pole, extremely stable)
-    // y[n] = x[n] - x[n-1] + R * y[n-1], where R ≈ 0.9995 for ~3.5Hz cutoff at 44.1kHz
+    // y[n] = x[n] - x[n-1] + R * y[n-1]; R is derived from the sample rate so the
+    // ~3.5Hz corner stays constant at every rate (see updateSampleRateDependentCoefficients).
     float manualDCBlockerPrevInput[2] = { 0.0f, 0.0f };
     float manualDCBlockerPrevOutput[2] = { 0.0f, 0.0f };
+    float dcBlockerR = 0.9995f;  // ~3.5Hz at 44.1kHz; recomputed per sample rate
 
     // Sub Guard LR24 filters (4th order = 2 cascaded 2nd-order stages).
     // Coefficient updates mutate .state in place (see updateSubGuardCoefficients).
@@ -308,6 +322,15 @@ private:
     juce::SmoothedValue<float> smoothedSubGuardFreq;
     float lastSubGuardFreq = -1.0f;
 
+    // Sub Guard order-change crossfade. When the slope order switches (zone boundary),
+    // both the outgoing and incoming banks run for SUBGUARD_CROSSFADE_TIME_S and their
+    // band-split outputs are linearly blended, so the switch is click-free.
+    bool  sgCrossfadeActive = false;
+    int   sgCrossfadePos    = 0;           // samples elapsed in the current crossfade
+    SubGuardFilterOrder sgFromOrder = SubGuardFilterOrder::LR24;
+    SubGuardFilterOrder sgToOrder   = SubGuardFilterOrder::LR24;
+    bool  sgWasActive       = false;       // Sub Guard active last block? (OFF->ON snaps, no crossfade)
+
     // Post-distortion tone filter (oversampled rate)
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>> toneFilter;
@@ -329,14 +352,18 @@ private:
 
     juce::AudioBuffer<float> lowBandBuffer;   // For clean low frequencies
     juce::AudioBuffer<float> highBandBuffer;  // For distorted high frequencies
+    // Secondary band buffers — hold the incoming order's split during an order crossfade.
+    juce::AudioBuffer<float> lowBandBufferB;
+    juce::AudioBuffer<float> highBandBufferB;
     juce::AudioBuffer<float> dryBuffer;       // For global wet/dry mix
 
-    // Fractional dry-path delay to compensate for oversampler latency before the
-    // global wet/dry mix. Without this, the dry sums against a delayed wet signal
-    // and produces comb filtering. State holds the tail of the previous block's
-    // dry samples for negative-index reads during interpolation.
-    float dryDelaySamples = 0.0f;
-    juce::AudioBuffer<float> dryDelayState;
+    // Phase-matched dry path for the global wet/dry mix. The dry is routed through a
+    // second oversampler (identical config, no inner processing: up then down) so it
+    // picks up the SAME allpass phase and latency as the wet path. A plain fractional
+    // delay cannot align the minimum-phase IIR oversampler and comb-filters the blend
+    // at partial mix; routing the dry through a matched oversampler aligns every
+    // frequency, for both the IIR and FIR (linear-phase) oversampling modes.
+    std::unique_ptr<juce::dsp::Oversampling<float>> dryOversampling;
 
     juce::SmoothedValue<float> smoothedOutputGain;  // Only output gain uses SmoothedValue (normal rate)
     juce::SmoothedValue<float> smoothedGlobalMix;
@@ -358,6 +385,7 @@ private:
     std::atomic<float>* outputGainParam = nullptr;
     std::atomic<float>* distortionAmountParam = nullptr;
     std::atomic<float>* highPassFreqParam = nullptr;
+    std::atomic<float>* filterModeParam = nullptr;
     std::atomic<float>* clipTypeParam = nullptr;
     std::atomic<float>* subGuardFreqParam = nullptr;  // Sub Guard crossover frequency (50-200Hz)
     std::atomic<float>* lfoRateParam = nullptr;
@@ -477,6 +505,7 @@ private:
     double pb_oversampledSR = 0.0;
 
     float pb_modulatedHighPassFreq    = 0.0f;
+    int   pb_filterMode               = 0;   // 0=High Pass, 1=Low Pass, 2=Band Pass
     float pb_modulatedDistortionParam = 0.0f;
     float pb_modulatedToneFreq        = 0.0f;
     float pb_distortionParam          = 0.0f;  // raw (pre-LFO) for per-sample modulation
@@ -504,6 +533,8 @@ private:
 
     // Stage helper methods extracted from processBlock (PR-8)
     void applyPreHighpass(juce::AudioBuffer<float>& buffer);
+    void applyInputFilter(juce::dsp::AudioBlock<float>& block);  // base-rate multimode filter
+    bool isInputFilterActive() const;                            // true when not transparent
     void applyPreCompression();
     bool applySubGuardSplit();  // returns false to abort processBlock (band buffer overflow)
     // Per-sample distortion: harmonic-density envelope + studio distortion + wet/dry mix.

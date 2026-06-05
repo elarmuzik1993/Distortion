@@ -171,6 +171,7 @@ private:
     void testNoCombFiltering();
     void testFullyWetPathUnaffected();
     void testOversamplingReinit();
+    void testIirPartialMixCoherence();
 };
 
 /** Tests for all parameters - ranges and smoothing */
@@ -251,6 +252,25 @@ class RTCleanOversamplingTest : public juce::UnitTest
 {
 public:
     RTCleanOversamplingTest() : UnitTest("RT Clean Oversampling", TestCategories::ThreadSafety) {}
+    void runTest() override;
+};
+
+// Verifies the Sub Guard band-split sums flat (no notch/dip) at the crossover for
+// every filter order: LR12 (2nd-order LR, needs the high-band polarity flip),
+// LR18 (3rd-order Butterworth, Q=1.0), and LR24 (4th-order LR).
+class SubGuardCrossoverFlatnessTest : public juce::UnitTest
+{
+public:
+    SubGuardCrossoverFlatnessTest() : UnitTest("Sub Guard Crossover Flatness", TestCategories::DSP) {}
+    void runTest() override;
+};
+
+// Verifies that sweeping the Sub Guard crossover frequency across the slope-order
+// boundaries (92 Hz, 142 Hz) is click-free thanks to the order crossfade.
+class SubGuardOrderCrossfadeTest : public juce::UnitTest
+{
+public:
+    SubGuardOrderCrossfadeTest() : UnitTest("Sub Guard Order Crossfade", TestCategories::DSP) {}
     void runTest() override;
 };
 
@@ -379,6 +399,30 @@ private:
 };
 
 //==============================================================================
+// Sub Guard / Input Filter Spectral Tests
+//==============================================================================
+
+/** Sub Guard crossover sums flat: same noise through Sub Guard OFF vs ON should
+    leave the spectrum unchanged (no dip/null at the crossover). Migrated from the
+    render harness's --verify-subguard so it runs automatically in CI. */
+class SubGuardFlatnessTest : public juce::UnitTest
+{
+public:
+    SubGuardFlatnessTest() : UnitTest("Sub Guard Crossover Flatness", TestCategories::DSP) {}
+    void runTest() override;
+};
+
+/** Input multimode filter shapes correctly in true bypass (distortion + comp off):
+    high-pass cuts lows, low-pass cuts highs, band-pass cuts both. Migrated from the
+    render harness's --verify-filter. Also guards the bypass-path filter behaviour. */
+class InputFilterModeTest : public juce::UnitTest
+{
+public:
+    InputFilterModeTest() : UnitTest("Input Filter Modes", TestCategories::DSP) {}
+    void runTest() override;
+};
+
+//==============================================================================
 // Test Runner Function
 //==============================================================================
 
@@ -482,6 +526,8 @@ inline void registerAllTests()
     static RTBufferPreallocTest rtBufferPreallocTest;
     static RTCleanPreHighPassTest rtCleanPreHighPassTest;
     static RTCleanSubGuardTest rtCleanSubGuardTest;
+    static SubGuardCrossoverFlatnessTest subGuardCrossoverFlatnessTest;
+    static SubGuardOrderCrossfadeTest subGuardOrderCrossfadeTest;
     static RTCleanOversamplingTest rtCleanOversamplingTest;
     static RTCleanToneSweepTest rtCleanToneSweepTest;
     static RTCleanSampleRateDriftTest rtCleanSampleRateDriftTest;
@@ -493,6 +539,8 @@ inline void registerAllTests()
     static GoldenAudioTests goldenAudioTests;
     static NormalizationTests normalizationTests;
     static StatefulDistortionTests statefulDistortionTests;
+    static SubGuardFlatnessTest subGuardFlatnessTest;
+    static InputFilterModeTest inputFilterModeTest;
 }
 
 #endif // JUCE_DEBUG
