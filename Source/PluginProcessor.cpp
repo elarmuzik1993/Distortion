@@ -2007,16 +2007,19 @@ float PluginProcessor::applyDistortionStage(float inputSample, int channel,
     if (sampleDistortionParam < 0.5f)
         return inputSample;
 
-    // Update harmonic-density envelope (sub-linear scaling: louder input → fewer harmonics)
+    // Update harmonic-density envelope (sub-linear scaling: louder input → fewer harmonics).
+    // Clamp the channel index to the envelope array bounds, mirroring the tube-bias guard
+    // above and the pre-comp loop — callers iterate to pb_numChannels, which can exceed 2.
+    const int densCh = (channel >= 0 && channel < 2) ? channel : 0;
     const float inputLevel = std::abs(inputSample);
-    if (inputLevel > harmonicDensityEnvelope[channel])
-        harmonicDensityEnvelope[channel] = harmonicDensityAttackCoeff * harmonicDensityEnvelope[channel]
+    if (inputLevel > harmonicDensityEnvelope[densCh])
+        harmonicDensityEnvelope[densCh] = harmonicDensityAttackCoeff * harmonicDensityEnvelope[densCh]
                                          + (1.0f - harmonicDensityAttackCoeff) * inputLevel;
     else
-        harmonicDensityEnvelope[channel] = harmonicDensityReleaseCoeff * harmonicDensityEnvelope[channel]
+        harmonicDensityEnvelope[densCh] = harmonicDensityReleaseCoeff * harmonicDensityEnvelope[densCh]
                                          + (1.0f - harmonicDensityReleaseCoeff) * inputLevel;
 
-    const float clampedEnv = std::max(0.0f, harmonicDensityEnvelope[channel]);
+    const float clampedEnv = std::max(0.0f, harmonicDensityEnvelope[densCh]);
     const float harmonicScale = juce::jlimit(DSPConstants::HARMONIC_DENSITY_MIN_SCALE, 1.0f,
                                              1.0f / (1.0f + std::sqrt(clampedEnv)));
 
