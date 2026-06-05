@@ -51,6 +51,38 @@ void writeSecondOrderHighPassCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
     coeffs[4] = static_cast<float>(c1 * (1.0 - invQ * n + nSquared));
 }
 
+// First-order Butterworth coefficient writers (a0-normalized, written in place
+// so the LR18 sub-guard filters can re-tune on the audio thread without
+// allocating). These mirror juce::dsp::IIR::Coefficients::makeFirstOrderLowPass
+// / makeFirstOrderHighPass exactly, so updating in place matches the filter that
+// prepare() built from those factories. First-order coeffs are 3 raw values:
+// [b0, b1, a1] with a0 normalized to 1.
+void writeFirstOrderLowPassCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
+                                  const double sampleRate,
+                                  const double cutoffHz) noexcept
+{
+    const auto n = std::tan(juce::MathConstants<double>::pi * cutoffHz / sampleRate);
+    const auto invA0 = 1.0 / (n + 1.0);
+    auto* coeffs = dest.getRawCoefficients();
+
+    coeffs[0] = static_cast<float>(n * invA0);
+    coeffs[1] = static_cast<float>(n * invA0);
+    coeffs[2] = static_cast<float>((n - 1.0) * invA0);
+}
+
+void writeFirstOrderHighPassCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
+                                   const double sampleRate,
+                                   const double cutoffHz) noexcept
+{
+    const auto n = std::tan(juce::MathConstants<double>::pi * cutoffHz / sampleRate);
+    const auto invA0 = 1.0 / (n + 1.0);
+    auto* coeffs = dest.getRawCoefficients();
+
+    coeffs[0] = static_cast<float>(invA0);
+    coeffs[1] = static_cast<float>(-invA0);
+    coeffs[2] = static_cast<float>((n - 1.0) * invA0);
+}
+
 // RBJ high-shelf, written in place (a0-normalized) so we never allocate on the
 // audio thread. gainDb > 0 boosts highs above cutoffHz; < 0 cuts them.
 void writeHighShelfCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
@@ -152,10 +184,17 @@ PluginProcessor::PluginProcessor()
     smoothedSubGuardFreq.setCurrentAndTargetValue(DSPConstants::SUBGUARD_FREQ_DEFAULT);
     smoothedBoostDepth.reset(defaultSampleRate, DSPConstants::CLEAN_BOOST_SMOOTH_TIME_S);
     smoothedBoostDepth.setCurrentAndTargetValue(0.0f);
+
+    // Rebuild the oversampler whenever linearPhaseDry changes from ANY source
+    // (host automation, preset load, or the UI toggle), independent of whether
+    // the editor is open. Without this, the parameter is host-automatable but
+    // only takes effect on a manual editor click.
+    parameters.addParameterListener("linearPhaseDry", this);
 }
 
 PluginProcessor::~PluginProcessor()
 {
+    parameters.removeParameterListener("linearPhaseDry", this);
 }
 
 //==============================================================================
@@ -967,6 +1006,16 @@ void PluginProcessor::requestOversamplingRebuild(int stages)
 {
     requestedOversamplingStages.store(stages, std::memory_order_release);
     triggerAsyncUpdate();
+}
+
+void PluginProcessor::parameterChanged(const juce::String& parameterID, float /*newValue*/)
+{
+    // linearPhaseDry switches the oversampler between IIR and linear-phase FIR
+    // filters. Defer the (allocating) rebuild to the message thread; the current
+    // oversampling stage count is preserved, and rebuildOversampling re-reads the
+    // parameter and skips the rebuild if the filter type is already correct.
+    if (parameterID == "linearPhaseDry")
+        triggerAsyncUpdate();
 }
 
 void PluginProcessor::handleAsyncUpdate()

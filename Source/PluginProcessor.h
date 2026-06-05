@@ -169,7 +169,8 @@ class ProcessBlockDecompTest;
 #endif
 
 class PluginProcessor : public juce::AudioProcessor,
-                        private juce::AsyncUpdater
+                        private juce::AsyncUpdater,
+                        private juce::AudioProcessorValueTreeState::Listener
 {
 #if JUCE_DEBUG
     // Grant test classes access to private members for unit testing
@@ -380,6 +381,13 @@ private:
     bool currentLinearPhase = false;   // Track filter type for needsRebuild check
     void rebuildOversampling(double sampleRate, int samplesPerBlock);
     void handleAsyncUpdate() override;
+
+    // APVTS listener: linearPhaseDry changes the oversampler filter type, so a
+    // change from any source (host automation, preset load, UI) must rebuild the
+    // oversampler — not just a manual editor click. Called synchronously on the
+    // thread that changes the parameter (often the audio thread), so the handler
+    // must stay RT-safe and only defer work via triggerAsyncUpdate().
+    void parameterChanged(const juce::String& parameterID, float newValue) override;
 
     std::atomic<float>* inputGainParam = nullptr;
     std::atomic<float>* outputGainParam = nullptr;
