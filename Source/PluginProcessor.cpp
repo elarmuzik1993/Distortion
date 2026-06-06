@@ -182,10 +182,17 @@ PluginProcessor::PluginProcessor()
     smoothedSubGuardFreq.setCurrentAndTargetValue(DSPConstants::SUBGUARD_FREQ_DEFAULT);
     smoothedBoostDepth.reset(defaultSampleRate, DSPConstants::CLEAN_BOOST_SMOOTH_TIME_S);
     smoothedBoostDepth.setCurrentAndTargetValue(0.0f);
+
+    // Rebuild the oversampler whenever linearPhaseDry changes from ANY source
+    // (host automation, preset load, or the UI toggle), independent of whether
+    // the editor is open. Without this, the parameter is host-automatable but
+    // only takes effect on a manual editor click.
+    parameters.addParameterListener("linearPhaseDry", this);
 }
 
 PluginProcessor::~PluginProcessor()
 {
+    parameters.removeParameterListener("linearPhaseDry", this);
 }
 
 //==============================================================================
@@ -997,6 +1004,16 @@ void PluginProcessor::requestOversamplingRebuild(int stages)
 {
     requestedOversamplingStages.store(stages, std::memory_order_release);
     triggerAsyncUpdate();
+}
+
+void PluginProcessor::parameterChanged(const juce::String& parameterID, float /*newValue*/)
+{
+    // linearPhaseDry switches the oversampler between IIR and linear-phase FIR
+    // filters. Defer the (allocating) rebuild to the message thread; the current
+    // oversampling stage count is preserved, and rebuildOversampling re-reads the
+    // parameter and skips the rebuild if the filter type is already correct.
+    if (parameterID == "linearPhaseDry")
+        triggerAsyncUpdate();
 }
 
 void PluginProcessor::handleAsyncUpdate()

@@ -759,21 +759,15 @@ public:
         autoGainAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
             apvts, "autoGainEnabled", autoGainToggle);
 
-        // Linear Phase Dry toggle
+        // Linear Phase Dry toggle. The ButtonAttachment keeps the toggle in sync
+        // with the (host-automatable) parameter in both directions; the processor
+        // listens to linearPhaseDry and rebuilds the oversampler itself, so no
+        // manual rebuild trigger is needed here.
         addAndMakeVisible(linearPhaseToggle);
         linearPhaseToggle.setButtonText("");
         linearPhaseToggle.setLookAndFeel(&pillLnf);
-        {
-            bool lpOn = apvts.getRawParameterValue("linearPhaseDry")->load() > 0.5f;
-            linearPhaseToggle.setToggleState(lpOn, juce::dontSendNotification);
-        }
-        linearPhaseToggle.onClick = [this, &apvts]()
-        {
-            bool on = linearPhaseToggle.getToggleState();
-            if (auto* param = apvts.getParameter("linearPhaseDry"))
-                param->setValueNotifyingHost(on ? 1.0f : 0.0f);
-            processor.requestOversamplingRebuild(settingsState.oversamplingMode);
-        };
+        linearPhaseAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+            apvts, "linearPhaseDry", linearPhaseToggle);
 
         // Window Scale combo
         addAndMakeVisible(windowScaleCombo);
@@ -1034,6 +1028,7 @@ private:
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> cleanModeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> autoGainAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> linearPhaseAttachment;
 };
 
 // Settings overlay modal panel — fixed frame + header, with scrollable content.
