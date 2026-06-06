@@ -113,6 +113,39 @@ void writeHighShelfCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
     coeffs[4] = static_cast<float>(a2 * invA0);
 }
 
+// Per-sample LA-2A compressor character: apply the optical-cell gain, blend in
+// tube even-harmonic saturation, add makeup gain, then conditionally soft-clip.
+// Shared by the base-rate (applyPreCompression) and oversampled-domain compressor
+// loops so the two paths cannot drift. RT-safe: no allocation, all noexcept.
+inline float applyCompressorCharacter(float sampleValue,
+                                      const float compGain,
+                                      const float makeupGain) noexcept
+{
+    // Optical-cell gain reduction
+    sampleValue *= compGain;
+
+    // Tube harmonic generation (subtle even-harmonic warmth)
+    const float tubeInput      = sampleValue * DSPConstants::COMP_TUBE_DRIVE;
+    const float tubeSaturation = FastMath::tanh(tubeInput);
+    sampleValue = sampleValue * (1.0f - DSPConstants::COMP_TUBE_BLEND)
+                + tubeSaturation * DSPConstants::COMP_TUBE_BLEND;
+
+    // Makeup gain
+    sampleValue *= makeupGain;
+
+    // Conditional soft clip (transparent below threshold, prevents overs above)
+    const float absSample = std::abs(sampleValue);
+    if (absSample > DSPConstants::COMP_SOFT_CLIP_THRESHOLD)
+    {
+        const float sign   = (sampleValue > 0.0f) ? 1.0f : -1.0f;
+        const float excess = absSample - DSPConstants::COMP_SOFT_CLIP_THRESHOLD;
+        sampleValue = sign * (DSPConstants::COMP_SOFT_CLIP_THRESHOLD
+                    + FastMath::tanh(excess * 4.0f) * DSPConstants::COMP_SOFT_CLIP_HEADROOM);
+    }
+
+    return sampleValue;
+}
+
 }
 
 // Include test header in debug builds (tests run from separate test runner)
@@ -961,37 +994,12 @@ void PluginProcessor::applyLA2ACompression(juce::AudioBuffer<float>& buffer,
         // Track maximum gain reduction for meter display
         maxGainReductionDB = juce::jmax(maxGainReductionDB, gainReductionDB);
 
-        // Apply compression and makeup gain to all channels
+        // Apply compression character (gain, tube harmonics, makeup, soft clip)
+        // to all channels — see applyCompressorCharacter().
         for (int channel = 0; channel < numChannels; ++channel)
         {
-            float sampleValue = buffer.getSample(channel, sample);
-
-            // Apply compression
-            sampleValue *= compEnvelopeState;
-
-            // Tube harmonic generation (even harmonics for warmth)
-            const float tubeInput = sampleValue * DSPConstants::COMP_TUBE_DRIVE;
-            const float tubeSaturation = FastMath::tanh(tubeInput);
-
-            // Blend tube character (subtle 2nd harmonic)
-            sampleValue = sampleValue * (1.0f - DSPConstants::COMP_TUBE_BLEND) +
-                         tubeSaturation * DSPConstants::COMP_TUBE_BLEND;
-
-            // Apply makeup gain
-            sampleValue *= makeupGainLinear;
-
-            // Conditional soft clip (transparent below -1dBFS, prevents overs above)
-            {
-                const float absSample = std::abs(sampleValue);
-                if (absSample > DSPConstants::COMP_SOFT_CLIP_THRESHOLD)
-                {
-                    const float sign = (sampleValue > 0.0f) ? 1.0f : -1.0f;
-                    const float excess = absSample - DSPConstants::COMP_SOFT_CLIP_THRESHOLD;
-                    sampleValue = sign * (DSPConstants::COMP_SOFT_CLIP_THRESHOLD
-                                + FastMath::tanh(excess * 4.0f) * DSPConstants::COMP_SOFT_CLIP_HEADROOM);
-                }
-            }
-
+            const float sampleValue = applyCompressorCharacter(
+                buffer.getSample(channel, sample), compEnvelopeState, makeupGainLinear);
             buffer.setSample(channel, sample, sampleValue);
         }
     }
@@ -2385,32 +2393,13 @@ void PluginProcessor::applyLA2A()
 
         maxGainReductionDB = juce::jmax(maxGainReductionDB, gainReductionDB);
 
-        // Apply compression, tube harmonics, makeup, soft clip per channel
+        // Apply compression character (gain, tube harmonics, makeup, soft clip)
+        // per channel — see applyCompressorCharacter().
         for (int ch = 0; ch < compNumChannels; ++ch)
         {
             auto* channelData = pb_oversampledBlock.getChannelPointer(static_cast<size_t>(ch));
-            float sampleValue = channelData[sampleIdx];
-
-            sampleValue *= compEnvelopeState;
-
-            const float tubeInput = sampleValue * DSPConstants::COMP_TUBE_DRIVE;
-            const float tubeSaturation = FastMath::tanh(tubeInput);
-            sampleValue = sampleValue * (1.0f - DSPConstants::COMP_TUBE_BLEND) +
-                         tubeSaturation * DSPConstants::COMP_TUBE_BLEND;
-
-            sampleValue *= makeupGainLinear;
-
-            // Conditional soft clip (transparent below threshold)
-            const float absSample = std::abs(sampleValue);
-            if (absSample > DSPConstants::COMP_SOFT_CLIP_THRESHOLD)
-            {
-                const float sign = (sampleValue > 0.0f) ? 1.0f : -1.0f;
-                const float excess = absSample - DSPConstants::COMP_SOFT_CLIP_THRESHOLD;
-                sampleValue = sign * (DSPConstants::COMP_SOFT_CLIP_THRESHOLD
-                            + FastMath::tanh(excess * 4.0f) * DSPConstants::COMP_SOFT_CLIP_HEADROOM);
-            }
-
-            channelData[sampleIdx] = sampleValue;
+            channelData[sampleIdx] = applyCompressorCharacter(
+                channelData[sampleIdx], compEnvelopeState, makeupGainLinear);
         }
     }
 
