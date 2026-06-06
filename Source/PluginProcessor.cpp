@@ -115,8 +115,8 @@ void writeHighShelfCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
 
 // Per-sample LA-2A compressor character: apply the optical-cell gain, blend in
 // tube even-harmonic saturation, add makeup gain, then conditionally soft-clip.
-// Shared by the base-rate (applyPreCompression) and oversampled-domain compressor
-// loops so the two paths cannot drift. RT-safe: no allocation, all noexcept.
+// Shared by the base-rate (applyLA2ACompression) and oversampled-domain (applyLA2A)
+// compressor loops so the two paths cannot drift. RT-safe: no allocation, all noexcept.
 inline float applyCompressorCharacter(float sampleValue,
                                       const float compGain,
                                       const float makeupGain) noexcept
