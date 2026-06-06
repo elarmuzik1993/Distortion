@@ -357,6 +357,14 @@ private:
     // frequency, for both the IIR and FIR (linear-phase) oversampling modes.
     std::unique_ptr<juce::dsp::Oversampling<float>> dryOversampling;
 
+    // Re-imposes the reported oversampler latency onto the cheap true-bypass branch
+    // (which skips the oversampler). Without it the host's PDC plays the bypassed
+    // signal early, and crossing the bypass<->active threshold jumps in time. None
+    // interpolation makes it a pure integer delay — bit-transparent, only
+    // time-shifted. Sized/updated in rebuildOversampling (message thread).
+    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> bypassLatencyDelay;
+    int bypassLatencySamples = 0;
+
     juce::SmoothedValue<float> smoothedOutputGain;  // Only output gain uses SmoothedValue (normal rate)
     juce::SmoothedValue<float> smoothedGlobalMix;
 

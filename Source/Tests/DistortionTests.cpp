@@ -1840,6 +1840,93 @@ void DryWetAlignmentTests::runTest()
 
     beginTest("IIR partial-mix is phase-coherent across the spectrum");
     testIirPartialMixCoherence();
+
+    beginTest("True-bypass path is latency-compensated");
+    testBypassLatencyCompensation();
+}
+
+void DryWetAlignmentTests::testBypassLatencyCompensation()
+{
+    // The plugin reports the oversampler's latency to the host unconditionally,
+    // so the host delay-compensates other tracks by that amount. The cheap
+    // true-bypass branch (distortion off + comp off) must therefore delay its
+    // output by exactly that many samples — otherwise the bypassed signal plays
+    // EARLY against the rest of the mix and jumps in time when distortion or
+    // compression crosses the bypass threshold.
+    PluginProcessor processor;
+    const double sr = 44100.0;
+    const int blockSize = 512;
+    processor.setRateAndBufferSizeDetails(sr, blockSize);
+    processor.prepareToPlay(sr, blockSize);
+
+    // Force the true-bypass branch, fully transparent (no filter, unity gain,
+    // 100% wet so the dry-blend path is skipped).
+    setParameter(processor.parameters, "distortionAmount", 0.0f);  // below bypass threshold
+    setParameter(processor.parameters, "compEnabled", 0.0f);
+    setParameter(processor.parameters, "autoGainEnabled", 0.0f);
+    setParameter(processor.parameters, "extremeEnabled", 0.0f);
+    setParameter(processor.parameters, "lfoEnabled", 0.0f);
+    setParameter(processor.parameters, "inputGain", 50.0f);    // unity
+    setParameter(processor.parameters, "outputGain", 50.0f);   // unity
+    setParameter(processor.parameters, "globalMix", 100.0f);   // fully wet -> no dry blend
+    setParameter(processor.parameters, "filterMode", 0.0f);    // High Pass
+    setParameter(processor.parameters, "highPassFreq", 20.0f); // <= 25 Hz -> filter inactive
+
+    const int latency = processor.getLatencySamples();
+    expect(latency > 0, "Oversampler should report non-zero latency at default settings");
+
+    juce::MidiBuffer midi;
+
+    // Settle gain/mix smoothing with silence so the bypass path is steady-state
+    // and the delay line is primed with zeros.
+    for (int b = 0; b < 16; ++b)
+    {
+        juce::AudioBuffer<float> silence(2, blockSize);
+        silence.clear();
+        processor.processBlock(silence, midi);
+    }
+
+    // Send a single impulse, capture two blocks so the delayed copy is fully
+    // contained even for large reported latencies.
+    const int impulsePos = 64;
+    const float amp = 0.5f;  // below the -0.5 dBFS output limiter threshold -> untouched
+
+    const int numBlocks = 2;
+    const int totalSamples = blockSize * numBlocks;
+    juce::AudioBuffer<float> outputCapture(2, totalSamples);
+    outputCapture.clear();
+
+    for (int b = 0; b < numBlocks; ++b)
+    {
+        juce::AudioBuffer<float> block(2, blockSize);
+        block.clear();
+        if (b == 0)
+            for (int ch = 0; ch < 2; ++ch)
+                block.setSample(ch, impulsePos, amp);
+
+        processor.processBlock(block, midi);
+
+        for (int ch = 0; ch < 2; ++ch)
+            outputCapture.copyFrom(ch, b * blockSize, block, ch, 0, blockSize);
+    }
+
+    expect(!containsInvalidSamples(outputCapture), "Bypass output must not contain NaN/Inf");
+
+    // Locate the output impulse (peak |sample|) on channel 0.
+    int peakIndex = -1;
+    float peakValue = 0.0f;
+    const auto* out = outputCapture.getReadPointer(0);
+    for (int n = 0; n < totalSamples; ++n)
+    {
+        const float a = std::abs(out[n]);
+        if (a > peakValue) { peakValue = a; peakIndex = n; }
+    }
+
+    expect(peakValue > 0.1f, "Bypass output impulse lost. Peak: " + juce::String(peakValue));
+    expect(peakIndex == impulsePos + latency,
+           "Bypass output must be delayed by the reported latency (" + juce::String(latency)
+           + "). Expected peak index " + juce::String(impulsePos + latency)
+           + ", got " + juce::String(peakIndex));
 }
 
 void DryWetAlignmentTests::testIirPartialMixCoherence()

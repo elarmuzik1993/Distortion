@@ -1187,6 +1187,23 @@ void PluginProcessor::rebuildOversampling(double sampleRate, int samplesPerBlock
     // The dry global-mix path is phase-aligned via the matched dryOversampling instance
     // (rebuilt above), so it inherits the same latency automatically — no manual delay.
 
+    // Re-impose that same reported latency on the true-bypass branch, which skips
+    // the oversampler entirely. A plain integer delay at the base rate keeps the
+    // bypassed signal bit-transparent (only time-shifted) while staying aligned
+    // with the host's PDC and with the active path. Allocated here on the message
+    // thread; the audio-thread bypass branch only pushes/pops samples.
+    bypassLatencySamples = getLatencySamples();
+    {
+        juce::dsp::ProcessSpec baseSpec;
+        baseSpec.sampleRate = sr;
+        baseSpec.maximumBlockSize = static_cast<juce::uint32>(currentBlockSize);
+        baseSpec.numChannels = static_cast<juce::uint32>(numChannels);
+        bypassLatencyDelay.prepare(baseSpec);
+        bypassLatencyDelay.setMaximumDelayInSamples(juce::jmax(1, bypassLatencySamples));
+        bypassLatencyDelay.setDelay(static_cast<float>(bypassLatencySamples));
+        bypassLatencyDelay.reset();
+    }
+
     // Reset all DSP state
     resetDSPState();
 }
@@ -1548,6 +1565,25 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                     (buffer.getSample(1, sample) + buffer.getSample(1, next)) * 0.5f : leftSample;
                 pushSampleToScope(leftSample, rightSample);
             }
+        }
+
+        // ========== LATENCY COMPENSATION (Bypass path) ==========
+        // The active path is delayed by the oversampler's reported latency; this
+        // branch skips the oversampler, so it must impose the same integer delay
+        // to stay aligned with the host's PDC and avoid a timing jump when the
+        // bypass<->active threshold is crossed. None interpolation -> the samples
+        // pass through unchanged, only time-shifted. When latency is zero
+        // (oversampling off) the branch stays a truly bit-clean passthrough.
+        if (bypassLatencySamples > 0)
+        {
+            const int numSamp = buffer.getNumSamples();
+            const int numCh   = buffer.getNumChannels();
+            for (int sample = 0; sample < numSamp; ++sample)
+                for (int channel = 0; channel < numCh; ++channel)
+                {
+                    bypassLatencyDelay.pushSample(channel, buffer.getSample(channel, sample));
+                    buffer.setSample(channel, sample, bypassLatencyDelay.popSample(channel));
+                }
         }
 
         return;  // Skip all DSP processing
@@ -2774,6 +2810,9 @@ void PluginProcessor::resetDSPState()
     // Clear the matched dry-path oversampler so the global mix doesn't replay stale tails
     if (dryOversampling)
         dryOversampling->reset();
+
+    // Clear the bypass latency-compensation delay so it doesn't replay stale tails
+    bypassLatencyDelay.reset();
 
     // Abort any in-flight Sub Guard order crossfade; the next active block re-seeds
     // the order from the current frequency (OFF->ON snap path).
