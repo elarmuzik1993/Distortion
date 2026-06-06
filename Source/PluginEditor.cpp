@@ -445,14 +445,20 @@ PluginEditor::PluginEditor(PluginProcessor& p)
                      [this]() { toggleParameterLock("outputGain"); });
         menu.addItem("Distortion Amount", true, isParameterLocked("distortionAmount"),
                      [this]() { toggleParameterLock("distortionAmount"); });
-        menu.addItem("Hi-Pass Filter", true, isParameterLocked("highPassFreq"),
+        menu.addItem("Filter Frequency", true, isParameterLocked("highPassFreq"),
                      [this]() { toggleParameterLock("highPassFreq"); });
+        menu.addItem("Filter Mode", true, isParameterLocked("filterMode"),
+                     [this]() { toggleParameterLock("filterMode"); });
         menu.addItem("Sub Guard", true, isParameterLocked("subGuardFreq"),
                      [this]() { toggleParameterLock("subGuardFreq"); });
         menu.addItem("Clip Type", true, isParameterLocked("clipType"),
                      [this]() { toggleParameterLock("clipType"); });
         menu.addItem("Dist Mix", true, isParameterLocked("distMix"),
                      [this]() { toggleParameterLock("distMix"); });
+        menu.addItem("Tone", true, isParameterLocked("tone"),
+                     [this]() { toggleParameterLock("tone"); });
+        menu.addItem("Waveshaper Mix", true, isParameterLocked("waveshaperMix"),
+                     [this]() { toggleParameterLock("waveshaperMix"); });
 
         menu.addSeparator();
         menu.addSectionHeader("LFO");
@@ -460,6 +466,14 @@ PluginEditor::PluginEditor(PluginProcessor& p)
                      [this]() { toggleParameterLock("lfoRate"); });
         menu.addItem("LFO Depth", true, isParameterLocked("lfoDepth"),
                      [this]() { toggleParameterLock("lfoDepth"); });
+        menu.addItem("LFO Waveform", true, isParameterLocked("lfoWaveform"),
+                     [this]() { toggleParameterLock("lfoWaveform"); });
+        menu.addItem("LFO Destination", true, isParameterLocked("lfoDestination"),
+                     [this]() { toggleParameterLock("lfoDestination"); });
+        menu.addItem("LFO Enable", true, isParameterLocked("lfoEnabled"),
+                     [this]() { toggleParameterLock("lfoEnabled"); });
+        menu.addItem("LFO Invert", true, isParameterLocked("lfoInvert"),
+                     [this]() { toggleParameterLock("lfoInvert"); });
 
         menu.addSeparator();
         menu.addSectionHeader("Compression");
@@ -471,6 +485,15 @@ PluginEditor::PluginEditor(PluginProcessor& p)
                      [this]() { toggleParameterLock("compRatio"); });
         menu.addItem("Comp Enable", true, isParameterLocked("compEnabled"),
                      [this]() { toggleParameterLock("compEnabled"); });
+
+        menu.addSeparator();
+        menu.addSectionHeader("Character");
+        menu.addItem("Extreme", true, isParameterLocked("extremeEnabled"),
+                     [this]() { toggleParameterLock("extremeEnabled"); });
+        menu.addItem("Clean Boost", true, isParameterLocked("cleanBoost"),
+                     [this]() { toggleParameterLock("cleanBoost"); });
+        menu.addItem("Global Mix", true, isParameterLocked("globalMix"),
+                     [this]() { toggleParameterLock("globalMix"); });
 
         menu.addSeparator();
         menu.addItem("Lock All", [this]()
@@ -492,19 +515,24 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     parameterLocks["outputGain"] = false;
     parameterLocks["distortionAmount"] = false;
     parameterLocks["highPassFreq"] = false;
+    parameterLocks["filterMode"] = false;
     parameterLocks["subGuardFreq"] = false;
     parameterLocks["clipType"] = false;
     parameterLocks["distMix"] = false;
+    parameterLocks["tone"] = false;
+    parameterLocks["waveshaperMix"] = false;
     parameterLocks["lfoRate"] = false;
     parameterLocks["lfoDepth"] = false;
     parameterLocks["lfoEnabled"] = false;
+    parameterLocks["lfoInvert"] = false;
+    parameterLocks["lfoWaveform"] = false;
     parameterLocks["lfoDestination"] = false;
     parameterLocks["compPeakReduction"] = false;
     parameterLocks["compMakeupGain"] = false;
     parameterLocks["compRatio"] = false;
     parameterLocks["compEnabled"] = false;
-    parameterLocks["autoGainEnabled"] = false;
     parameterLocks["extremeEnabled"] = false;
+    parameterLocks["cleanBoost"] = false;
     parameterLocks["globalMix"] = false;
 
     // Add lock icons
@@ -1184,25 +1212,38 @@ void PluginEditor::randomizeAllParameters()
     randomizeFloatParam("inputGain", 0.0f, 100.0f);
     randomizeFloatParam("outputGain", 0.0f, 100.0f);
     randomizeFloatParam("distortionAmount", 0.0f, 100.0f);
-    randomizeFloatParam("highPassFreq", 20.0f, 500.0f);
-    randomizeFloatParam("subGuardFreq", 50.0f, 200.0f);  // Sub Guard frequency range
+    // highPassFreq now drives the multimode input filter (HP/LP/BP). Keep the random
+    // sweep in a musical 20-2000 Hz band rather than the full 20-20000 Hz range so
+    // results stay usable across all three modes.
+    randomizeFloatParam("highPassFreq", 20.0f, 2000.0f);
+    randomizeChoiceParam("filterMode", 3);  // High Pass / Low Pass / Band Pass
+    // subGuardFreq spans 0-200 Hz where 0 = OFF (no band-split); include the OFF end.
+    randomizeFloatParam("subGuardFreq", 0.0f, DSPConstants::SUBGUARD_FREQ_MAX);
     randomizeChoiceParam("clipType", 7);
     randomizeFloatParam("distMix", 0.0f, 100.0f);
+    randomizeFloatParam("tone", 2000.0f, 20000.0f);
+    randomizeFloatParam("waveshaperMix", 0.0f, 100.0f);
 
     // LFO SECTION
-    randomizeFloatParam("lfoRate", 0.1f, 10.0f);
+    randomizeFloatParam("lfoRate", 0.0f, 10.0f);  // Matches layout range (0 = LFO off)
     randomizeFloatParam("lfoDepth", 0.0f, 100.0f);
     randomizeBoolParam("lfoEnabled");
-    randomizeChoiceParam("lfoDestination", 5);  // 5 destinations: Distortion, Tone, Hi-Pass, Dist Mix, Output Gain
+    randomizeBoolParam("lfoInvert");
+    randomizeChoiceParam("lfoWaveform", 5);  // Sine, Triangle, Square, Saw, Random
+    randomizeChoiceParam("lfoDestination", 5);  // Distortion, Tone, Hi-Pass, Dist Mix, Output Gain
 
     // COMPRESSION SECTION
     randomizeFloatParam("compPeakReduction", 0.0f, 100.0f);
     randomizeFloatParam("compMakeupGain", 0.0f, 100.0f);
     randomizeChoiceParam("compRatio", 2);
     randomizeBoolParam("compEnabled");
-    randomizeBoolParam("autoGainEnabled");
+
+    // CHARACTER / GLOBAL
     randomizeBoolParam("extremeEnabled");
+    randomizeBoolParam("cleanBoost");
     randomizeFloatParam("globalMix", 50.0f, 100.0f);
+    // NOTE: autoGainEnabled, waveshaperClean, linearPhaseDry, and the LFO BPM-sync
+    // transport params are intentionally left fixed (mode/quality/transport toggles).
 }
 
 juce::File PluginEditor::getPresetDirectory()
