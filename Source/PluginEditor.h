@@ -680,7 +680,7 @@ struct SettingsState
         oscilloscopeEnabled = xml->getBoolAttribute("oscilloscope", true);
         oscilloscopeStereo = xml->getBoolAttribute("oscilloscopeStereo", true);
         tooltipsEnabled = xml->getBoolAttribute("tooltips", false);
-        windowScalePercent = xml->getIntAttribute("windowScale", 100);
+        windowScalePercent = xml->getIntAttribute("windowScale", 70);
         oversamplingMode = xml->getIntAttribute("oversampling", 2);
         scopeLength = xml->getIntAttribute("scopeLength", 512);
     }
