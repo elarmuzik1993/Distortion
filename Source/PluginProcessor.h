@@ -19,30 +19,11 @@
 //==============================================================================
 namespace DSPConstants
 {
-    // Oversampling configuration
-    constexpr int OVERSAMPLING_FACTOR = 4;                    // 4x oversampling to prevent aliasing
-    constexpr int OVERSAMPLING_STAGES = 2;                    // 2 stages for polyphase IIR
-
     // Sub Guard crossover configuration (replaces 808-Safe mode)
-    constexpr float SUBGUARD_FREQ_OFF = 0.0f;                 // OFF sentinel value (no band-split)
-    constexpr float SUBGUARD_FREQ_MIN = 50.0f;                // Minimum crossover frequency
     constexpr float SUBGUARD_FREQ_MAX = 200.0f;               // Maximum crossover frequency
     constexpr float SUBGUARD_FREQ_DEFAULT = 60.0f;            // Default to 60Hz LR24 (sub-preserving, Saturn 2 style)
-    constexpr float SUBGUARD_SNAP_TOLERANCE = 8.0f;           // ±8 Hz snap zone
-    constexpr float SUBGUARD_SNAP_PRESERVE = 60.0f;           // LR24 - steepest slope
-    constexpr float SUBGUARD_SNAP_CONTROL = 100.0f;           // LR18 - balanced
-    constexpr float SUBGUARD_SNAP_AGGRESSIVE = 150.0f;        // LR12 - gentle slope
     constexpr float SUBGUARD_CROSSFADE_TIME_S = 0.010f;       // 10ms order transition crossfade
     constexpr float SUBGUARD_FREQ_SMOOTH_TIME_S = 0.050f;     // 50ms frequency smoothing
-
-    // Distortion gain scaling
-    constexpr float DISTORTION_INPUT_SCALE = 0.6f;            // Pre-distortion gain attenuation
-    constexpr float DISTORTION_DRIVE_SCALE = 1.2f;            // Secondary drive multiplier
-
-    // DC blocking filter frequency
-    // Note: 5Hz was too low and caused numerical instability in IIR filters
-    // 20Hz provides good DC removal while being numerically stable
-    constexpr float DC_BLOCKING_FREQ = 20.0f;                 // Remove DC offset at 20Hz (subsonic)
 
     // Manual one-pole DC blocker corner (applied after downsampling, at base rate).
     // Kept constant across sample rates by deriving R = exp(-2*pi*fc/fs) per rate.
@@ -78,12 +59,9 @@ namespace DSPConstants
     // Gain reduction meter
     constexpr int METER_REFRESH_RATE_HZ = 30;                 // UI refresh rate
     constexpr float METER_MAX_DB = 20.0f;                     // Maximum gain reduction display range
-    constexpr float METER_SMOOTHING = 0.7f;                   // Visual smoothing coefficient
 
     // Parameter smoothing times (in seconds)
     constexpr double GAIN_SMOOTH_TIME_S = 0.02;               // 20ms for gain changes
-    constexpr double DISTORTION_SMOOTH_TIME_S = 0.15;         // 150ms for distortion (slower to avoid zipper)
-    constexpr double COMP_GR_SMOOTH_TIME_S = 0.5;             // 500ms for gain reduction display
 
     // Pre-distortion transient tamer (hardcoded, always-on)
     constexpr float PRE_COMP_ATTACK_TIME_S = 0.001f;         // 1ms attack (catches transients)
@@ -455,10 +433,6 @@ private:
     // LFO Random waveform state (per-instance, not static)
     float lfoRandomValue = 0.0f;
     float lfoLastPhase = 1.0f;
-
-    // Debug counters (per-instance, not static to avoid multi-instance bugs)
-    int debugBlockCounter = 0;
-    int deltaLogCounter = 0;
 
     // Compression optical cell coefficients (sample-rate-dependent)
     float compAttackCoeff = 0.9995f;

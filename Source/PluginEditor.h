@@ -1557,8 +1557,6 @@ private:
     void morphDistortionParameters(float x, float y);  // XY Morph Pad callback
 
     // LFO modulation visual feedback state
-    int currentModulatedDestination = -1;
-    float modulationPulsePhase = 0.0f;
     float uiLfoPhase = 0.0f;  // Smooth UI-side phase accumulator for LFO arc animation
 
     // Preset management methods
