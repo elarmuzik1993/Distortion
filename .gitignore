@@ -47,3 +47,6 @@ My plugin package/
 __pycache__/
 *.pyc
 *.egg-info/
+
+# Claude Code local runtime state
+.claude/scheduled_tasks.lock
