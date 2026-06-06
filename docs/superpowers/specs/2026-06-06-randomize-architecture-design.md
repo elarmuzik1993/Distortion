@@ -54,9 +54,9 @@ ranges; leave system/quality/transport toggles fixed so results stay usable.
 | compEnabled | bool | — | keep |
 | extremeEnabled | bool | — | keep |
 | cleanBoost | bool | — | **add** |
-| globalMix | float | 50–100 | keep |
 
 ### Left fixed (NOT randomized)
+`globalMix` (**removed** — global wet/dry the user sets deliberately),
 `autoGainEnabled` (**removed** from randomize), `waveshaperClean`, `linearPhaseDry`,
 `lfoBpmSync`, `lfoBpmDivision`.
 

@@ -492,8 +492,6 @@ PluginEditor::PluginEditor(PluginProcessor& p)
                      [this]() { toggleParameterLock("extremeEnabled"); });
         menu.addItem("Clean Boost", true, isParameterLocked("cleanBoost"),
                      [this]() { toggleParameterLock("cleanBoost"); });
-        menu.addItem("Global Mix", true, isParameterLocked("globalMix"),
-                     [this]() { toggleParameterLock("globalMix"); });
 
         menu.addSeparator();
         menu.addItem("Lock All", [this]()
@@ -533,7 +531,6 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     parameterLocks["compEnabled"] = false;
     parameterLocks["extremeEnabled"] = false;
     parameterLocks["cleanBoost"] = false;
-    parameterLocks["globalMix"] = false;
 
     // Add lock icons
     addAndMakeVisible(inputGainLock);
@@ -1238,12 +1235,12 @@ void PluginEditor::randomizeAllParameters()
     randomizeChoiceParam("compRatio", 2);
     randomizeBoolParam("compEnabled");
 
-    // CHARACTER / GLOBAL
+    // CHARACTER
     randomizeBoolParam("extremeEnabled");
     randomizeBoolParam("cleanBoost");
-    randomizeFloatParam("globalMix", 50.0f, 100.0f);
-    // NOTE: autoGainEnabled, waveshaperClean, linearPhaseDry, and the LFO BPM-sync
-    // transport params are intentionally left fixed (mode/quality/transport toggles).
+    // NOTE: globalMix, autoGainEnabled, waveshaperClean, linearPhaseDry, and the LFO
+    // BPM-sync transport params are intentionally left fixed (global/mode/quality/
+    // transport controls the user sets deliberately, not part of a sound roll).
 }
 
 juce::File PluginEditor::getPresetDirectory()
