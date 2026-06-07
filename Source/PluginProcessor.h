@@ -149,6 +149,7 @@ class ProcessBlockDecompTest;
 
 class PluginProcessor : public juce::AudioProcessor,
                         private juce::AsyncUpdater,
+                        private juce::Timer,
                         private juce::AudioProcessorValueTreeState::Listener
 {
 #if JUCE_DEBUG
@@ -382,11 +383,22 @@ private:
     void rebuildOversampling(double sampleRate, int samplesPerBlock);
     void handleAsyncUpdate() override;
 
+    // Drains oversamplingRebuildPending on the message thread (see below).
+    void timerCallback() override;
+
+    // Set by parameterChanged() to request a deferred oversampler rebuild.
+    // parameterChanged() may run on the audio thread (host automation), and
+    // posting to the system message queue (triggerAsyncUpdate / postMessage)
+    // is not realtime-safe — on Linux it takes a lock and write()s the wake
+    // pipe. So the audio thread only flips this wait-free flag; a message-thread
+    // timer polls it and performs the (allocating) rebuild.
+    std::atomic<bool> oversamplingRebuildPending{ false };
+
     // APVTS listener: linearPhaseDry changes the oversampler filter type, so a
     // change from any source (host automation, preset load, UI) must rebuild the
     // oversampler — not just a manual editor click. Called synchronously on the
     // thread that changes the parameter (often the audio thread), so the handler
-    // must stay RT-safe and only defer work via triggerAsyncUpdate().
+    // must stay RT-safe: it only sets oversamplingRebuildPending and returns.
     void parameterChanged(const juce::String& parameterID, float newValue) override;
 
     std::atomic<float>* inputGainParam = nullptr;

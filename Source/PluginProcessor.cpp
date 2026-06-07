@@ -221,10 +221,17 @@ PluginProcessor::PluginProcessor()
     // the editor is open. Without this, the parameter is host-automatable but
     // only takes effect on a manual editor click.
     parameters.addParameterListener("linearPhaseDry", this);
+
+    // Poll for deferred oversampler rebuilds requested from the audio thread.
+    // 50 ms is imperceptible for a quality toggle and costs a near-free atomic
+    // load per tick. Auto-stops on destruction; only fires when a message loop
+    // is running (plugin host / standalone), so headless unit tests are unaffected.
+    startTimer(50);
 }
 
 PluginProcessor::~PluginProcessor()
 {
+    stopTimer();
     parameters.removeParameterListener("linearPhaseDry", this);
 }
 
@@ -1017,11 +1024,21 @@ void PluginProcessor::requestOversamplingRebuild(int stages)
 void PluginProcessor::parameterChanged(const juce::String& parameterID, float /*newValue*/)
 {
     // linearPhaseDry switches the oversampler between IIR and linear-phase FIR
-    // filters. Defer the (allocating) rebuild to the message thread; the current
-    // oversampling stage count is preserved, and rebuildOversampling re-reads the
+    // filters. This may be called on the audio thread (host automation), so we
+    // must not post to the system message queue here — instead flip a wait-free
+    // flag that the message-thread timer drains. rebuildOversampling re-reads the
     // parameter and skips the rebuild if the filter type is already correct.
     if (parameterID == "linearPhaseDry")
-        triggerAsyncUpdate();
+        oversamplingRebuildPending.store(true, std::memory_order_release);
+}
+
+void PluginProcessor::timerCallback()
+{
+    // Message-thread poll: pick up a deferred oversampler rebuild requested from
+    // the audio thread by parameterChanged(). exchange() ensures we only rebuild
+    // once per request even if multiple changes arrived since the last tick.
+    if (oversamplingRebuildPending.exchange(false, std::memory_order_acq_rel))
+        handleAsyncUpdate();
 }
 
 void PluginProcessor::handleAsyncUpdate()

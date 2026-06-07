@@ -31,6 +31,8 @@ Use the left column to mark ✓/✗. If an item fails, follow the "Fix" note.
 |     | *Fix: `std::atomic` for flags; `juce::AbstractFifo` or ring buffer for data.* |
 | [ ] | **Background results applied safely** — no mid-sample abrupt swaps. |
 |     | *Fix: Swap pointers/indices atomically; smoothly ramp parameters.* |
+| [ ] | **No system-message-queue posts from the audio thread** — `triggerAsyncUpdate()` / `postMessage()` / `MessageManager::callAsync()` are thread-safe but NOT realtime-safe (on Linux they take a lock and `write()` the wake pipe). APVTS `parameterChanged()` can run on the audio thread (host automation/preset load). |
+|     | *Fix: From the audio thread, set a wait-free `std::atomic` flag only; drain it on the message thread with a `juce::Timer` and do the deferred work there. See snippet below.* |
 
 ---
 
@@ -285,6 +287,37 @@ void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 }
 ```
 
+### Deferring work off the audio thread (atomic flag + Timer)
+```cpp
+// parameterChanged() may be called on the AUDIO thread by host automation /
+// preset load. Do NOT triggerAsyncUpdate() here — posting to the system message
+// queue is not realtime-safe. Flip a wait-free flag instead.
+class MyProcessor : public juce::AudioProcessor,
+                    private juce::Timer,
+                    private juce::AudioProcessorValueTreeState::Listener
+{
+    std::atomic<bool> rebuildPending{ false };
+
+    MyProcessor() { startTimer(50); }   // message-thread poll; auto-stops on destruct
+    ~MyProcessor() override { stopTimer(); }
+
+    void parameterChanged(const juce::String& id, float) override
+    {
+        if (id == "heavyParam")
+            rebuildPending.store(true, std::memory_order_release);  // wait-free
+    }
+
+    void timerCallback() override
+    {
+        // exchange() coalesces multiple requests into one rebuild per tick.
+        if (rebuildPending.exchange(false, std::memory_order_acq_rel))
+            doHeavyRebuild();   // allocating work, safe on the message thread
+    }
+};
+```
+*Note: the `juce::Timer` only fires when a message loop is running (plugin host /
+standalone), so headless unit tests are unaffected — drive the rebuild directly there.*
+
 ---
 
 ## How to Use This Checklist
@@ -297,4 +330,4 @@ void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 
 ---
 
-*Last updated: January 2026*
+*Last updated: June 2026*
