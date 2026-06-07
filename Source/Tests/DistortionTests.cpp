@@ -887,6 +887,9 @@ void OutputLimiterTests::runTest()
 
     beginTest("State Reset");
     testStateReset();
+
+    beginTest("Ceiling Holds With Hot Dry Under Global Mix");
+    testGlobalMixCeiling();
 }
 
 void OutputLimiterTests::testThresholdEnforcement()
@@ -1125,6 +1128,54 @@ void OutputLimiterTests::testStateReset()
     // Envelope should be back to unity
     expectEquals(processor.outputLimiterEnvelope, 1.0f,
         "State reset didn't restore envelope to unity");
+}
+
+void OutputLimiterTests::testGlobalMixCeiling()
+{
+    using namespace TestUtilities;
+
+    // Regression: the final limiter must run AFTER the global dry/wet blend so a
+    // hot dry signal blended back in cannot push the output past the safety ceiling.
+    // globalMix = 0% routes the full (raw, unprocessed) dry input to the output; if
+    // the limiter ran before the blend, that hot dry would pass through unbounded.
+    const float maxAllowed = juce::Decibels::decibelsToGain(0.5f);  // matches threshold + knee tolerance
+
+    auto runScenario = [&](bool distortionOn, const juce::String& pathName)
+    {
+        PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(44100.0, 512);
+        processor.prepareToPlay(44100.0, 512);
+
+        setParameter(processor.parameters, "distortionAmount", distortionOn ? 100.0f : 0.0f);
+        setParameter(processor.parameters, "compEnabled", false);
+        setParameter(processor.parameters, "outputGain", 50.0f);  // unity — hotness comes from the dry input
+        setParameter(processor.parameters, "globalMix", 0.0f);     // 100% dry
+
+        juce::MidiBuffer midi;
+
+        // Hot dry input at +6 dB (full-scale ×2). Settle the limiter envelope and the
+        // globalMix smoother across several blocks before measuring.
+        const float hotGain = juce::Decibels::decibelsToGain(6.0f);
+        for (int i = 0; i < 10; ++i)
+        {
+            auto buffer = generateSineWave(1000.0, 44100.0, 512, hotGain, 2);
+            processor.processBlock(buffer, midi);
+        }
+
+        auto buffer = generateSineWave(1000.0, 44100.0, 512, hotGain, 2);
+        processor.processBlock(buffer, midi);
+
+        const float peakOutput = calculatePeak(buffer);
+        expect(peakOutput <= maxAllowed,
+            pathName + " path: hot dry blend peaked at " +
+            juce::String(juce::Decibels::gainToDecibels(peakOutput), 2) +
+            " dB, exceeding the safety ceiling (" +
+            juce::String(juce::Decibels::gainToDecibels(maxAllowed), 2) + " dB)");
+        expect(!containsInvalidSamples(buffer), pathName + " path: output contains NaN or Inf");
+    };
+
+    runScenario(false, "Bypass");
+    runScenario(true,  "Active");
 }
 
 //==============================================================================

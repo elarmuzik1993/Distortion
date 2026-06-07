@@ -548,6 +548,10 @@ private:
                                float sampleMixAmount, float sampleDistortionParam);
     void applyAutoGainAndISP(juce::AudioBuffer<float>& buffer);
     void applyLA2A();
+    // Stereo-linked soft safety limiter at -0.5dBFS. Must run as the LAST gain stage
+    // on the output buffer (after the global dry/wet blend) so a hot dry signal can't
+    // push the blended output past the ceiling. Shared by the bypass and active paths.
+    void applyFinalLimiter(juce::AudioBuffer<float>& buffer);
 
     // Helper methods for studio distortion DSP
     float applyStudioDistortion(float x, float gain, float drive, int clipType, float harmonicScale, int channel = 0);
