@@ -16,6 +16,17 @@ jobs:
   build-windows:
     runs-on: windows-latest
 
+    # Azure Trusted Signing creds (set as repo secrets to activate signing).
+    # When unset these are empty strings and the signing steps below skip, so
+    # the pipeline still builds an (unsigned) installer.
+    env:
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      TS_ENDPOINT: ${{ secrets.AZURE_TS_ENDPOINT }}
+      TS_ACCOUNT: ${{ secrets.AZURE_TS_ACCOUNT }}
+      TS_PROFILE: ${{ secrets.AZURE_TS_CERT_PROFILE }}
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -54,6 +65,49 @@ jobs:
         curl -fsSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip
         unzip -q -o pluginval.zip
         ./pluginval.exe --strictness-level 10 --timeout-ms 600000 --validate "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Monolit Distortion.vst3"
+
+    - name: Sign VST3 (Azure Trusted Signing)
+      if: env.AZURE_CLIENT_ID != ''
+      uses: azure/trusted-signing-action@v0.5.9
+      with:
+        azure-tenant-id: ${{ env.AZURE_TENANT_ID }}
+        azure-client-id: ${{ env.AZURE_CLIENT_ID }}
+        azure-client-secret: ${{ env.AZURE_CLIENT_SECRET }}
+        endpoint: ${{ env.TS_ENDPOINT }}
+        trusted-signing-account-name: ${{ env.TS_ACCOUNT }}
+        certificate-profile-name: ${{ env.TS_PROFILE }}
+        files-folder: build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Monolit Distortion.vst3/Contents/x86_64-win
+        files-folder-filter: vst3
+        files-folder-recurse: true
+
+    - name: Build installer (Inno Setup)
+      shell: pwsh
+      run: |
+        choco install innosetup --no-progress -y
+        $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+        $ver = if ($env:GITHUB_REF_NAME -like 'v*') { $env:GITHUB_REF_NAME.Substring(1) } else { '2.2.0' }
+        & $iscc "/DMyAppVersion=$ver" installer\Distortion.iss
+
+    - name: Sign installer (Azure Trusted Signing)
+      if: env.AZURE_CLIENT_ID != ''
+      uses: azure/trusted-signing-action@v0.5.9
+      with:
+        azure-tenant-id: ${{ env.AZURE_TENANT_ID }}
+        azure-client-id: ${{ env.AZURE_CLIENT_ID }}
+        azure-client-secret: ${{ env.AZURE_CLIENT_SECRET }}
+        endpoint: ${{ env.TS_ENDPOINT }}
+        trusted-signing-account-name: ${{ env.TS_ACCOUNT }}
+        certificate-profile-name: ${{ env.TS_PROFILE }}
+        files-folder: dist
+        files-folder-filter: exe
+        files-folder-recurse: false
+
+    - name: Upload Windows installer
+      uses: actions/upload-artifact@v4
+      with:
+        name: MonolitDistortion-Installer-Windows
+        path: dist/*.exe
+        retention-days: 30
 
     - name: Prepare Windows Artifact
       shell: bash
@@ -146,6 +200,20 @@ jobs:
         path: artifact/Linux/Monolit Distortion.vst3
         retention-days: 30
 
+    - name: Package Linux tarball + checksum
+      run: |
+        tar -C artifact/Linux -czf "MonolitDistortion-Linux.tar.gz" "Monolit Distortion.vst3"
+        sha256sum "MonolitDistortion-Linux.tar.gz" > "MonolitDistortion-Linux.tar.gz.sha256"
+
+    - name: Upload Linux tarball
+      uses: actions/upload-artifact@v4
+      with:
+        name: MonolitDistortion-Linux-tarball
+        path: |
+          MonolitDistortion-Linux.tar.gz
+          MonolitDistortion-Linux.tar.gz.sha256
+        retention-days: 30
+
   # Create release when a tag is pushed
   release:
     needs: [build-windows, build-linux]
@@ -153,29 +221,31 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
 
     steps:
-    - name: Download Windows Artifact
+    - name: Download Windows installer
       uses: actions/download-artifact@v4
       with:
-        name: MonolitDistortion-VST3-Windows
-        path: windows
+        name: MonolitDistortion-Installer-Windows
+        path: release
 
-    - name: Download Linux Artifact
+    - name: Download Linux tarball
       uses: actions/download-artifact@v4
       with:
-        name: MonolitDistortion-VST3-Linux
-        path: linux
+        name: MonolitDistortion-Linux-tarball
+        path: release
 
-    - name: Create ZIP archives
+    - name: Generate combined checksums
       run: |
-        cd windows && zip -r "../MonolitDistortion-VST3-Windows.zip" "Monolit Distortion.vst3"
-        cd ../linux && zip -r "../MonolitDistortion-VST3-Linux.zip" "Monolit Distortion.vst3"
+        cd release
+        sha256sum *.exe *.tar.gz > SHA256SUMS
+        cat SHA256SUMS
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          MonolitDistortion-VST3-Windows.zip
-          MonolitDistortion-VST3-Linux.zip
+          release/*.exe
+          release/*.tar.gz
+          release/SHA256SUMS
         generate_release_notes: true
         draft: false
       env:

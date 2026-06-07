@@ -37,15 +37,15 @@ every box on the `release/vX.Y-*` branch before tagging `vX.Y`.
 
 - [ ] 🧪 **Soak test** — N instances rendering for an extended run without RSS growth or non-finite output. *(See `DistortionSoak` harness — `Source/Tools/SoakHarness.cpp`.)*
 - [ ] 🧪 **Multi-instance** — 10+ instances, independent state/RNG (spot-checked by `ThreadSafetyTests::testMultiInstanceIndependence`; full count via the soak harness).
-- [ ] ✍️ **Host compatibility** — load, automate, save/restore, bypass in ≥3 DAWs (e.g. Reaper, Ableton Live, Bitwig / Logic on macOS).
+- [ ] ✍️ **Host compatibility** — ≥3 DAWs per `docs/DAW_QA_matrix.md` (load, automate, save/restore, bypass).
 
-## 5. Packaging & distribution (resource-gated — see Open Questions)
+## 5. Packaging & distribution (v2.2 = Windows + Linux; macOS → v2.3)
 
 - [x] 🤖 Format claims match the build (VST3 + Standalone; VST2 dropped).
-- [ ] 🤖 Windows code-signing (Authenticode / Azure Trusted Signing) — *needs cert*.
-- [ ] 🤖 macOS build + AU + Developer-ID sign + notarize + staple — *needs Apple Developer account*.
-- [ ] 🤖 Installers — Inno (Win) / `.pkg` (mac) / tarball + `SHA256SUMS` (Linux).
-- [ ] 🤖 Signed installers + checksums attached to the GitHub Release on tag.
+- [x] 🤖 Installers wired — Inno (`installer/Distortion.iss`, Win) + tarball + `SHA256SUMS` (Linux); built in CI on every run.
+- [x] 🤖 Release-publish wired — installer + tarball + `SHA256SUMS` attached to the GitHub Release on tag.
+- [ ] 🤖 **Windows code-signing** — Azure Trusted Signing steps wired but *inert until the `AZURE_*` repo secrets are set* (needs an Azure Trusted Signing account + identity validation).
+- [~] macOS build + AU + notarize — **deferred to v2.3** (no Apple Developer account / Mac).
 
 ---
 
@@ -64,4 +64,18 @@ pluginval --strictness-level 10 --validate \
 # Soak / multi-instance (10 instances, ~2 min)
 cmake --build build --target DistortionSoak -j && \
   ./build/DistortionSoak_artefacts/Debug/DistortionSoak --instances 10 --seconds 120
+
+# Windows installer (on Windows, with Inno Setup installed)
+iscc /DMyAppVersion=2.2.0 installer\Distortion.iss   # -> dist\MonolitDistortion-2.2.0-Windows.exe
 ```
+
+## Activating Windows code-signing
+
+The CI signing steps stay inert until these repo secrets exist (Settings →
+Secrets → Actions), at which point every build signs the VST3 + installer:
+
+`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`,
+`AZURE_TS_ENDPOINT`, `AZURE_TS_ACCOUNT`, `AZURE_TS_CERT_PROFILE`
+
+Prerequisite: an [Azure Trusted Signing](https://learn.microsoft.com/azure/trusted-signing/)
+account with a validated identity and a certificate profile.
