@@ -122,6 +122,7 @@ namespace DSPConstants
     constexpr float OUTPUT_LIMITER_ATTACK_TIME_S = 0.0005f;    // 0.5ms attack (catch transients)
     constexpr float OUTPUT_LIMITER_RELEASE_TIME_S = 0.050f;    // 50ms release (preserve punch)
     constexpr float OUTPUT_LIMITER_KNEE_DB = 1.0f;             // 1dB soft knee (transparent onset)
+    constexpr float OUTPUT_LIMITER_CLAMP_SOFTNESS_DB = 1.0f;   // soft zone below ceiling for the hard backstop
 }
 
 // Forward declarations for test classes

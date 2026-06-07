@@ -48,9 +48,12 @@ formulation above only touches signal above the soft zone.
 
 ### Properties
 
-- **Hard guarantee:** `softened` asymptotes to `ceiling` and never reaches it, so
-  output magnitude is strictly `< -0.5 dBFS` on every sample, including the first
-  transient sample.
+- **Hard guarantee:** output magnitude is at or below `-0.5 dBFS` on every sample,
+  including the first transient sample. `softened` asymptotes to the ceiling in
+  real arithmetic; in float32 `tanh` saturates to exactly `1.0f` for large
+  arguments, so very hot transients land exactly on the ceiling — which is the
+  intended `-0.5 dBFS` safety ceiling. The guarantee is therefore `≤ ceiling`
+  (equals it only for very hot transients due to float `tanh` saturation).
 - **No audible corner:** C¹-continuous at `softPoint` (tanh′(0) = 1), so the
   transition into the clamp has no kink.
 - **Transparent below the soft zone:** below `softPoint` the clamp is a no-op, so

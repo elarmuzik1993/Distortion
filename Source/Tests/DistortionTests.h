@@ -371,6 +371,7 @@ private:
     void testEnvelopeAttackRelease();
     void testStateReset();
     void testGlobalMixCeiling();
+    void testFirstSampleCeiling();
 };
 
 //==============================================================================
