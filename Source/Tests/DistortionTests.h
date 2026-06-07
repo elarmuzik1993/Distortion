@@ -370,6 +370,7 @@ private:
     void testSoftKnee();
     void testEnvelopeAttackRelease();
     void testStateReset();
+    void testGlobalMixCeiling();
 };
 
 //==============================================================================
