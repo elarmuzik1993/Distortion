@@ -55,6 +55,7 @@ set(PLUGIN_SOURCES
     Source/CustomKnob.h
     Source/CyclingComboBox.h
     Source/LinearRamp.h
+    Source/FactoryPresets.h
 )
 
 # Test sources

@@ -2,6 +2,7 @@
 
 #include "DistortionTests.h"
 #include "../CyclingComboBox.h"
+#include "../FactoryPresets.h"
 #include "../RTAllocationGuard.h"
 #include <atomic>
 #include <iostream>
@@ -2971,6 +2972,74 @@ void StateIOTests::testLegacyMigration()
 
     expectWithinAbsoluteError(processor.subGuardFreqParam->load(), 0.0f, 0.5f,
         "Legacy bandSplitEnabled=false did not migrate to 0Hz (OFF) subGuardFreq");
+}
+
+//==============================================================================
+// FactoryPresetTests Implementation
+//==============================================================================
+
+void FactoryPresetTests::runTest()
+{
+    beginTest("Factory bank meets the 10-20 preset target");
+    testBankSize();
+
+    beginTest("Every preset references valid parameter IDs");
+    testParamIdsExist();
+
+    beginTest("Every preset produces finite output");
+    testPresetsProduceFiniteOutput();
+}
+
+void FactoryPresetTests::testBankSize()
+{
+    const auto count = FactoryPresets::all().size();
+    expect(count >= 10, "Factory bank below the DoD floor of 10 presets");
+    expect(count <= 20, "Factory bank above the DoD ceiling of 20 presets");
+}
+
+void FactoryPresetTests::testParamIdsExist()
+{
+    PluginProcessor processor;
+
+    for (const auto& pv : FactoryPresets::baseline())
+        expect(processor.parameters.getParameter(pv.id) != nullptr,
+               juce::String("Baseline references unknown parameter id: ") + pv.id);
+
+    for (const auto& preset : FactoryPresets::all())
+        for (const auto& pv : preset.overrides)
+            expect(processor.parameters.getParameter(pv.id) != nullptr,
+                   juce::String("Preset '") + preset.name
+                       + "' references unknown parameter id: " + pv.id);
+}
+
+void FactoryPresetTests::testPresetsProduceFiniteOutput()
+{
+    PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
+    processor.prepareToPlay(44100.0, 512);
+
+    for (const auto& preset : FactoryPresets::all())
+    {
+        const bool applied = FactoryPresets::apply(processor.parameters, preset.name);
+        expect(applied, juce::String("apply() rejected factory preset: ") + preset.name);
+
+        // A few blocks so envelope/LFO state settles, then verify finite output.
+        bool allFinite = true;
+        for (int block = 0; block < 4 && allFinite; ++block)
+        {
+            auto buffer = generateSineWave(220.0, 44100.0, 512, 0.5f, 2);
+            juce::MidiBuffer midi;
+            processor.processBlock(buffer, midi);
+
+            for (int ch = 0; ch < buffer.getNumChannels() && allFinite; ++ch)
+            {
+                const float* d = buffer.getReadPointer(ch);
+                for (int i = 0; i < buffer.getNumSamples(); ++i)
+                    if (! std::isfinite(d[i])) { allFinite = false; break; }
+            }
+        }
+        expect(allFinite, juce::String("Preset '") + preset.name + "' produced non-finite output");
+    }
 }
 
 //==============================================================================
