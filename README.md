@@ -6,7 +6,7 @@ A professional JUCE audio plugin featuring multi-stage distortion, LA2A-style co
 
 **Monolit Distortion** - A JUCE audio plugin by Boris Miscenco (Monolit Beats)
 - **Version**: 2.1
-- **Type**: Audio Plugin (VST3, VST2, Standalone)
+- **Type**: Audio Plugin (VST3, Standalone)
 - **Framework**: JUCE 7.0.12
 - **Platforms**: Windows, Linux
 - **Build Systems**: CMake (cross-platform), Visual Studio 2022
@@ -95,7 +95,6 @@ Distortion/
 ## Plugin Formats
 
 - **VST3**: Primary format
-- **VST2**: Legacy DAW support
 - **Standalone**: Testing without DAW
 
 ## Installation

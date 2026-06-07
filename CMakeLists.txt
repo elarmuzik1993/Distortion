@@ -82,7 +82,7 @@ juce_add_plugin(Distortion
     COPY_PLUGIN_AFTER_BUILD FALSE
     PLUGIN_MANUFACTURER_CODE Mbds
     PLUGIN_CODE Dist
-    FORMATS VST3 VST2 Standalone
+    FORMATS VST3 Standalone
     PRODUCT_NAME "Monolit Distortion"
 )
 

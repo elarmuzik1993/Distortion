@@ -5,7 +5,7 @@
 - **Projects HUB:** [[03 Projects/Projects HUB]]
 
 ## Project Overview
-**Monolit Distortion** is a professional JUCE audio plugin by Boris Miscenco (Monolit Beats) featuring multi-stage distortion processing, LA2A-style optical compression, and advanced signal processing. The plugin supports VST3, VST2, and Standalone formats.
+**Monolit Distortion** is a professional JUCE audio plugin by Boris Miscenco (Monolit Beats) featuring multi-stage distortion processing, LA2A-style optical compression, and advanced signal processing. The plugin supports VST3 and Standalone formats.
 
 ## Key Specifications
 - **DSP Specs**: See `DSP Architecture` section below.
