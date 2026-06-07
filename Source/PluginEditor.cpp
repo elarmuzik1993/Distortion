@@ -597,7 +597,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     setSize(672, 395);
     applyWindowScale(settingsState.windowScalePercent);
 
-    // Start timer for LFO modulation visual feedback (30Hz)
+    // Start timer for LFO modulation visual feedback (60Hz)
     startTimerHz(60);
 
     // Construction-time sizing is done; allow animated folds from now on
@@ -1125,7 +1125,7 @@ void PluginEditor::updateModulationHighlight()
 
 void PluginEditor::timerCallback()
 {
-    // Fold animation runs on its own dedicated 90Hz timer (foldAnimTimer)
+    // Fold animation runs on its own dedicated 60Hz timer (foldAnimTimer)
     // so the editor's 60Hz UI tick does not gate its frame rate.
 
     // Update LFO modulation indicator

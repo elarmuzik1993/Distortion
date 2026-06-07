@@ -1592,7 +1592,7 @@ private:
     double foldStartMs = 0.0;
     static constexpr double foldDurationMs = 280.0;
 
-    // Dedicated 90Hz timer for the fold animation so its cadence is independent
+    // Dedicated 60Hz timer for the fold animation so its cadence is independent
     // of the editor's 60Hz UI timer (smoother stepping during the collapse/expand).
     struct FoldAnimTimer : juce::Timer
     {
