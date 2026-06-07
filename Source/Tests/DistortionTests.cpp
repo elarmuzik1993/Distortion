@@ -890,6 +890,9 @@ void OutputLimiterTests::runTest()
 
     beginTest("Ceiling Holds With Hot Dry Under Global Mix");
     testGlobalMixCeiling();
+
+    beginTest("First-Sample Transient Ceiling");
+    testFirstSampleCeiling();
 }
 
 void OutputLimiterTests::testThresholdEnforcement()
@@ -1176,6 +1179,57 @@ void OutputLimiterTests::testGlobalMixCeiling()
 
     runScenario(false, "Bypass");
     runScenario(true,  "Active");
+}
+
+void OutputLimiterTests::testFirstSampleCeiling()
+{
+    using namespace TestUtilities;
+
+    PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
+    processor.prepareToPlay(44100.0, 512);
+
+    // Fresh state: envelope at unity (1.0). This is the worst case for the bug —
+    // the envelope has not begun attacking, so the first sample is multiplied by
+    // ~unity gain and (pre-fix) sails past the ceiling.
+    const float ceiling = juce::Decibels::decibelsToGain(
+        DSPConstants::OUTPUT_LIMITER_THRESHOLD_DB);
+
+    // Build a buffer whose FIRST sample is a +6 dBFS impulse (2.0 linear) on both
+    // channels, with the rest near silent so only the transient matters.
+    juce::AudioBuffer<float> buffer(2, 512);
+    buffer.clear();
+    const float impulse = juce::Decibels::decibelsToGain(6.0f); // ~2.0 linear
+    buffer.setSample(0, 0, impulse);
+    buffer.setSample(1, 0, impulse);
+
+    // Call the limiter directly (OutputLimiterTests is a friend of PluginProcessor).
+    processor.applyFinalLimiter(buffer);
+
+    // Every sample, especially sample 0, must be at or under the ceiling.
+    // Tight tolerance: this is a real -0.5 dBFS guarantee, not the loose 0.5 dB
+    // that testThresholdEnforcement allows for the settled envelope.
+    const float tol = 1.0e-4f;
+    bool ceilingHeld = true;
+    float worst = 0.0f;
+    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+    {
+        const float* data = buffer.getReadPointer(ch);
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+        {
+            const float a = std::abs(data[i]);
+            if (a > worst) worst = a;
+            if (a > ceiling + tol) ceilingHeld = false;
+        }
+    }
+
+    expect(ceilingHeld,
+        "First-sample transient exceeded ceiling: peak " +
+        juce::String(juce::Decibels::gainToDecibels(worst), 3) +
+        " dB (ceiling " +
+        juce::String(DSPConstants::OUTPUT_LIMITER_THRESHOLD_DB, 2) + " dB)");
+
+    expect(!containsInvalidSamples(buffer), "Output contains NaN or Inf");
 }
 
 //==============================================================================
