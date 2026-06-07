@@ -1843,6 +1843,9 @@ void DryWetAlignmentTests::runTest()
 
     beginTest("True-bypass path is latency-compensated");
     testBypassLatencyCompensation();
+
+    beginTest("Dry oversampler is kept warm without disturbing the wet output");
+    testDryOversamplerStaysWarm();
 }
 
 void DryWetAlignmentTests::testBypassLatencyCompensation()
@@ -2081,6 +2084,81 @@ void DryWetAlignmentTests::testDryOnlyLatency()
     const float rmsRatioDb = juce::Decibels::gainToDecibels(outRms / juce::jmax(inRms, 1.0e-9f));
     expect(std::abs(rmsRatioDb) < 0.5f,
            "Dry-only RMS should match input within 0.5dB. Got: " + juce::String(rmsRatioDb) + " dB");
+}
+
+void DryWetAlignmentTests::testDryOversamplerStaysWarm()
+{
+    // The matched dry oversampler runs on every active block — even at 100% wet, when
+    // its round-trip output is discarded — so its allpass/FIR history stays phase-locked
+    // to the always-running wet oversampler. If it only ran while blending, it would
+    // idle at 100% wet, its filter state would freeze, and the first block after the
+    // mix dropped would blend a steady-state wet path against a cold dry round-trip:
+    // a warm-up transient / brief combing until the phases realign.
+    //
+    // Note on scope: the 20 ms global-mix ramp makes that artifact sub-threshold in the
+    // shipping signal path (the dry blend weight is ~0 exactly while the dry path is
+    // coldest), so warming is kept as correctness insurance rather than an audible fix.
+    // What this test pins down is the one real risk of warming every block: it must NOT
+    // disturb the 100%-wet output. We drive two processors with an identical continuous
+    // sine — A holds 100% wet throughout; B dwells at 50% (dry path active) then returns
+    // to 100%. Once both are steady at 100% again, exercising B's dry round-trip must
+    // leave its wet output identical to A's (the round-trip only rewrites the discarded
+    // dry buffer; it never feeds back into the wet chain).
+    const double sr = 44100.0;
+    const int blockSize = 512;
+    const double freq = 12000.0;   // high band: where any dry-path leak would show worst
+
+    PluginProcessor procA, procB;
+    procA.setRateAndBufferSizeDetails(sr, blockSize);
+    procA.prepareToPlay(sr, blockSize);
+    procB.setRateAndBufferSizeDetails(sr, blockSize);
+    procB.prepareToPlay(sr, blockSize);
+    configureForAlignmentTest(procA, 100.0f);   // 100% wet throughout
+    configureForAlignmentTest(procB, 50.0f);    // 50% (dry active) -> 100% later
+
+    juce::MidiBuffer midi;
+    const double phaseInc = juce::MathConstants<double>::twoPi * freq / sr;
+    double phase = 0.0;
+
+    const int dwellBlocks   = 24;   // B sits at 50% — well past the 20 ms mix ramp
+    const int returnBlocks  = 24;   // both at 100%, let smoothing settle (needsGlobalMix false)
+    const int compareBlocks = 8;    // window where outputs must match
+    const int totalBlocks = dwellBlocks + returnBlocks + compareBlocks;
+
+    float maxDiff = 0.0f;
+    bool anyInvalid = false;
+
+    for (int b = 0; b < totalBlocks; ++b)
+    {
+        if (b == dwellBlocks)
+            setParameter(procB.parameters, "globalMix", 100.0f);
+
+        // Identical input for both processors (processBlock is in-place).
+        juce::AudioBuffer<float> bufA(2, blockSize), bufB(2, blockSize);
+        double p = phase;
+        for (int s = 0; s < blockSize; ++s)
+        {
+            const float v = 0.3f * static_cast<float>(std::sin(p));
+            bufA.setSample(0, s, v); bufA.setSample(1, s, v);
+            bufB.setSample(0, s, v); bufB.setSample(1, s, v);
+            p += phaseInc;
+        }
+        phase += phaseInc * blockSize;
+        phase = std::fmod(phase, juce::MathConstants<double>::twoPi);
+
+        procA.processBlock(bufA, midi);
+        procB.processBlock(bufB, midi);
+
+        anyInvalid = anyInvalid || containsInvalidSamples(bufA) || containsInvalidSamples(bufB);
+
+        if (b >= dwellBlocks + returnBlocks)
+            maxDiff = std::max(maxDiff, calculateMaxDifference(bufA, bufB));
+    }
+
+    expect(!anyInvalid, "Warm dry-oversampler path produced NaN/Inf");
+    expect(maxDiff < 1.0e-4f,
+        "Keeping the dry oversampler warm leaked into the 100%-wet output (max diff "
+        + juce::String(maxDiff) + "); it must only rewrite the discarded dry buffer");
 }
 
 void DryWetAlignmentTests::testNoCombFiltering()

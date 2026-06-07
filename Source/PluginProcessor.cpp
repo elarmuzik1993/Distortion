@@ -1444,9 +1444,18 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const float globalMixAmount = smoothedGlobalMix.getCurrentValue();
     // Capture dry buffer if mix is not 100% wet OR if it is currently transitioning (to avoid a one-block glitch)
     const bool needsGlobalMix = globalMixAmount < 0.999f || smoothedGlobalMix.isSmoothing();
-    if (needsGlobalMix)
+    // The dry round-trip reads/writes dryBuffer (sized to the prepared block + 64).
+    // A host block never exceeds the prepared size, so this holds in production; the
+    // guard only stops best-effort warming from running past the buffer on tests that
+    // push an over-large block through the oversampling-bypassing true-bypass path.
+    const bool dryFits = buffer.getNumSamples() <= dryBuffer.getNumSamples();
+    jassert(!needsGlobalMix || dryFits);   // an actual dry blend needs a big-enough dryBuffer
+    // Snapshot the dry signal whenever the matched dry oversampler exists — even at
+    // 100% wet, when the blend is skipped — so the active path can keep its dry
+    // allpass/FIR history phase-locked to the wet path (see GLOBAL MIX below); that
+    // round-trip needs the current dry block captured here.
+    if ((needsGlobalMix || dryOversampling) && dryFits)
     {
-        jassert(dryBuffer.getNumSamples() >= buffer.getNumSamples());
         for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
             dryBuffer.copyFrom(ch, 0, buffer, ch, 0, buffer.getNumSamples());
     }
@@ -1763,17 +1772,25 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // and latency — the blend is comb-free at every frequency for both the IIR and
     // FIR oversampling modes. A plain delay only matches the bulk group delay and
     // leaves the IIR's frequency-dependent phase uncompensated.
+    //
+    // Run the identity round-trip every active block — not only while blending — so
+    // the dry instance's allpass/FIR history tracks the wet path continuously. If it
+    // only ran while mixing, it would idle at 100% wet and its state would freeze
+    // while the wet oversampler kept advancing; the first block after the mix dropped
+    // would then blend a steady-state wet path against a cold dry round-trip, leaving
+    // a warm-up transient / transient combing until the phases realign. At 100% wet
+    // the round-trip only rewrites dryBuffer (discarded), so the output is untouched.
+    if (dryOversampling && dryFits)
+    {
+        auto dryBlock = juce::dsp::AudioBlock<float>(dryBuffer).getSubBlock(0, static_cast<size_t>(buffer.getNumSamples()));
+        dryOversampling->processSamplesUp(dryBlock);     // fills the internal oversampled buffer
+        dryOversampling->processSamplesDown(dryBlock);   // identity round-trip: matched phase + latency
+    }
+
     if (needsGlobalMix)
     {
         const int numSamp = buffer.getNumSamples();
         const int numCh = buffer.getNumChannels();
-
-        if (dryOversampling)
-        {
-            auto dryBlock = juce::dsp::AudioBlock<float>(dryBuffer).getSubBlock(0, static_cast<size_t>(numSamp));
-            dryOversampling->processSamplesUp(dryBlock);     // fills the internal oversampled buffer
-            dryOversampling->processSamplesDown(dryBlock);   // identity round-trip: matched phase + latency
-        }
 
         for (int sample = 0; sample < numSamp; ++sample)
         {
