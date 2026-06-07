@@ -48,6 +48,13 @@ jobs:
       run: |
         build/DistortionTests_artefacts/${{ env.BUILD_TYPE }}/DistortionTests.exe
 
+    - name: Validate with pluginval (strictness 10)
+      shell: bash
+      run: |
+        curl -fsSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip
+        unzip -q -o pluginval.zip
+        ./pluginval.exe --strictness-level 10 --timeout-ms 600000 --validate "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Monolit Distortion.vst3"
+
     - name: Prepare Windows Artifact
       shell: bash
       run: |
@@ -78,6 +85,7 @@ jobs:
         sudo apt-get install -y \
           build-essential \
           cmake \
+          xvfb \
           libasound2-dev \
           libjack-jackd2-dev \
           ladspa-sdk \
@@ -118,6 +126,13 @@ jobs:
     - name: Run Tests
       run: |
         ./build/DistortionTests_artefacts/${{ env.BUILD_TYPE }}/DistortionTests
+
+    - name: Validate with pluginval (strictness 10)
+      run: |
+        curl -fsSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Linux.zip
+        unzip -q -o pluginval.zip
+        chmod +x pluginval
+        xvfb-run -a ./pluginval --strictness-level 10 --timeout-ms 600000 --validate "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Monolit Distortion.vst3"
 
     - name: Prepare Linux Artifact
       run: |
