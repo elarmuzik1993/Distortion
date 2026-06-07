@@ -261,6 +261,57 @@ target_link_libraries(DistortionRender
 )
 
 # ============================================================================
+# Soak / Multi-Instance Harness (Console Application)
+# Headless stress tool for the DoD 24h-stress and 10+-instance shipping gates.
+# See Source/Tools/SoakHarness.cpp.
+# ============================================================================
+juce_add_console_app(DistortionSoak
+    COMPANY_NAME "Boris Miscenco"
+    BUNDLE_ID "com.monolitbeatz.MonolitDistortionSoak"
+    PRODUCT_NAME "DistortionSoak"
+)
+
+target_sources(DistortionSoak PRIVATE
+    ${PLUGIN_SOURCES}
+    Source/Tools/SoakHarness.cpp
+)
+
+juce_generate_juce_header(DistortionSoak)
+
+target_compile_definitions(DistortionSoak
+    PRIVATE
+        JucePlugin_Name="Distortion"
+        JucePlugin_IsSynth=0
+        JucePlugin_WantsMidiInput=0
+        JucePlugin_ProducesMidiOutput=0
+        JucePlugin_IsMidiEffect=0
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_STRICT_REFCOUNTEDPOINTER=1
+        JUCE_STANDALONE_APPLICATION=1
+)
+
+target_link_libraries(DistortionSoak
+    PRIVATE
+        DistortionData
+        juce::juce_audio_basics
+        juce::juce_audio_devices
+        juce::juce_audio_formats
+        juce::juce_audio_processors
+        juce::juce_audio_utils
+        juce::juce_core
+        juce::juce_data_structures
+        juce::juce_dsp
+        juce::juce_events
+        juce::juce_graphics
+        juce::juce_gui_basics
+        juce::juce_gui_extra
+    PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+)
+
+# ============================================================================
 # Install targets
 # ============================================================================
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
