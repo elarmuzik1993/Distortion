@@ -2824,7 +2824,15 @@ void PluginProcessor::resetDSPState()
         manualDCBlockerPrevOutput[ch] = 0.0f;
     }
 
-    // Clear the matched dry-path oversampler so the global mix doesn't replay stale tails
+    // Clear both oversamplers in lock-step so the global mix doesn't replay stale tails
+    // and the dry path stays phase-matched to the wet. The dry instance is a matched
+    // identity round-trip phase-locked to the wet oversampler (see the GLOBAL MIX block
+    // in processBlock); resetting only one restarts that path cold against a still-warm
+    // counterpart, combing the blend through the warm-up transient. This matters on the
+    // live state-restore path (processBlock -> stateNeedsReset), where rebuildOversampling
+    // has not just reset both. reset() is allocation-free, so this stays RT-safe.
+    if (oversampling)
+        oversampling->reset();
     if (dryOversampling)
         dryOversampling->reset();
 

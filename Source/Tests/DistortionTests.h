@@ -174,6 +174,7 @@ private:
     void testIirPartialMixCoherence();
     void testBypassLatencyCompensation();
     void testDryOversamplerStaysWarm();
+    void testResetClearsWetOversampler();
 };
 
 /** Tests for all parameters - ranges and smoothing */

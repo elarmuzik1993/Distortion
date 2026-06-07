@@ -1846,6 +1846,9 @@ void DryWetAlignmentTests::runTest()
 
     beginTest("Dry oversampler is kept warm without disturbing the wet output");
     testDryOversamplerStaysWarm();
+
+    beginTest("State reset clears the wet oversampler in lock-step with the dry");
+    testResetClearsWetOversampler();
 }
 
 void DryWetAlignmentTests::testBypassLatencyCompensation()
@@ -2159,6 +2162,66 @@ void DryWetAlignmentTests::testDryOversamplerStaysWarm()
     expect(maxDiff < 1.0e-4f,
         "Keeping the dry oversampler warm leaked into the 100%-wet output (max diff "
         + juce::String(maxDiff) + "); it must only rewrite the discarded dry buffer");
+}
+
+void DryWetAlignmentTests::testResetClearsWetOversampler()
+{
+    // resetDSPState() runs on the audio thread when a state restore lands mid-stream
+    // (processBlock sees stateNeedsReset). It clears the matched dry oversampler so the
+    // global mix can't replay stale tails — but the wet oversampler feeds that same
+    // blend and is what the dry path is phase-locked to. If only the dry instance is
+    // reset, the dry path restarts cold while the wet path keeps its charged allpass/FIR
+    // history: the two are no longer phase-matched, and the first blocks after the
+    // restore comb until they realign. Probe it directly: charge the wet oversampler,
+    // reset, then push silence through it. A properly cleared oversampler turns silence
+    // into silence; a stale one bleeds a decaying tail from its retained filter state.
+    const double sr = 44100.0;
+    const int blockSize = 512;
+
+    PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(sr, blockSize);
+    processor.prepareToPlay(sr, blockSize);
+
+    expect(processor.oversampling != nullptr,
+        "Test requires an active wet oversampler (default 4x)");
+
+    const int numCh = juce::jmax(1, processor.getTotalNumInputChannels());
+
+    // Charge the wet oversampler's internal filter state with a sustained loud signal.
+    for (int b = 0; b < 8; ++b)
+    {
+        juce::AudioBuffer<float> warm(numCh, blockSize);
+        for (int ch = 0; ch < numCh; ++ch)
+        {
+            auto* d = warm.getWritePointer(ch);
+            for (int s = 0; s < blockSize; ++s)
+                d[s] = 0.8f * std::sin(juce::MathConstants<float>::twoPi * 5000.0f
+                    * static_cast<float>(b * blockSize + s) / static_cast<float>(sr));
+        }
+        juce::dsp::AudioBlock<float> wb(warm);
+        processor.oversampling->processSamplesUp(wb);
+        processor.oversampling->processSamplesDown(wb);
+    }
+
+    // Live state-restore path: clear DSP state mid-stream.
+    processor.resetDSPState();
+
+    // Silence in -> silence out, iff the wet oversampler's state was actually cleared.
+    float maxTail = 0.0f;
+    for (int b = 0; b < 4; ++b)
+    {
+        juce::AudioBuffer<float> probe(numCh, blockSize);
+        probe.clear();
+        juce::dsp::AudioBlock<float> pb(probe);
+        processor.oversampling->processSamplesUp(pb);
+        processor.oversampling->processSamplesDown(pb);
+        maxTail = std::max(maxTail, calculatePeak(probe));
+    }
+
+    expect(maxTail < 1.0e-6f,
+        "resetDSPState() left the wet oversampler charged (silent-input tail peak "
+        + juce::String(maxTail) + "); it must be reset in lock-step with the dry "
+        "oversampler to keep the dry/wet blend phase-matched after a state restore");
 }
 
 void DryWetAlignmentTests::testNoCombFiltering()
