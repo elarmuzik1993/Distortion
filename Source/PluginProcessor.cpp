@@ -1794,6 +1794,37 @@ void PluginProcessor::applyFinalLimiter(juce::AudioBuffer<float>& buffer)
             auto* channelData = buffer.getWritePointer(channel);
             channelData[sample] *= outputLimiterEnvelope;
         }
+
+        // Hard backstop: the envelope has a finite attack, so the first samples
+        // of a transient can still exceed the ceiling before gain reduction
+        // catches up. Re-measure the post-envelope stereo-linked peak and apply
+        // a memoryless soft clamp that is transparent below the soft point and
+        // asymptotes to (never reaches) the ceiling — guaranteeing |out| < ceiling
+        // on every sample, including sample 0.
+        const float softPoint = thresholdLinear
+            * juce::Decibels::decibelsToGain(-DSPConstants::OUTPUT_LIMITER_CLAMP_SOFTNESS_DB);
+
+        float postPeak = 0.0f;
+        for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+        {
+            const float absValue = std::abs(buffer.getSample(channel, sample));
+            if (absValue > postPeak)
+                postPeak = absValue;
+        }
+
+        if (postPeak > softPoint)
+        {
+            const float range = thresholdLinear - softPoint; // > 0 (softness > 0)
+            const float softened = softPoint
+                + range * std::tanh((postPeak - softPoint) / range);
+            const float clampFactor = softened / postPeak; // <= 1, stereo-linked
+
+            for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+            {
+                auto* channelData = buffer.getWritePointer(channel);
+                channelData[sample] *= clampFactor;
+            }
+        }
     }
 }
 
