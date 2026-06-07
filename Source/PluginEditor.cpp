@@ -318,16 +318,20 @@ PluginEditor::PluginEditor(PluginProcessor& p)
             w->addButton("OK", 1, juce::KeyPress(juce::KeyPress::returnKey));
             w->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
 
-            w->enterModalState(true, juce::ModalCallbackFunction::create([this, w](int result)
+            juce::Component::SafePointer<PluginEditor> safeThis (this);
+            w->enterModalState(true, juce::ModalCallbackFunction::create([safeThis, w](int result)
             {
-                if (result == 1)
+                // Read the editor contents from w (always valid until we delete it),
+                // but only touch editor state if the editor still exists — the user
+                // may have closed the plugin while this modal was open.
+                if (result == 1 && safeThis != nullptr)
                 {
                     juce::String presetName = w->getTextEditorContents("presetName");
                     if (presetName.isNotEmpty())
                     {
-                        savePreset(presetName);
-                        audioProcessor.parameters.state.setProperty("currentPresetName", presetName, nullptr);
-                        refreshPresetList();
+                        safeThis->savePreset(presetName);
+                        safeThis->audioProcessor.parameters.state.setProperty("currentPresetName", presetName, nullptr);
+                        safeThis->refreshPresetList();
                     }
                 }
                 delete w;
@@ -350,9 +354,10 @@ PluginEditor::PluginEditor(PluginProcessor& p)
             for (int i = 0; i < presetFiles.size(); ++i)
                 deleteMenu.addItem(i + 1, presetFiles[i].getFileNameWithoutExtension());
 
-            deleteMenu.showMenuAsync(juce::PopupMenu::Options(), [this, presetFiles](int result)
+            juce::Component::SafePointer<PluginEditor> safeThis (this);
+            deleteMenu.showMenuAsync(juce::PopupMenu::Options(), [safeThis, presetFiles](int result)
             {
-                if (result > 0)
+                if (result > 0 && safeThis != nullptr)
                 {
                     juce::String presetName = presetFiles[result - 1].getFileNameWithoutExtension();
 
@@ -363,12 +368,12 @@ PluginEditor::PluginEditor(PluginProcessor& p)
                         .withButton("OK")
                         .withButton("Cancel");
 
-                    juce::AlertWindow::showAsync(options, [this, presetName](int r)
+                    juce::AlertWindow::showAsync(options, [safeThis, presetName](int r)
                     {
-                        if (r == 1)
+                        if (r == 1 && safeThis != nullptr)
                         {
-                            deletePreset(presetName);
-                            refreshPresetList();
+                            safeThis->deletePreset(presetName);
+                            safeThis->refreshPresetList();
                         }
                     });
                 }
@@ -1545,7 +1550,8 @@ void PluginEditor::hideSettingsOverlay()
 {
     settingsOverlay.reset();
     startFoldAnimation(); // animate fold/unfold to match the current scope setting
-    juce::MessageManager::callAsync ([this] { saveSettings(); });
+    juce::Component::SafePointer<PluginEditor> safeThis (this);
+    juce::MessageManager::callAsync ([safeThis] { if (safeThis != nullptr) safeThis->saveSettings(); });
 }
 
 void PluginEditor::applyWindowScale(int scalePercent)
@@ -1621,7 +1627,8 @@ void PluginEditor::toggleOscilloscopeMode()
     applyOscilloscopeEnabled(newState);
     // Defer the disk write — a synchronous XML save on the message thread here
     // would block the fold timer's first tick (~click→first-frame latency).
-    juce::MessageManager::callAsync ([this] { saveSettings(); });
+    juce::Component::SafePointer<PluginEditor> safeThis (this);
+    juce::MessageManager::callAsync ([safeThis] { if (safeThis != nullptr) safeThis->saveSettings(); });
 }
 
 void PluginEditor::startFoldAnimation()
