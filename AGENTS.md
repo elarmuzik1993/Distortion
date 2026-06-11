@@ -67,13 +67,26 @@ python scripts/fix_moduleinfo_json.py build --all
 
 ## Build & Test
 - **Framework**: JUCE UnitTest runner.
-- **Coverage**: 2240+ assertions (100% PASS RATE).
-- **Categories**: DSP, Compression, LFO, ProcessBlock, ThreadSafety, SampleRate (44.1k-192k), State I/O.
+- **Coverage**: 2460+ assertions (100% PASS RATE).
+- **Categories**: DSP, Compression, LFO, ProcessBlock, ThreadSafety, SampleRate (44.1k-192k), State I/O, FactoryPresets.
 - **Golden Audio**: Reference file comparison tests included.
+- **Host validation**: CI gates on `pluginval --strictness-level 10` (Windows + Linux; xvfb on Linux).
+- **Soak/stress**: `DistortionSoak` console tool (`Source/Tools/SoakHarness.cpp`) runs N instances faster-than-realtime, failing on non-finite output or RSS growth (DoD 24h/10+-instance gates).
+
+## Release & Packaging
+- **Formats shipped**: VST3 + Standalone, Windows + Linux. macOS deferred (see Linear USE-50).
+- **Factory presets**: single source of truth in `Source/FactoryPresets.h` (baseline + table + `apply`/`isFactory`), consumed by the editor and tests. Do NOT re-hardcode preset lists in `PluginEditor`.
+- **Windows installer**: Inno Setup (`installer/Distortion.iss`) → CommonFiles\VST3; built in CI. Code-signing (Azure Trusted Signing) is wired but **inert until the `AZURE_*` repo secrets are set** — unsigned installer builds fine without them.
+- **Linux**: tarball + `SHA256SUMS`.
+- **Release gate**: `RELEASE_CHECKLIST.md` (DoD gates, automated/manual). Manual host pass: `docs/DAW_QA_matrix.md`.
+- **Publish**: tag `v*` → CI attaches installer + tarball + `SHA256SUMS` to the GitHub Release.
 
 ## Project Layout
-- `Source/`: PluginProcessor, PluginEditor, CustomKnob, and DSP logic.
+- `Source/`: PluginProcessor, PluginEditor, CustomKnob, `FactoryPresets.h`, and DSP logic.
+- `Source/Tools/`: headless console tools — `RenderHarness` (audition), `SoakHarness` (stress).
+- `installer/`: Inno Setup script for the Windows installer.
 - `library/`: Shared utility code.
 - `scripts/`: Python fix scripts and build utilities.
-- `docs/`: Extra documentation and safety checklists.
+- `docs/`: Extra documentation, safety checklists, DAW QA matrix.
+- `RELEASE_CHECKLIST.md`: gated Definition-of-Done for cutting a release.
 - `Distortion.jucer`: Projucer project file.
