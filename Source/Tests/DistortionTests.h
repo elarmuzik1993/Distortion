@@ -332,6 +332,23 @@ private:
 };
 
 //==============================================================================
+// Factory Preset Tests
+//==============================================================================
+
+/** Tests for the shared factory preset bank (FactoryPresets.h) */
+class FactoryPresetTests : public juce::UnitTest
+{
+public:
+    FactoryPresetTests() : UnitTest("Factory Presets", TestCategories::StateIO) {}
+    void runTest() override;
+
+private:
+    void testBankSize();
+    void testParamIdsExist();
+    void testPresetsProduceFiniteOutput();
+};
+
+//==============================================================================
 // Golden Audio Tests
 //==============================================================================
 
@@ -543,6 +560,7 @@ inline void registerAllTests()
     static FastMathAccuracyTest fastMathAccuracyTest;
     static ProcessBlockDecompTest processBlockDecompTest;
     static StateIOTests stateIOTests;
+    static FactoryPresetTests factoryPresetTests;
     static GoldenAudioTests goldenAudioTests;
     static NormalizationTests normalizationTests;
     static StatefulDistortionTests statefulDistortionTests;

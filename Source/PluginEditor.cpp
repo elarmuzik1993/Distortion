@@ -9,6 +9,7 @@
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
 #include "GitVersion.h"
+#include "FactoryPresets.h"
 
 //Setup Slider in Constructor Here
 
@@ -386,17 +387,10 @@ PluginEditor::PluginEditor(PluginProcessor& p)
         {
             juce::String presetName = presetSelector.getText();
 
-            if (presetName == "Default" || presetName == "Warm Tube" ||
-                presetName == "Hard Clip" || presetName == "Soft Saturation" ||
-                presetName == "808 Safe" || presetName == "Parallel Grit" ||
-                presetName == "Vocal Warmth" || presetName == "EXTREME")
-            {
+            if (FactoryPresets::isFactory(presetName))
                 loadFactoryPreset(presetName);
-            }
             else
-            {
                 loadPreset(presetName);
-            }
 
             // Persist the selected preset name so the DAW session can restore it
             audioProcessor.parameters.state.setProperty("currentPresetName", presetName, nullptr);
@@ -1348,14 +1342,8 @@ void PluginEditor::refreshPresetList()
     // Add factory presets (built-in)
     int id = 1;
     presetSelector.addSectionHeading("Factory Presets");
-    presetSelector.addItem("Default", id++);
-    presetSelector.addItem("Warm Tube", id++);
-    presetSelector.addItem("Hard Clip", id++);
-    presetSelector.addItem("Soft Saturation", id++);
-    presetSelector.addItem("808 Safe", id++);
-    presetSelector.addItem("Parallel Grit", id++);
-    presetSelector.addItem("Vocal Warmth", id++);
-    presetSelector.addItem("EXTREME", id++);
+    for (const auto& preset : FactoryPresets::all())
+        presetSelector.addItem(preset.name, id++);
     presetSelector.addSeparator();
 
     // Add user presets
@@ -1402,120 +1390,10 @@ void PluginEditor::loadFactoryPreset(const juce::String& presetName)
     }
     updateLockIcons();
 
-    // Helper lambda to set parameter values
-    auto setParam = [this](const juce::String& paramID, float value)
-    {
-        if (auto* param = audioProcessor.parameters.getParameter(paramID))
-        {
-            param->setValueNotifyingHost(param->convertTo0to1(value));
-        }
-    };
-
-    // Reset every parameter to a neutral baseline so factory presets load deterministically.
-    setParam("inputGain", 50.0f);
-    setParam("outputGain", 50.0f);
-    setParam("distortionAmount", 0.0f);
-    setParam("highPassFreq", 20.0f);
-    setParam("subGuardFreq", 60.0f);
-    setParam("clipType", 0.0f);
-    setParam("distMix", 100.0f);
-    setParam("tone", 20000.0f);
-    setParam("waveshaperClean", 0.0f);
-    setParam("waveshaperMix", 0.0f);
-    setParam("lfoRate", 0.0f);
-    setParam("lfoDepth", 0.0f);
-    setParam("lfoWaveform", 0.0f);
-    setParam("lfoEnabled", 0.0f);
-    setParam("lfoDestination", 0.0f);
-    setParam("compPeakReduction", 0.0f);
-    setParam("compMakeupGain", 50.0f);
-    setParam("compRatio", 0.0f);
-    setParam("compEnabled", 0.0f);
-    setParam("autoGainEnabled", 1.0f);
-    setParam("extremeEnabled", 0.0f);
-    setParam("globalMix", 100.0f);
-
-    if (presetName == "Default")
-    {
-        // Baseline already applied above — nothing to override.
-    }
-    else if (presetName == "Warm Tube")
-    {
-        setParam("inputGain", 60.0f);
-        setParam("outputGain", 45.0f);
-        setParam("distortionAmount", 30.0f);
-        setParam("highPassFreq", 80.0f);
-        setParam("clipType", 1.0f);  // Tube Overdrive
-        setParam("distMix", 70.0f);
-    }
-    else if (presetName == "Hard Clip")
-    {
-        setParam("inputGain", 70.0f);
-        setParam("outputGain", 40.0f);
-        setParam("distortionAmount", 70.0f);
-        setParam("highPassFreq", 100.0f);
-        setParam("subGuardFreq", 150.0f);
-        setParam("clipType", 0.0f);  // Brutal Fuzz (closest to hard clipping)
-        setParam("compPeakReduction", 30.0f);
-        setParam("compMakeupGain", 60.0f);
-        setParam("compEnabled", 1.0f);
-    }
-    else if (presetName == "Soft Saturation")
-    {
-        setParam("inputGain", 55.0f);
-        setParam("outputGain", 48.0f);
-        setParam("distortionAmount", 20.0f);
-        setParam("highPassFreq", 40.0f);
-        setParam("clipType", 3.0f);  // Tape Saturation
-        setParam("distMix", 50.0f);
-    }
-    else if (presetName == "808 Safe")
-    {
-        setParam("inputGain", 65.0f);
-        setParam("outputGain", 45.0f);
-        setParam("distortionAmount", 60.0f);
-        setParam("highPassFreq", 150.0f);
-        setParam("subGuardFreq", 150.0f);
-        setParam("clipType", 3.0f);  // Tape Saturation (sub-friendly)
-    }
-    else if (presetName == "Parallel Grit")
-    {
-        // Heavy distortion blended in parallel via global mix
-        setParam("inputGain", 58.0f);
-        setParam("distortionAmount", 85.0f);
-        setParam("highPassFreq", 60.0f);
-        setParam("clipType", 5.0f);  // Diode Clipper
-        setParam("globalMix", 35.0f);
-        setParam("compPeakReduction", 20.0f);
-        setParam("compEnabled", 1.0f);
-    }
-    else if (presetName == "Vocal Warmth")
-    {
-        // Tube warmth with slow LFO tone sweep
-        setParam("distortionAmount", 25.0f);
-        setParam("highPassFreq", 100.0f);
-        setParam("clipType", 1.0f);       // Tube Overdrive
-        setParam("tone", 6000.0f);
-        setParam("distMix", 60.0f);
-        setParam("lfoEnabled", 1.0f);
-        setParam("lfoDestination", 1.0f); // Tone Filter
-        setParam("lfoRate", 0.3f);
-        setParam("lfoDepth", 30.0f);
-    }
-    else if (presetName == "EXTREME")
-    {
-        // Over-the-top saturation using EXTREME toggle + limiter compression
-        setParam("inputGain", 75.0f);
-        setParam("outputGain", 35.0f);
-        setParam("distortionAmount", 90.0f);
-        setParam("highPassFreq", 120.0f);
-        setParam("subGuardFreq", 100.0f);
-        setParam("clipType", 6.0f);      // Decimator
-        setParam("extremeEnabled", 1.0f);
-        setParam("compPeakReduction", 40.0f);
-        setParam("compRatio", 1.0f);     // Limit mode
-        setParam("compEnabled", 1.0f);
-    }
+    // Apply the named preset from the shared factory table (single source of
+    // truth — see FactoryPresets.h). The table applies a neutral baseline first,
+    // then the preset's overrides, so loads are deterministic.
+    FactoryPresets::apply(audioProcessor.parameters, presetName);
 }
 
 // ============================================================================
