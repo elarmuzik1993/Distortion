@@ -11,6 +11,7 @@
 #include "../RTAllocationGuard.h"
 #include "../Diagnostics/DiagnosticsSink.h"
 #include "../Diagnostics/ReportComposer.h"
+#include "../Diagnostics/ReportSender.h"
 
 //==============================================================================
 // Test Categories
@@ -663,6 +664,68 @@ public:
     }
 };
 
+struct FakeTransport : diag::ITransport
+{
+    int calls = 0; bool succeed = true; juce::StringArray bodies;
+    diag::TransportResult post (const juce::String&, const juce::String& body, int) override
+    {
+        ++calls; bodies.add (body);
+        return { succeed, succeed ? 200 : 0 };
+    }
+};
+
+class DiagSenderTest : public juce::UnitTest
+{
+public:
+    DiagSenderTest() : juce::UnitTest ("Diagnostics ReportSender", "Diagnostics") {}
+    void runTest() override
+    {
+        auto tmp = juce::File::createTempFile ("diagsend");
+        tmp.deleteFile(); tmp.createDirectory();
+
+        beginTest ("success deletes the report");
+        {
+            auto dir = tmp.getChildFile (juce::Uuid().toString()); dir.createDirectory();
+            diag::ReportStore store (dir);
+            diag::Report r; r.trigger = "auto";
+            store.enqueue (r); store.enqueue (r);
+            FakeTransport tx;
+            diag::ReportSender sender (store, tx, "https://example.test/r");
+            int sent = sender.drainOnce (10);
+            expectEquals (sent, 2);
+            expectEquals (store.listPending().size(), 0);
+            expectEquals (tx.calls, 2);
+        }
+
+        beginTest ("failure keeps the report for retry");
+        {
+            auto dir = tmp.getChildFile (juce::Uuid().toString()); dir.createDirectory();
+            diag::ReportStore store (dir);
+            diag::Report r; r.trigger = "auto"; store.enqueue (r);
+            FakeTransport tx; tx.succeed = false;
+            diag::ReportSender sender (store, tx, "https://example.test/r");
+            int sent = sender.drainOnce (10);
+            expectEquals (sent, 0);
+            expectEquals (store.listPending().size(), 1);  // reverted, not lost
+        }
+
+        beginTest ("per-launch send cap is honored");
+        {
+            auto dir = tmp.getChildFile (juce::Uuid().toString()); dir.createDirectory();
+            diag::ReportStore store (dir);
+            diag::Report r; r.trigger = "auto";
+            for (int i = 0; i < 5; ++i) store.enqueue (r);
+            FakeTransport tx;
+            diag::ReportSender sender (store, tx, "https://example.test/r");
+            int sent = sender.drainOnce (3);
+            expectEquals (sent, 3);
+            expectEquals (store.listPending().size(), 2);
+        }
+
+        tmp.deleteRecursively();
+    }
+};
+
 // Force static test registration
 inline void registerAllTests()
 {
@@ -715,6 +778,7 @@ inline void registerAllTests()
     static DiagReportJsonTest diagReportJsonTest;
     static DiagReportStoreTest diagReportStoreTest;
     static DiagSinkComposerTest diagSinkComposerTest;
+    static DiagSenderTest diagSenderTest;
 }
 
 #endif // JUCE_DEBUG

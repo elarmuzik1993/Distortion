@@ -64,6 +64,8 @@ set(PLUGIN_SOURCES
     Source/Diagnostics/DiagnosticsSink.h
     Source/Diagnostics/ReportComposer.h
     Source/Diagnostics/ReportComposer.cpp
+    Source/Diagnostics/ReportSender.h
+    Source/Diagnostics/ReportSender.cpp
 )
 
 # Test sources
