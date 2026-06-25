@@ -6,6 +6,7 @@
 #include "../PluginProcessor.h"
 #include "../FastMath.h"
 #include "TestUtilities.h"
+#include "../Diagnostics/Report.h"
 
 //==============================================================================
 // Test Categories
@@ -517,6 +518,44 @@ public:
     }
 };
 
+class DiagReportJsonTest : public juce::UnitTest
+{
+public:
+    DiagReportJsonTest() : juce::UnitTest ("Diagnostics Report JSON", "Diagnostics") {}
+    void runTest() override
+    {
+        beginTest ("round-trips all fields");
+        diag::Report r;
+        r.trigger = "user"; r.installId = "abc-123"; r.pluginVersion = "v9.9";
+        r.os = "Linux"; r.hostWrapper = "VST3"; r.hostName = "Reaper";
+        r.sampleRate = 48000.0; r.blockSize = 512;
+        r.nonFiniteBlocks = 3; r.totalBlocks = 1000;
+        r.message = "it broke"; r.createdUtc = "2026-06-17T00:00:00Z";
+
+        bool ok = false;
+        auto back = diag::Report::fromJson (r.toJson(), ok);
+        expect (ok, "fromJson failed to parse");
+        expectEquals (back.trigger, r.trigger);
+        expectEquals (back.installId, r.installId);
+        expectEquals (back.sampleRate, r.sampleRate);
+        expectEquals ((int) back.nonFiniteBlocks, (int) r.nonFiniteBlocks);
+        expectEquals (back.message, r.message);
+        expectEquals (back.schema, r.schema);
+        expectEquals (back.pluginVersion, r.pluginVersion);
+        expectEquals (back.os, r.os);
+        expectEquals (back.hostWrapper, r.hostWrapper);
+        expectEquals (back.hostName, r.hostName);
+        expectEquals (back.blockSize, r.blockSize);
+        expectEquals ((juce::int64) back.totalBlocks, (juce::int64) r.totalBlocks);
+        expectEquals (back.createdUtc, r.createdUtc);
+
+        beginTest ("garbage input fails cleanly");
+        bool ok2 = true;
+        diag::Report::fromJson ("not json {", ok2);
+        expect (! ok2, "garbage should set ok=false");
+    }
+};
+
 // Force static test registration
 inline void registerAllTests()
 {
@@ -566,6 +605,7 @@ inline void registerAllTests()
     static StatefulDistortionTests statefulDistortionTests;
     static SubGuardFlatnessTest subGuardFlatnessTest;
     static InputFilterModeTest inputFilterModeTest;
+    static DiagReportJsonTest diagReportJsonTest;
 }
 
 #endif // JUCE_DEBUG

@@ -56,6 +56,9 @@ set(PLUGIN_SOURCES
     Source/CyclingComboBox.h
     Source/LinearRamp.h
     Source/FactoryPresets.h
+    Source/Diagnostics/AppPaths.h
+    Source/Diagnostics/Report.h
+    Source/Diagnostics/ITransport.h
 )
 
 # Test sources
