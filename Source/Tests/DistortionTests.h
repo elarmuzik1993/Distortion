@@ -8,6 +8,9 @@
 #include "TestUtilities.h"
 #include "../Diagnostics/Report.h"
 #include "../Diagnostics/ReportStore.h"
+#include "../RTAllocationGuard.h"
+#include "../Diagnostics/DiagnosticsSink.h"
+#include "../Diagnostics/ReportComposer.h"
 
 //==============================================================================
 // Test Categories
@@ -613,6 +616,53 @@ public:
     }
 };
 
+class DiagSinkComposerTest : public juce::UnitTest
+{
+public:
+    DiagSinkComposerTest() : juce::UnitTest ("Diagnostics Sink+Composer", "Diagnostics") {}
+    void runTest() override
+    {
+        beginTest ("noteBlock is allocation-free (RT-safe)");
+        diag::DiagnosticsSink sink;
+        rt_guard::resetAllocationCounter();
+        {
+            rt_guard::ScopedRTAssert scope;
+            for (int i = 0; i < 1000; ++i)
+                sink.noteBlock (i % 100 != 0);   // 1% non-finite
+        }
+        expectEquals (rt_guard::getAllocationCount(), 0, "noteBlock allocated on audio thread");
+        expect (sink.hasAnomalies(), "should have flagged anomalies");
+        expectEquals ((int) sink.snapshot().nonFiniteBlocks, 10);
+        expectEquals ((int) sink.snapshot().totalBlocks, 1000);
+
+        beginTest ("reset clears counters");
+        sink.reset();
+        expect (! sink.hasAnomalies(), "reset failed");
+        expectEquals ((int) sink.snapshot().totalBlocks, 0);
+
+        beginTest ("composer populates report from snapshot");
+        diag::DiagnosticsSink::Summary sum { 3, 500 };
+        auto r = diag::ReportComposer::compose ("auto", "", sum, 48000.0, 256,
+                                                juce::AudioProcessor::wrapperType_VST3, "id-1");
+        expectEquals (r.trigger, juce::String ("auto"));
+        expectEquals (r.installId, juce::String ("id-1"));
+        expectEquals (r.sampleRate, 48000.0);
+        expectEquals ((int) r.nonFiniteBlocks, 3);
+        expect (r.os.isNotEmpty(), "os should be filled");
+        expect (r.createdUtc.isNotEmpty(), "timestamp should be filled");
+        expectEquals (r.hostWrapper, juce::String ("VST3"));
+
+        beginTest ("loadOrCreateInstallId is stable across calls");
+        auto idFile = juce::File::createTempFile ("iid");
+        idFile.deleteFile();
+        auto id1 = diag::ReportComposer::loadOrCreateInstallId (idFile);
+        auto id2 = diag::ReportComposer::loadOrCreateInstallId (idFile);
+        expect (id1.isNotEmpty(), "id should be generated");
+        expectEquals (id1, id2);
+        idFile.deleteFile();
+    }
+};
+
 // Force static test registration
 inline void registerAllTests()
 {
@@ -664,6 +714,7 @@ inline void registerAllTests()
     static InputFilterModeTest inputFilterModeTest;
     static DiagReportJsonTest diagReportJsonTest;
     static DiagReportStoreTest diagReportStoreTest;
+    static DiagSinkComposerTest diagSinkComposerTest;
 }
 
 #endif // JUCE_DEBUG
