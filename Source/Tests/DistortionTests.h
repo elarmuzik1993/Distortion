@@ -7,6 +7,7 @@
 #include "../FastMath.h"
 #include "TestUtilities.h"
 #include "../Diagnostics/Report.h"
+#include "../Diagnostics/ReportStore.h"
 
 //==============================================================================
 // Test Categories
@@ -556,6 +557,62 @@ public:
     }
 };
 
+class DiagReportStoreTest : public juce::UnitTest
+{
+public:
+    DiagReportStoreTest() : juce::UnitTest ("Diagnostics ReportStore", "Diagnostics") {}
+    void runTest() override
+    {
+        auto tmp = juce::File::createTempFile ("diagq");
+        tmp.deleteFile();
+        tmp.createDirectory();
+
+        diag::ReportStore store (tmp);
+
+        beginTest ("enqueue writes a pending file");
+        diag::Report r; r.trigger = "auto"; r.installId = "x";
+        auto f = store.enqueue (r);
+        expect (f.existsAsFile(), "enqueue did not create file");
+        expectEquals (store.listPending().size(), 1);
+
+        beginTest ("claim hides file from listPending, revert restores");
+        auto claimed = store.claim (f);
+        expect (claimed.existsAsFile(), "claim target missing");
+        expectEquals (store.listPending().size(), 0);
+        store.revert (claimed);
+        expectEquals (store.listPending().size(), 1);
+
+        beginTest ("remove deletes");
+        store.remove (store.listPending()[0]);
+        expectEquals (store.listPending().size(), 0);
+
+        beginTest ("prune enforces max file cap (drops oldest)");
+        for (int i = 0; i < diag::ReportStore::maxFiles + 10; ++i)
+            store.enqueue (r);
+        expect (store.listPending().size() <= diag::ReportStore::maxFiles,
+                "prune did not cap the queue");
+
+        beginTest ("recoverStaleClaims reverts orphaned .sending files");
+        for (auto& g : store.listPending()) store.remove (g);   // clear
+        auto orphan = store.enqueue (r);
+        store.claim (orphan);                                    // .sending with no drainer
+        expectEquals (store.listPending().size(), 0);
+        store.recoverStaleClaims();
+        expectEquals (store.listPending().size(), 1);
+
+        beginTest ("prune drops files older than maxAgeDays");
+        for (auto& g : store.listPending()) store.remove (g);          // clear
+        auto old = store.enqueue (r);
+        old.setLastModificationTime (juce::Time::getCurrentTime()
+                                       - juce::RelativeTime::days (diag::ReportStore::maxAgeDays + 1));
+        auto fresh = store.enqueue (r);   // enqueue() runs prune(), which should drop `old`
+        expect (! old.existsAsFile(),   "stale file should be pruned by age cap");
+        expect (fresh.existsAsFile(),   "fresh file should survive age cap");
+
+        tmp.deleteRecursively();
+    }
+};
+
 // Force static test registration
 inline void registerAllTests()
 {
@@ -606,6 +663,7 @@ inline void registerAllTests()
     static SubGuardFlatnessTest subGuardFlatnessTest;
     static InputFilterModeTest inputFilterModeTest;
     static DiagReportJsonTest diagReportJsonTest;
+    static DiagReportStoreTest diagReportStoreTest;
 }
 
 #endif // JUCE_DEBUG

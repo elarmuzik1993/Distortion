@@ -59,6 +59,8 @@ set(PLUGIN_SOURCES
     Source/Diagnostics/AppPaths.h
     Source/Diagnostics/Report.h
     Source/Diagnostics/ITransport.h
+    Source/Diagnostics/ReportStore.h
+    Source/Diagnostics/ReportStore.cpp
 )
 
 # Test sources
