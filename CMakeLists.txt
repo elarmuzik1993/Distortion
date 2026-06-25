@@ -66,6 +66,9 @@ set(PLUGIN_SOURCES
     Source/Diagnostics/ReportComposer.cpp
     Source/Diagnostics/ReportSender.h
     Source/Diagnostics/ReportSender.cpp
+    Source/Diagnostics/ReportEndpoint.h
+    Source/Diagnostics/CurlTransport.h
+    Source/Diagnostics/CurlTransport.cpp
 )
 
 # Test sources
@@ -116,7 +119,11 @@ juce_add_binary_data(DistortionData SOURCES
 target_compile_definitions(Distortion
     PUBLIC
         JUCE_WEB_BROWSER=0
-        JUCE_USE_CURL=0
+        JUCE_USE_CURL=1
+        # dlopen libcurl at runtime instead of hard-linking it: no version-pinned .so
+        # dependency for distribution, and a missing libcurl degrades the bug reporter
+        # gracefully (network call returns null) rather than failing plugin load.
+        JUCE_LOAD_CURL_SYMBOLS_LAZILY=1
         JUCE_VST3_CAN_REPLACE_VST2=0
         JUCE_STRICT_REFCOUNTEDPOINTER=1
 )
