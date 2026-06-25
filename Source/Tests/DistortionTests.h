@@ -625,6 +625,11 @@ public:
     {
         beginTest ("noteBlock is allocation-free (RT-safe)");
         diag::DiagnosticsSink sink;
+        // rt_guard:: only exists when DISTORTION_RT_GUARD is defined (test target only).
+        // This header is also compiled into the plugin in JUCE_DEBUG (PluginProcessor.cpp),
+        // where the guard is absent — so the allocation assertion is gated, and the #else
+        // path still exercises noteBlock so the rest of the sub-test stays meaningful.
+       #if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD
         rt_guard::resetAllocationCounter();
         {
             rt_guard::ScopedRTAssert scope;
@@ -632,6 +637,10 @@ public:
                 sink.noteBlock (i % 100 != 0);   // 1% non-finite
         }
         expectEquals (rt_guard::getAllocationCount(), 0, "noteBlock allocated on audio thread");
+       #else
+        for (int i = 0; i < 1000; ++i)
+            sink.noteBlock (i % 100 != 0);       // 1% non-finite
+       #endif
         expect (sink.hasAnomalies(), "should have flagged anomalies");
         expectEquals ((int) sink.snapshot().nonFiniteBlocks, 10);
         expectEquals ((int) sink.snapshot().totalBlocks, 1000);
