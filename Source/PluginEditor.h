@@ -770,7 +770,7 @@ public:
                 dw->exitModalState (0);
         };
 
-        setSize (380, 240);
+        setSize (380, 242);   // 218px usable after reduced(12): fits label+editor+button row exactly
     }
 
     ~BugReportDialogContent() override = default;
