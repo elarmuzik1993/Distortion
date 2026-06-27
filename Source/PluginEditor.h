@@ -659,6 +659,7 @@ struct SettingsState
     int windowScalePercent = 70;
     int oversamplingMode = 2; // 0=Off, 1=2x, 2=4x
     int scopeLength = 512;
+    bool bugReportsEnabled = true;
 
     void saveToFile(const juce::File& file) const
     {
@@ -669,6 +670,7 @@ struct SettingsState
         xml.setAttribute("windowScale", windowScalePercent);
         xml.setAttribute("oversampling", oversamplingMode);
         xml.setAttribute("scopeLength", scopeLength);
+        xml.setAttribute("bugReports", bugReportsEnabled);
         xml.writeTo(file);
     }
 
@@ -683,6 +685,7 @@ struct SettingsState
         windowScalePercent = xml->getIntAttribute("windowScale", 70);
         oversamplingMode = xml->getIntAttribute("oversampling", 2);
         scopeLength = xml->getIntAttribute("scopeLength", 512);
+        bugReportsEnabled = xml->getBoolAttribute("bugReports", true);
     }
 };
 
@@ -721,13 +724,87 @@ public:
     }
 };
 
+// Small modal dialog component for "Report a Bug" — holds the privacy notice,
+// a free-text editor, and Send/Cancel buttons. Launched via
+// juce::DialogWindow::LaunchOptions so JUCE owns and cleans up the window.
+class BugReportDialogContent : public juce::Component
+{
+public:
+    explicit BugReportDialogContent (PluginProcessor& proc) : processor (proc)
+    {
+        addAndMakeVisible (noticeLabel);
+        noticeLabel.setText (
+            "Sends app version, OS and DAW name to help fix the issue \xe2\x80\x94"
+            " no personal data. Sent now, or on next launch if offline."
+            " Please don't include personal information.",
+            juce::dontSendNotification);
+        noticeLabel.setJustificationType (juce::Justification::topLeft);
+        noticeLabel.setFont (juce::Font (11.0f));
+        noticeLabel.setColour (juce::Label::textColourId, juce::Colour (0xFFAAAAAA));
+
+        addAndMakeVisible (textEditor);
+        textEditor.setMultiLine (true, true);
+        textEditor.setReturnKeyStartsNewLine (true);
+        textEditor.setReadOnly (false);
+        textEditor.setScrollbarsShown (true);
+        textEditor.setCaretVisible (true);
+        textEditor.setPopupMenuEnabled (true);
+        textEditor.setColour (juce::TextEditor::backgroundColourId, juce::Colour (0xFF1A1A1A));
+        textEditor.setColour (juce::TextEditor::textColourId,       juce::Colours::white);
+        textEditor.setColour (juce::TextEditor::outlineColourId,    juce::Colour (0xFF333333));
+
+        addAndMakeVisible (sendButton);
+        sendButton.setButtonText ("Send");
+        sendButton.onClick = [this]()
+        {
+            processor.submitUserReport (textEditor.getText());
+            if (auto* dw = findParentComponentOfClass<juce::DialogWindow>())
+                dw->exitModalState (1);
+        };
+
+        addAndMakeVisible (cancelButton);
+        cancelButton.setButtonText ("Cancel");
+        cancelButton.onClick = [this]()
+        {
+            if (auto* dw = findParentComponentOfClass<juce::DialogWindow>())
+                dw->exitModalState (0);
+        };
+
+        setSize (380, 240);
+    }
+
+    ~BugReportDialogContent() override = default;
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (12);
+        noticeLabel.setBounds (r.removeFromTop (66));
+        r.removeFromTop (6);
+        textEditor.setBounds (r.removeFromTop (110));
+        r.removeFromTop (8);
+        auto buttonRow = r.removeFromTop (28);
+        cancelButton.setBounds (buttonRow.removeFromRight (80));
+        buttonRow.removeFromRight (8);
+        sendButton.setBounds (buttonRow.removeFromRight (80));
+    }
+
+private:
+    PluginProcessor& processor;
+    juce::Label      noticeLabel;
+    juce::TextEditor textEditor;
+    juce::TextButton sendButton;
+    juce::TextButton cancelButton;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BugReportDialogContent)
+};
+
 // Scrollable content for the settings overlay (everything below the fixed header).
 // Lives inside a juce::Viewport so rows are never clipped at small window sizes.
 class SettingsContent : public juce::Component
 {
 public:
-    // Summed height of all rows below the header (272px of content + 12px bottom slack).
-    static constexpr int kContentHeight = 284;
+    // Summed height of all rows below the header (358px of content + 12px bottom slack).
+    static constexpr int kContentHeight = 370;
 
     SettingsContent(juce::AudioProcessorValueTreeState& apvts, SettingsState& state, PluginProcessor& proc)
         : settingsState(state), processor(proc)
@@ -830,6 +907,30 @@ public:
             if (onScopeLengthChanged)
                 onScopeLengthChanged(val);
         };
+
+        // Bug Reports consent toggle
+        addAndMakeVisible(bugReportsToggle);
+        bugReportsToggle.setButtonText("");
+        bugReportsToggle.setLookAndFeel(&pillLnf);
+        bugReportsToggle.setToggleState(state.bugReportsEnabled, juce::dontSendNotification);
+        bugReportsToggle.onClick = [this]() {
+            settingsState.bugReportsEnabled = bugReportsToggle.getToggleState();
+            processor.setBugReportsEnabled(settingsState.bugReportsEnabled);
+        };
+
+        // Report a Bug button — opens the dialog
+        addAndMakeVisible(reportBugButton);
+        reportBugButton.onClick = [this]() {
+            auto* dialogContent = new BugReportDialogContent(processor);
+            juce::DialogWindow::LaunchOptions opts;
+            opts.content.setOwned(dialogContent);
+            opts.dialogTitle = "Report a Bug";
+            opts.dialogBackgroundColour = juce::Colour(0xFF111111);
+            opts.escapeKeyTriggersCloseButton = true;
+            opts.useNativeTitleBar = false;
+            opts.resizable = false;
+            opts.launchAsync();
+        };
     }
 
     ~SettingsContent() override
@@ -842,6 +943,7 @@ public:
         scopeStereoToggle.setLookAndFeel(nullptr);
         oversamplingCombo.setLookAndFeel(nullptr);
         windowScaleCombo.setLookAndFeel(nullptr);
+        bugReportsToggle.setLookAndFeel(nullptr);
     }
 
     void paint(juce::Graphics& g) override
@@ -919,6 +1021,28 @@ public:
         // Scope Length row label
         auto slRow = inner.removeFromTop(20.0f);
         g.drawText("Scope Length", slRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
+        inner.removeFromTop(12.0f);
+
+        // DIAGNOSTICS section header
+        g.setFont(Fonts::getOrbitron(9.0f, true));
+        g.setColour(juce::Colour(0xFFFF2244).withAlpha(0.6f));
+        g.drawText("DIAGNOSTICS", inner.removeFromTop(16.0f), juce::Justification::centredLeft);
+
+        // Divider
+        g.setColour(juce::Colour(0xFF282828));
+        inner.removeFromTop(3.0f);
+        g.fillRect(inner.removeFromTop(1.0f));
+        inner.removeFromTop(6.0f);
+
+        // Bug Reports row label
+        g.setFont(11.0f);
+        g.setColour(juce::Colours::white);
+        auto brRow = inner.removeFromTop(20.0f);
+        g.drawText("Bug Reports", brRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
+        inner.removeFromTop(4.0f);
+
+        // Report a Bug button (self-labelled — no row label needed)
+        inner.removeFromTop(24.0f);
     }
 
     void resized() override
@@ -989,6 +1113,23 @@ public:
         auto slRow = inner.removeFromTop(20);
         slRow.removeFromLeft(140);
         scopeLengthSlider.setBounds(slRow.removeFromLeft(130).reduced(0, 4));
+        inner.removeFromTop(12);
+
+        // DIAGNOSTICS header + divider
+        inner.removeFromTop(16);
+        inner.removeFromTop(3);
+        inner.removeFromTop(1);
+        inner.removeFromTop(6);
+
+        // Bug Reports row
+        auto brRow = inner.removeFromTop(20);
+        brRow.removeFromLeft(140);
+        bugReportsToggle.setBounds(brRow.removeFromLeft(50).reduced(0, 2));
+        inner.removeFromTop(4);
+
+        // Report a Bug button row
+        auto rbRow = inner.removeFromTop(24);
+        reportBugButton.setBounds(rbRow.removeFromLeft(200).reduced(0, 2));
     }
 
     std::function<void(bool)> onOscilloscopeToggled;
@@ -1025,6 +1166,8 @@ private:
     juce::ToggleButton oscilloscopeToggle;
     juce::ToggleButton scopeStereoToggle;
     juce::Slider scopeLengthSlider;
+    juce::ToggleButton bugReportsToggle;
+    juce::TextButton reportBugButton { "Report a Bug" };
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> cleanModeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> autoGainAttachment;

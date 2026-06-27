@@ -578,7 +578,8 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addAndMakeVisible(scopeButton);
     scopeButton.onClick = [this]() { toggleOscilloscopeMode(); };
 
-    // Load UI settings
+    // Load UI settings — capture first-run state before loading
+    const bool settingsFileExisted = getSettingsFile().existsAsFile();
     loadSettings();
     // Sync oversampling setting to processor (in case it was saved as non-default)
     audioProcessor.requestOversamplingRebuild(settingsState.oversamplingMode);
@@ -596,6 +597,19 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 
     // Construction-time sizing is done; allow animated folds from now on
     allowFoldAnimation = true;
+
+    // First-run: settings file didn't exist before this session — show a one-time
+    // consent notice and write the file so it won't show again.
+    if (!settingsFileExisted)
+    {
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::AlertWindow::InfoIcon,
+            "Monolit Distortion",
+            "Monolit sends anonymous bug reports to help fix issues. It's on by default "
+            "\xe2\x80\x94 you can turn it off in Settings.",
+            "OK");
+        saveSettings();
+    }
 }
 
 PluginEditor::~PluginEditor()
