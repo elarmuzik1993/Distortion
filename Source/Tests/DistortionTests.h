@@ -732,6 +732,23 @@ public:
             expectEquals (store.listPending().size(), 2);
         }
 
+        beginTest ("opted-out drain purges auto reports but still sends user reports");
+        {
+            auto dir = tmp.getChildFile (juce::Uuid().toString()); dir.createDirectory();
+            diag::ReportStore store (dir);
+            diag::Report autoR; autoR.trigger = "auto";
+            diag::Report userR; userR.trigger = "user"; userR.message = "keepme";
+            store.enqueue (autoR);
+            store.enqueue (userR);
+            FakeTransport tx;
+            diag::ReportSender sender (store, tx, "https://example.test/r");
+            int sent = sender.drainOnce (10, /*allowAutoReports*/ false);
+            expectEquals (sent, 1);                          // only the user report was sent
+            expectEquals (tx.calls, 1);
+            expect (tx.bodies[0].contains ("keepme"), "the sent report was not the user report");
+            expectEquals (store.listPending().size(), 0);    // auto purged, user sent → queue empty
+        }
+
         tmp.deleteRecursively();
     }
 };

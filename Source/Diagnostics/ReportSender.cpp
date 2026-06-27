@@ -11,7 +11,7 @@ namespace diag
         stopThread (stopThreadMs);   // exceeds one POST timeout → clean exit, no killThread
     }
 
-    int ReportSender::drainOnce (int maxSends)
+    int ReportSender::drainOnce (int maxSends, bool allowAutoReports)
     {
         int sent = 0;
         for (auto& pending : store.listPending())
@@ -19,17 +19,28 @@ namespace diag
             if (sent >= maxSends || threadShouldExit())
                 break;
 
-            auto claimed = store.claim (pending);
-            if (! claimed.existsAsFile())
-                continue;   // someone else claimed it
+            const auto json = pending.loadFileAsString();
+            if (json.isEmpty())
+                continue;   // unreadable / mid-write; retry next launch
 
-            auto json = claimed.loadFileAsString();
-            if (json.isEmpty())   // file vanished/unreadable between claim and read
+            // Consent revoked between sessions: purge pending 'auto' reports unsent.
+            // 'user' reports always send — the Send click was their consent.
+            if (! allowAutoReports)
             {
-                store.revert (claimed);
-                continue;
+                bool ok = false;
+                const auto report = Report::fromJson (json, ok);
+                if (ok && report.trigger == "auto")
+                {
+                    store.remove (pending);
+                    continue;
+                }
             }
-            auto res = transport.post (endpoint, json, timeoutMs);
+
+            const auto claimed = store.claim (pending);
+            if (! claimed.existsAsFile())
+                continue;   // another drainer took it
+
+            const auto res = transport.post (endpoint, json, timeoutMs);
             if (res.success)
             {
                 store.remove (claimed);
@@ -43,10 +54,13 @@ namespace diag
         return sent;
     }
 
-    void ReportSender::requestDrain()
+    void ReportSender::requestDrain (bool allowAutoReports)
     {
         if (! isThreadRunning())
+        {
+            drainAllowsAuto.store (allowAutoReports);
             startThread();
+        }
     }
 
     void ReportSender::run()
@@ -57,7 +71,7 @@ namespace diag
             return;
 
         store.recoverStaleClaims();
-        drainOnce (maxSendsPerLaunch);
+        drainOnce (maxSendsPerLaunch, drainAllowsAuto.load());
         lock.exit();
     }
 }

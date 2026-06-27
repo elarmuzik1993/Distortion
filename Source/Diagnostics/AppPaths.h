@@ -3,7 +3,7 @@
 
 namespace diag
 {
-    // Mirrors PluginEditor::getPresetDirectory()'s parent (PluginEditor.cpp:1248-1251).
+    // Mirrors the parent of PluginEditor::getPresetDirectory() (same app-data product folder).
     inline juce::File productDir()
     {
         return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)

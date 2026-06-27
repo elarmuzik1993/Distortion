@@ -255,7 +255,9 @@ PluginProcessor::PluginProcessor()
     // Safety: this ctor and ~PluginProcessor both run on the message thread (JUCE
     // contract), so the lambda cannot fire concurrently with teardown's stopTimer().
     auto t = std::make_unique<OneShotDrainTimer>();
-    t->action = [this] { if (reportSender != nullptr) reportSender->requestDrain(); };
+    // Pass current consent: opted-out 'auto' reports are purged (not sent) at drain;
+    // queued 'user' reports always send.
+    t->action = [this] { if (reportSender != nullptr) reportSender->requestDrain (bugReportsEnabled.load()); };
     t->startTimer (4000);
     drainTimer = std::move (t);
    #endif
@@ -301,7 +303,7 @@ void PluginProcessor::submitUserReport (const juce::String& message)
         return;
     enqueueAndComposeReport ("user", message);   // user reports always send (consent at submit)
     if (reportSender != nullptr)
-        reportSender->requestDrain();            // best-effort immediate flush
+        reportSender->requestDrain (bugReportsEnabled.load());   // best-effort immediate flush
 }
 
 void PluginProcessor::initDiagnosticsForTesting (const juce::File& dir, diag::ITransport& transport)
