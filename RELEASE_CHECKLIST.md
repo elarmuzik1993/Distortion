@@ -47,6 +47,14 @@ every box on the `release/vX.Y-*` branch before tagging `vX.Y`.
 - [ ] 🤖 **Windows code-signing** — Azure Trusted Signing steps wired but *inert until the `AZURE_*` repo secrets are set* (needs an Azure Trusted Signing account + identity validation).
 - [~] macOS build + AU + notarize — **deferred to v2.3** (no Apple Developer account / Mac).
 
+## 6. Privacy & bug reporting (USE-53)
+
+- [ ] ✍️ **Report endpoint set** — `DISTORTION_REPORT_ENDPOINT` (`Source/Diagnostics/ReportEndpoint.h`, or a build define) points at the real receiver, **not** the `REPLACE-ME` placeholder. A release must not ship the placeholder.
+- [ ] 🧪 First-run notice shows exactly once; the **Settings consent toggle persists** across relaunch (written as `bugReports` in `settings.xml`, read by both editor and processor).
+- [ ] 🧪 **Opt-out works** — with reporting off, no `auto` report is queued/sent; queued `auto` reports are purged unsent. "Report a Bug" still sends only on explicit Send.
+- [ ] 🧪 Queue is **bounded** — a permanently-unreachable endpoint never grows the on-disk queue without limit (count + age caps in `ReportStore`).
+- [ ] ✍️ **`docs/PRIVACY.md` published** and linked from the product/marketing page; the "don't include personal data" note is present in the in-app dialog.
+
 ---
 
 ## How to run the gated checks locally
