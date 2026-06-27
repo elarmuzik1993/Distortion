@@ -10,6 +10,9 @@
 #include "PluginEditor.h"
 #include "RTAllocationGuard.h"
 #include "FastMath.h"
+#include "Diagnostics/AppPaths.h"
+#include "Diagnostics/ReportComposer.h"
+#include "Diagnostics/ReportEndpoint.h"
 #include <memory>
 
 namespace
@@ -153,6 +156,17 @@ inline float applyCompressorCharacter(float sampleValue,
 #include "Tests/DistortionTests.h"
 #endif
 
+namespace
+{
+    // Fires once, then stops itself, then runs the action. Used for the deferred,
+    // scan-safe launch drain (a separate timer from the processor's inherited juce::Timer).
+    struct OneShotDrainTimer : juce::Timer
+    {
+        std::function<void()> action;
+        void timerCallback() override { stopTimer(); if (action) action(); }
+    };
+}
+
 //==============================================================================
 PluginProcessor::PluginProcessor()
     : AudioProcessor(BusesProperties()
@@ -226,13 +240,76 @@ PluginProcessor::PluginProcessor()
     // 50 ms is imperceptible for a quality toggle and costs a near-free atomic
     // load per tick. Auto-stops on destruction; only fires when a message loop
     // is running (plugin host / standalone), so headless unit tests are unaffected.
+
+    // Bug reporting (USE-53). Gated out of unit-test builds so construction does no
+    // appdata I/O and starts no drain; tests opt in via initDiagnosticsForTesting().
+   #if ! (defined (DISTORTION_UNIT_TEST) && DISTORTION_UNIT_TEST)
+    if (auto xml = juce::parseXML (diag::settingsFile()))
+        bugReportsEnabled.store (xml->getBoolAttribute ("bugReports", true));
+
+    installId = diag::ReportComposer::loadOrCreateInstallId (diag::installIdFile());
+    buildReportPipeline (diag::reportsDir(), defaultTransport);
+
+    // Deferred, scan-safe launch drain: a plugin-scan construct/destroy storm never
+    // survives the delay, so this only fires in a real session.
+    // Safety: this ctor and ~PluginProcessor both run on the message thread (JUCE
+    // contract), so the lambda cannot fire concurrently with teardown's stopTimer().
+    auto t = std::make_unique<OneShotDrainTimer>();
+    t->action = [this] { if (reportSender != nullptr) reportSender->requestDrain(); };
+    t->startTimer (4000);
+    drainTimer = std::move (t);
+   #endif
+
     startTimer(50);
 }
 
 PluginProcessor::~PluginProcessor()
 {
     stopTimer();
+    if (drainTimer != nullptr)
+        drainTimer->stopTimer();
+    // Flush this session's anomalies as an 'auto' report (consent re-checked here).
+    if (bugReportsEnabled.load() && reportStore != nullptr && sink.hasAnomalies())
+        enqueueAndComposeReport ("auto", {});
+    reportSender.reset();   // joins the background thread (bounded)
     parameters.removeParameterListener("linearPhaseDry", this);
+}
+
+//==============================================================================
+// Bug Reporting (USE-53)
+//==============================================================================
+
+void PluginProcessor::buildReportPipeline (const juce::File& dir, diag::ITransport& transport)
+{
+    reportStore  = std::make_unique<diag::ReportStore> (dir);
+    reportSender = std::make_unique<diag::ReportSender> (*reportStore, transport, diag::reportEndpoint());
+}
+
+void PluginProcessor::enqueueAndComposeReport (const juce::String& trigger, const juce::String& message)
+{
+    if (reportStore == nullptr)
+        return;
+    auto report = diag::ReportComposer::compose (trigger, message, sink.snapshot(),
+                                                 getSampleRate(), getBlockSize(),
+                                                 wrapperType, installId);
+    reportStore->enqueue (report);
+}
+
+void PluginProcessor::submitUserReport (const juce::String& message)
+{
+    if (reportStore == nullptr)
+        return;
+    enqueueAndComposeReport ("user", message);   // user reports always send (consent at submit)
+    if (reportSender != nullptr)
+        reportSender->requestDrain();            // best-effort immediate flush
+}
+
+void PluginProcessor::initDiagnosticsForTesting (const juce::File& dir, diag::ITransport& transport)
+{
+    if (drainTimer != nullptr)
+        drainTimer->stopTimer();
+    installId = "test-install";
+    buildReportPipeline (dir, transport);
 }
 
 //==============================================================================
@@ -858,6 +935,8 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     lowBandBufferB.setSize(numChannels, worstCaseOversampledBlockSize, false, false, true);
     highBandBufferB.setSize(numChannels, worstCaseOversampledBlockSize, false, false, true);
     dryBuffer.setSize(numChannels, samplesPerBlock + 64, false, false, true);
+
+    sink.reset();   // start each prepared session with clean anomaly counters
 }
 
 
@@ -1237,6 +1316,18 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Early return for empty buffers
     if (buffer.getNumSamples() == 0 || buffer.getNumChannels() == 0)
         return;
+
+    // RT-safe anomaly probe (USE-53): sample the INPUT buffer's first frame per channel.
+    // isfinite is cheap; placed before the bypass/safety early-returns so every non-empty
+    // block is counted. Probes the input — does not catch finite-in -> NaN-out blow-ups
+    // originating inside this plugin's own DSP (accepted v1 limitation: shallow capture).
+    // No allocation, no lock — safe on the audio thread.
+    {
+        bool finite = true;
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            finite = finite && std::isfinite (buffer.getSample (ch, 0));
+        sink.noteBlock (finite);
+    }
 
     // Thread-safe state reset (triggered by setStateInformation on GUI thread)
     if (stateNeedsReset.exchange(false, std::memory_order_acquire))

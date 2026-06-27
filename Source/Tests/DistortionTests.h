@@ -2,6 +2,7 @@
 
 #if JUCE_DEBUG
 
+#include <limits>
 #include <JuceHeader.h>
 #include "../PluginProcessor.h"
 #include "../FastMath.h"
@@ -735,6 +736,60 @@ public:
     }
 };
 
+class DiagProcessorTest : public juce::UnitTest
+{
+public:
+    DiagProcessorTest() : juce::UnitTest ("Diagnostics Processor Integration", "Diagnostics") {}
+    void runTest() override
+    {
+        beginTest ("consent defaults ON and is settable");
+        {
+            PluginProcessor p;
+            expect (p.areBugReportsEnabled(), "should default ON");
+            p.setBugReportsEnabled (false);
+            expect (! p.areBugReportsEnabled(), "setter failed");
+        }
+
+        beginTest ("processBlock feeds the diagnostics sink");
+        {
+            PluginProcessor p;
+            p.prepareToPlay (48000.0, 64);
+            juce::AudioBuffer<float> buf (2, 64); juce::MidiBuffer midi; buf.clear();
+            const auto before = (int) p.diagnosticsSink().snapshot().totalBlocks;
+            p.processBlock (buf, midi);
+            expectEquals ((int) p.diagnosticsSink().snapshot().totalBlocks, before + 1,
+                          "probe not wired into processBlock");
+            const auto nfBefore = (int) p.diagnosticsSink().snapshot().nonFiniteBlocks;
+            buf.setSample (0, 0, std::numeric_limits<float>::quiet_NaN());
+            p.processBlock (buf, midi);
+            expectEquals ((int) p.diagnosticsSink().snapshot().nonFiniteBlocks, nfBefore + 1,
+                          "non-finite input not flagged by probe");
+        }
+
+        beginTest ("submitUserReport enqueues a user report (hermetic)");
+        {
+            auto dir = juce::File::createTempFile ("diagproc");
+            dir.deleteFile(); dir.createDirectory();
+            FakeTransport tx; tx.succeed = false;   // report is never removed by a 'successful' send
+            {
+                PluginProcessor p;
+                p.initDiagnosticsForTesting (dir, tx);
+                p.setBugReportsEnabled (true);
+                p.submitUserReport ("hermetic-USE53-msg");
+            }   // ~PluginProcessor joins any drain thread
+            diag::ReportStore store (dir);
+            store.recoverStaleClaims();             // un-claim if the drain grabbed it
+            auto pending = store.listPending();
+            expect (pending.size() >= 1, "user report not enqueued");
+            bool found = false;
+            for (auto& f : pending)
+                if (f.loadFileAsString().contains ("hermetic-USE53-msg")) found = true;
+            expect (found, "user report body missing");
+            dir.deleteRecursively();
+        }
+    }
+};
+
 // Force static test registration
 inline void registerAllTests()
 {
@@ -788,6 +843,7 @@ inline void registerAllTests()
     static DiagReportStoreTest diagReportStoreTest;
     static DiagSinkComposerTest diagSinkComposerTest;
     static DiagSenderTest diagSenderTest;
+    static DiagProcessorTest diagProcessorTest;
 }
 
 #endif // JUCE_DEBUG

@@ -13,6 +13,11 @@
 #include <JuceHeader.h>
 #include <juce_dsp/juce_dsp.h>
 #include "LinearRamp.h"
+#include <atomic>
+#include "Diagnostics/DiagnosticsSink.h"
+#include "Diagnostics/ReportStore.h"
+#include "Diagnostics/ReportSender.h"
+#include "Diagnostics/CurlTransport.h"
 
 //==============================================================================
 // DSP Constants - Centralized configuration for audio processing algorithms
@@ -192,6 +197,18 @@ public:
     void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     //==============================================================================
+    // Bug reporting (USE-53)
+    bool  areBugReportsEnabled() const noexcept { return bugReportsEnabled.load(); }
+    void  setBugReportsEnabled (bool on) noexcept { bugReportsEnabled.store (on); }
+    // Always sends (the Send action IS the consent); does NOT check bugReportsEnabled.
+    void  submitUserReport (const juce::String& message);
+    diag::DiagnosticsSink& diagnosticsSink() noexcept { return sink; }
+
+    // Test seam: redirect the report pipeline to a custom dir + transport (no network,
+    // no appdata writes). Call right after construction in unit tests.
+    void  initDiagnosticsForTesting (const juce::File& reportsDirectory, diag::ITransport& transport);
+
+    //==============================================================================
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override;
 
@@ -253,6 +270,18 @@ public:
     enum class SubGuardFilterOrder { LR12, LR18, LR24 };
 
 private:
+    // --- Bug reporting (USE-53) ---
+    std::atomic<bool>                   bugReportsEnabled { true };   // default ON (opt-out)
+    diag::DiagnosticsSink               sink;                         // RT-safe anomaly counters
+    diag::CurlTransport                 defaultTransport;             // real HTTPS transport (production)
+    std::unique_ptr<diag::ReportStore>  reportStore;                  // null until pipeline built
+    std::unique_ptr<diag::ReportSender> reportSender;
+    std::unique_ptr<juce::Timer>        drainTimer;                   // deferred launch drain (production)
+    juce::String                        installId;
+
+    void buildReportPipeline (const juce::File& dir, diag::ITransport& transport);
+    void enqueueAndComposeReport (const juce::String& trigger, const juce::String& message);
+
     // Sub Guard helper methods
     SubGuardFilterOrder determineSubGuardFilterOrder(float freq) const;
     void updateSubGuardCoefficients(float freq, double sampleRate);

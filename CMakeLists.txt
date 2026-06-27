@@ -194,6 +194,7 @@ target_compile_definitions(DistortionTests
         JUCE_STRICT_REFCOUNTEDPOINTER=1
         JUCE_STANDALONE_APPLICATION=1
         DISTORTION_RT_GUARD=1
+        DISTORTION_UNIT_TEST=1
 )
 
 target_link_libraries(DistortionTests
