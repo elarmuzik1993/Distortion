@@ -604,9 +604,9 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     {
         juce::AlertWindow::showMessageBoxAsync(
             juce::AlertWindow::InfoIcon,
-            "Monolit Distortion",
-            "Monolit sends anonymous bug reports to help fix issues. It's on by default "
-            "- you can turn it off in Settings.",
+            "",   // no title — the message text and window already say "Monolit"
+            "Monolit sends anonymous bug reports to help fix issues. "
+            "You can turn them off anytime in Settings.",
             "OK");
         saveSettings();
     }
