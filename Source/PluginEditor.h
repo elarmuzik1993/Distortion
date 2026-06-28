@@ -788,6 +788,20 @@ public:
         sendButton.setBounds (buttonRow.removeFromRight (80));
     }
 
+    void parentHierarchyChanged() override
+    {
+        // Focus the text field as soon as the dialog is on-screen so the user can type
+        // immediately, instead of waiting for the window manager to focus the new window
+        // (JUCE's AlertWindow does the same for its editors). Deferred one message tick
+        // because the native window isn't focusable until after it has been shown.
+        juce::Component::SafePointer<BugReportDialogContent> safe (this);
+        juce::MessageManager::callAsync ([safe]
+        {
+            if (safe != nullptr && safe->isShowing())
+                safe->textEditor.grabKeyboardFocus();
+        });
+    }
+
 private:
     PluginProcessor& processor;
     juce::Label      noticeLabel;
@@ -929,7 +943,9 @@ public:
             opts.escapeKeyTriggersCloseButton = true;
             opts.useNativeTitleBar = false;
             opts.resizable = false;
-            opts.launchAsync();
+            if (auto* dw = opts.launchAsync())
+                dw->toFront (true);   // pull the new window to front + request focus now,
+                                      // rather than waiting on the window manager
         };
     }
 
