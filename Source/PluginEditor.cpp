@@ -606,7 +606,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
             juce::AlertWindow::InfoIcon,
             "Monolit Distortion",
             "Monolit sends anonymous bug reports to help fix issues. It's on by default "
-            "\xe2\x80\x94 you can turn it off in Settings.",
+            "- you can turn it off in Settings.",
             "OK");
         saveSettings();
     }

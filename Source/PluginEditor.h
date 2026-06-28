@@ -734,7 +734,7 @@ public:
     {
         addAndMakeVisible (noticeLabel);
         noticeLabel.setText (
-            "Sends app version, OS and DAW name to help fix the issue \xe2\x80\x94"
+            "Sends app version, OS and DAW name to help fix the issue -"
             " no personal data. Sent now, or on next launch if offline."
             " Please don't include personal information.",
             juce::dontSendNotification);
