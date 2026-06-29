@@ -584,6 +584,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     // Sync oversampling setting to processor (in case it was saved as non-default)
     audioProcessor.requestOversamplingRebuild(settingsState.oversamplingMode);
     applyOscilloscopeEnabled(settingsState.oscilloscopeEnabled);
+    applyXYMorphEnabled(settingsState.xyMorphEnabled);
     scopeButton.setFullMode(settingsState.oscilloscopeEnabled);
     oscilloscope.setStereoMode(settingsState.oscilloscopeStereo);
     oscilloscope.setScopeLength(settingsState.scopeLength);
@@ -1441,6 +1442,9 @@ void PluginEditor::showSettingsOverlay()
         scopeButton.setFullMode(enabled);  // keep the toolbar duplicate in sync
         applyOscilloscopeEnabled(enabled);
     };
+    settingsOverlay->onXYMorphToggled = [this](bool enabled) {
+        applyXYMorphEnabled(enabled);
+    };
     settingsOverlay->onScopeChannelModeChanged = [this](bool isStereo) {
         oscilloscope.setStereoMode(isStereo);
     };
@@ -1466,6 +1470,23 @@ void PluginEditor::applyWindowScale(int scalePercent)
     const int w = juce::roundToInt(960.0f * scalePercent / 100.0f);
     const int h = juce::roundToInt(baseH * scalePercent / 100.0f);
     setSize(w, h);
+}
+
+void PluginEditor::applyXYMorphEnabled(bool enabled)
+{
+    // The XY pad overlays the scope. When enabled it intercepts clicks and morphs
+    // parameters on drag; when disabled it lets clicks fall through to the scope
+    // and stops its 30Hz update timer. Visibility stays governed by the scope.
+    xyMorphPad.setInterceptsMouseClicks(enabled, false);
+    if (enabled)
+    {
+        if (! xyMorphPad.isTimerRunning())
+            xyMorphPad.startTimerHz(30);
+    }
+    else
+    {
+        xyMorphPad.stopTimer();
+    }
 }
 
 void PluginEditor::applyOscilloscopeEnabled(bool enabled)

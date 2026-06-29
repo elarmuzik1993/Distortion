@@ -660,6 +660,7 @@ struct SettingsState
     int oversamplingMode = 2; // 0=Off, 1=2x, 2=4x
     int scopeLength = 512;
     bool bugReportsEnabled = true;
+    bool xyMorphEnabled = false; // XY Morph pad interaction (off = scope clicks pass through)
 
     void saveToFile(const juce::File& file) const
     {
@@ -671,6 +672,7 @@ struct SettingsState
         xml.setAttribute("oversampling", oversamplingMode);
         xml.setAttribute("scopeLength", scopeLength);
         xml.setAttribute("bugReports", bugReportsEnabled);
+        xml.setAttribute("xyMorph", xyMorphEnabled);
         xml.writeTo(file);
     }
 
@@ -686,6 +688,7 @@ struct SettingsState
         oversamplingMode = xml->getIntAttribute("oversampling", 2);
         scopeLength = xml->getIntAttribute("scopeLength", 512);
         bugReportsEnabled = xml->getBoolAttribute("bugReports", true);
+        xyMorphEnabled = xml->getBoolAttribute("xyMorph", false);
     }
 };
 
@@ -817,8 +820,8 @@ private:
 class SettingsContent : public juce::Component
 {
 public:
-    // Summed height of all rows below the header (358px of content + 12px bottom slack).
-    static constexpr int kContentHeight = 370;
+    // Summed height of all rows below the header (382px of content + 12px bottom slack).
+    static constexpr int kContentHeight = 394;
 
     SettingsContent(juce::AudioProcessorValueTreeState& apvts, SettingsState& state, PluginProcessor& proc)
         : settingsState(state), processor(proc)
@@ -895,6 +898,18 @@ public:
                 onOscilloscopeToggled(oscilloscopeToggle.getToggleState());
         };
 
+        // XY Morph toggle — enables the invisible XY pad overlay on the scope.
+        // When off, scope clicks pass through and no parameter morphing occurs.
+        addAndMakeVisible(xyMorphToggle);
+        xyMorphToggle.setButtonText("");
+        xyMorphToggle.setLookAndFeel(&pillLnf);
+        xyMorphToggle.setToggleState(state.xyMorphEnabled, juce::dontSendNotification);
+        xyMorphToggle.onClick = [this]() {
+            settingsState.xyMorphEnabled = xyMorphToggle.getToggleState();
+            if (onXYMorphToggled)
+                onXYMorphToggled(xyMorphToggle.getToggleState());
+        };
+
         // Scope Stereo/Mono toggle
         addAndMakeVisible(scopeStereoToggle);
         scopeStereoToggle.setButtonText("");
@@ -956,6 +971,7 @@ public:
         linearPhaseToggle.setLookAndFeel(nullptr);
         tooltipsToggle.setLookAndFeel(nullptr);
         oscilloscopeToggle.setLookAndFeel(nullptr);
+        xyMorphToggle.setLookAndFeel(nullptr);
         scopeStereoToggle.setLookAndFeel(nullptr);
         oversamplingCombo.setLookAndFeel(nullptr);
         windowScaleCombo.setLookAndFeel(nullptr);
@@ -1027,6 +1043,11 @@ public:
         // Oscilloscope row label
         auto scRow = inner.removeFromTop(20.0f);
         g.drawText("Oscilloscope", scRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
+        inner.removeFromTop(4.0f);
+
+        // XY Morph row label
+        auto xyRow = inner.removeFromTop(20.0f);
+        g.drawText("XY Morph", xyRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
         inner.removeFromTop(4.0f);
 
         // Stereo row label
@@ -1119,6 +1140,12 @@ public:
         oscilloscopeToggle.setBounds(scRow.removeFromLeft(50).reduced(0, 2));
         inner.removeFromTop(4);
 
+        // XY Morph row
+        auto xyRow = inner.removeFromTop(20);
+        xyRow.removeFromLeft(140);
+        xyMorphToggle.setBounds(xyRow.removeFromLeft(50).reduced(0, 2));
+        inner.removeFromTop(4);
+
         // Stereo row
         auto stRow = inner.removeFromTop(20);
         stRow.removeFromLeft(140);
@@ -1149,6 +1176,7 @@ public:
     }
 
     std::function<void(bool)> onOscilloscopeToggled;
+    std::function<void(bool)> onXYMorphToggled;
     std::function<void(bool)> onScopeChannelModeChanged;
     std::function<void(int)>  onWindowScaleChanged;
     std::function<void(int)>  onScopeLengthChanged;
@@ -1180,6 +1208,7 @@ private:
     juce::ComboBox windowScaleCombo;
     juce::ToggleButton tooltipsToggle;
     juce::ToggleButton oscilloscopeToggle;
+    juce::ToggleButton xyMorphToggle;
     juce::ToggleButton scopeStereoToggle;
     juce::Slider scopeLengthSlider;
     juce::ToggleButton bugReportsToggle;
@@ -1200,6 +1229,7 @@ public:
 
         content = std::make_unique<SettingsContent>(apvts, state, proc);
         content->onOscilloscopeToggled    = [this](bool b) { if (onOscilloscopeToggled)    onOscilloscopeToggled(b); };
+        content->onXYMorphToggled         = [this](bool b) { if (onXYMorphToggled)         onXYMorphToggled(b); };
         content->onScopeChannelModeChanged = [this](bool b) { if (onScopeChannelModeChanged) onScopeChannelModeChanged(b); };
         content->onWindowScaleChanged      = [this](int p)  { if (onWindowScaleChanged)      onWindowScaleChanged(p); };
         content->onScopeLengthChanged      = [this](int v)  { if (onScopeLengthChanged)      onScopeLengthChanged(v); };
@@ -1269,6 +1299,7 @@ public:
 
     std::function<void()>     onClose;
     std::function<void(bool)> onOscilloscopeToggled;
+    std::function<void(bool)> onXYMorphToggled;
     std::function<void(bool)> onScopeChannelModeChanged;
     std::function<void(int)>  onWindowScaleChanged;
     std::function<void(int)>  onScopeLengthChanged;
@@ -1801,6 +1832,7 @@ private:
     void showFirstRunNotice();
     void hideFirstRunNotice();
     void applyOscilloscopeEnabled(bool enabled);
+    void applyXYMorphEnabled(bool enabled);
     void applyWindowScale(int scalePercent);
     void loadSettings();
     void saveSettings();
