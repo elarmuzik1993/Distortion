@@ -141,6 +141,7 @@ jobs:
           cmake \
           xvfb \
           libasound2-dev \
+          libcurl4-openssl-dev \
           libjack-jackd2-dev \
           ladspa-sdk \
           libfreetype6-dev \
