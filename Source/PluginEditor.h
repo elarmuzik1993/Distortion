@@ -1295,6 +1295,68 @@ private:
     }
 };
 
+// One-time first-run consent notice, drawn in-canvas (no native window) so it is safe
+// under headless hosts / pluginval. Mirrors the SettingsOverlay pattern.
+class FirstRunNotice : public juce::Component
+{
+public:
+    FirstRunNotice()
+    {
+        setInterceptsMouseClicks(true, true);
+
+        addAndMakeVisible(gotItButton);
+        gotItButton.setButtonText("Got it");
+        gotItButton.onClick = [this]() { if (onDismiss) onDismiss(); };
+        gotItButton.addShortcut(juce::KeyPress(juce::KeyPress::escapeKey)); // Esc dismisses
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(juce::Colour(0xD9000000)); // dim backdrop
+
+        auto panel = getPanelBounds();
+        g.setColour(juce::Colour(0xFF111111));
+        g.fillRoundedRectangle(panel, 6.0f);
+        g.setColour(juce::Colour(0xFFFF2244));
+        g.drawRoundedRectangle(panel, 6.0f, 1.0f);
+
+        auto inner = panel.reduced(16.0f);
+        inner.removeFromBottom(34.0f); // reserve the button row
+        g.setColour(juce::Colour(0xFFCCCCCC));
+        g.setFont(juce::Font(13.0f));
+        g.drawFittedText(
+            "Monolit sends anonymous bug reports to help fix issues. "
+            "You can turn them off anytime in Settings.",
+            inner.toNearestInt(), juce::Justification::topLeft, 4);
+    }
+
+    void resized() override
+    {
+        auto row = getPanelBounds().reduced(16.0f).removeFromBottom(26.0f);
+        gotItButton.setBounds(row.removeFromRight(84.0f).toNearestInt());
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        if (!getPanelBounds().contains(e.getPosition().toFloat()))
+            if (onDismiss) onDismiss();
+    }
+
+    std::function<void()> onDismiss;
+
+private:
+    juce::Rectangle<float> getPanelBounds() const
+    {
+        const float w = juce::jmin(300.0f, static_cast<float>(getWidth())  - 20.0f);
+        const float h = juce::jmin(150.0f, static_cast<float>(getHeight()) - 20.0f);
+        return juce::Rectangle<float>(w, h).withCentre(getLocalBounds().getCentre().toFloat());
+    }
+
+    juce::TextButton gotItButton;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FirstRunNotice)
+};
+
 // Collapsible Tab Header for compression section
 class CollapsibleTabHeader : public juce::Component
 {
@@ -1728,12 +1790,16 @@ private:
 
     // Settings overlay
     std::unique_ptr<SettingsOverlay> settingsOverlay;
+    // First-run consent notice (in-canvas; replaces the old native AlertWindow)
+    std::unique_ptr<FirstRunNotice> firstRunNotice;
     GearButton settingsButton;
     ScopeButton scopeButton;  // Toolbar duplicate of the Settings oscilloscope toggle
     SettingsState settingsState;
 
     void showSettingsOverlay();
     void hideSettingsOverlay();
+    void showFirstRunNotice();
+    void hideFirstRunNotice();
     void applyOscilloscopeEnabled(bool enabled);
     void applyWindowScale(int scalePercent);
     void loadSettings();
