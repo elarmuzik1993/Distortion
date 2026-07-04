@@ -602,12 +602,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     // consent notice and write the file so it won't show again.
     if (!settingsFileExisted)
     {
-        juce::AlertWindow::showMessageBoxAsync(
-            juce::AlertWindow::InfoIcon,
-            "",   // no title — the message text and window already say "Monolit"
-            "Monolit sends anonymous bug reports to help fix issues. "
-            "You can turn them off anytime in Settings.",
-            "OK");
+        showFirstRunNotice();
         saveSettings();
     }
 }
@@ -619,6 +614,7 @@ PluginEditor::~PluginEditor()
 
     // Destroy settings overlay before LookAndFeel instances
     settingsOverlay.reset();
+    firstRunNotice.reset();
 
     // Reset LookAndFeel to nullptr before destruction to prevent crash
     // Components must not reference a LookAndFeel that may be destroyed before them
@@ -947,6 +943,10 @@ void PluginEditor::resized()
     // Settings overlay covers entire editor
     if (settingsOverlay)
         settingsOverlay->setBounds(getLocalBounds());
+
+    // First-run notice also covers the entire editor
+    if (firstRunNotice)
+        firstRunNotice->setBounds(getLocalBounds());
 }
 
 bool PluginEditor::isParameterLocked(const juce::String& paramID) const
@@ -1413,6 +1413,20 @@ void PluginEditor::loadFactoryPreset(const juce::String& presetName)
 // ============================================================================
 // Settings Overlay Methods
 // ============================================================================
+
+void PluginEditor::showFirstRunNotice()
+{
+    if (firstRunNotice) return;
+    firstRunNotice = std::make_unique<FirstRunNotice>();
+    addAndMakeVisible(*firstRunNotice);
+    firstRunNotice->setBounds(getLocalBounds());
+    firstRunNotice->onDismiss = [this]() { hideFirstRunNotice(); };
+}
+
+void PluginEditor::hideFirstRunNotice()
+{
+    firstRunNotice.reset();
+}
 
 void PluginEditor::showSettingsOverlay()
 {
