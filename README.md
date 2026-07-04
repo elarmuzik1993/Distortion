@@ -11,15 +11,18 @@ A professional JUCE audio plugin featuring multi-stage distortion, LA2A-style co
 - **Platforms**: Windows, Linux
 - **Build Systems**: CMake (cross-platform), Visual Studio 2022
 
-## What's New in v2.1
+## What's New in v2.2
 
-- **EXTREME toggle** — over-the-top saturation switch
-- **Global wet/dry mix** — full-plugin parallel blending slider
-- **Oscilloscope overhaul** — zero-crossing trigger, anti-alias decimation, lock-free pipeline, adjustable scope length, stereo/mono toggle
-- **Settings overlay** — runtime oversampling dropdown, auto-gain enable/disable
-- **Proportional window scaling** with 70% default size
-- **Sub-frequency energy preservation** through the full signal chain
-- **Fixes:** settings panel clipping, bottom-row label rendering, component visibility on load, preset Save/Delete moved into the dropdown menu
+- **Multimode input filter** — switchable High-Pass / Low-Pass / Band-Pass ahead of the drive
+- **LFO upgrades** — tempo **BPM Sync** (SYNC + note-division) and an **INV** polarity invert
+- **Linear Phase Dry** — phase-coherent parallel path, no comb filtering at partial mix
+- **Clean boost pre-emphasis** toggle in front of the distortion stage
+- **XY Morph pad on/off toggle**
+- **Anonymous bug reporting (opt-out)** — first-run notice, consent switch, and a "Report a Bug" button in Settings; nothing personal, off anytime
+- **UI refresh** — layered-arc rotary knobs with value-driven colour, a 5-LED gain-reduction meter, scrollable settings panel, and compact window fold
+- **16 factory presets** (up from 8)
+- **Audio-quality fixes** — Sub Guard crossover phase + click-free slope changes, phase-aligned wet/dry mix, corrected LFO rate in the oversampled path, strict -0.5 dBFS output ceiling, latency-compensated true bypass
+- **Platform** — VST3 + Standalone (VST2 removed), Windows + Linux; validated with pluginval (strictness 10)
 
 ## Features
 

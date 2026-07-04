@@ -4,6 +4,34 @@ Full development history, newest first.
 
 ---
 
+## v2.2 — Filters, Modulation & Reliability
+
+**New**
+- **Multimode input filter**: High-Pass / Low-Pass / Band-Pass mode selector on the pre-distortion filter; runs in true-bypass so it works without distortion engaged.
+- **LFO BPM Sync + Invert**: SYNC button locks the LFO rate to host tempo with a note-division selector; INV flips modulation polarity. Rate knob doubles as the division control when SYNC is on.
+- **Linear Phase Dry**: optional linear-phase FIR on the dry path so parallel/mix blends stay phase-coherent (no comb filtering); rebuilds in lock-step with the wet oversampler.
+- **Clean boost pre-emphasis**: toggled gain/EQ shaping in front of the distortion stage.
+- **XY Morph pad on/off toggle**.
+- **Anonymous bug reporting (opt-out, USE-53)**: RT-safe diagnostics probe, on-disk queue, send-on-next-launch; first-run consent notice, Settings consent switch, and a "Report a Bug" dialog. Minimal payload (version/OS/host), no PII.
+- **Factory bank expanded 8 -> 16**, centralised into a single source of truth.
+
+**Improved / UI**
+- Rotary knobs redesigned (layered arcs, value-driven colour); gain-reduction meter redrawn as a 5-LED strip; scrollable settings panel; compact window fold when the oscilloscope is off; toolbar oscilloscope toggle.
+- State now carries a **version stamp** for forward-compatible preset/session migration.
+
+**Fixes**
+- **Sub Guard**: corrected crossover phase/magnitude defects, click-free slope-order crossfade, and an auto-gain harshness fix.
+- **Phase-aligned global wet/dry mix** through a matched oversampler (removes partial-mix comb filtering).
+- **LFO phase-rate** correction in the oversampled path.
+- **Output limiter**: strict -0.5 dBFS ceiling with no first-sample overshoot.
+- **Latency-compensated true bypass**; harmonic-density channel-bounds clamp.
+
+**Platform / packaging**
+- VST3 + Standalone only (**VST2 removed**), Windows + Linux.
+- CI host-validation via **pluginval (strictness 10)**; Windows installer + Linux tarball + SHA256SUMS packaging.
+
+---
+
 ## LED Gain Reduction Meter
 
 - **New GR meter design**: Replaced the single vertical green→yellow→red gradient bar (with dB readout) in `GainReductionMeter::paint()` with a vertical strip of 5 round LEDs that illuminate top-down as gain reduction increases. Thresholds and colours: red `≥85%`, dark amber `≥60%`, amber `≥35%`, green `≥15%`, green `≥0%` (bottom LED stays lit as a floor indicator).
