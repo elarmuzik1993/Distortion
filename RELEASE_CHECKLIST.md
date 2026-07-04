@@ -49,7 +49,7 @@ every box on the `release/vX.Y-*` branch before tagging `vX.Y`.
 
 ## 6. Privacy & bug reporting (USE-53)
 
-- [ ] ✍️ **Report endpoint set** — `DISTORTION_REPORT_ENDPOINT` (`Source/Diagnostics/ReportEndpoint.h`, or a build define) points at the real receiver, **not** the `REPLACE-ME` placeholder. A release must not ship the placeholder.
+- [x] ✍️ **Report endpoint set** — `DISTORTION_REPORT_ENDPOINT` (`Source/Diagnostics/ReportEndpoint.h`, or a build define) points at the real receiver, **not** the `REPLACE-ME` placeholder. A release must not ship the placeholder. *(Confirmed 2026-07-04: live Supabase `report` function.)*
 - [ ] 🧪 First-run notice shows exactly once; the **Settings consent toggle persists** across relaunch (written as `bugReports` in `settings.xml`, read by both editor and processor).
 - [ ] 🧪 **Opt-out works** — with reporting off, no `auto` report is queued/sent; queued `auto` reports are purged unsent. "Report a Bug" still sends only on explicit Send.
 - [ ] 🧪 Queue is **bounded** — a permanently-unreachable endpoint never grows the on-disk queue without limit (count + age caps in `ReportStore`).
