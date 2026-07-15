@@ -8,7 +8,7 @@ namespace diag
     {
         return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
                    .getChildFile ("Monolit Beatz")
-                   .getChildFile ("Distortion");
+                   .getChildFile ("Sledge Distortion");
     }
 
     inline juce::File reportsDir()

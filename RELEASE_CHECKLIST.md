@@ -1,4 +1,4 @@
-# Release Checklist — Distortion (Monolit Beatz)
+# Release Checklist — Sledge Distortion (Monolit Beatz)
 
 Gate for promoting a build from Release Candidate to a published, sellable
 release. Derived from `library/Definition of done for vst plugins.md`. Check
@@ -67,7 +67,7 @@ cmake --build build --target DistortionTests -j && \
 # pluginval (Release build recommended; Debug jasserts abort on fuzzing)
 cmake --build build-release --target Distortion_VST3 -j
 pluginval --strictness-level 10 --validate \
-  "build-release/Distortion_artefacts/Release/VST3/Distortion.vst3"
+  "build-release/Distortion_artefacts/Release/VST3/Sledge Distortion.vst3"
 
 # Soak / multi-instance (10 instances, ~2 min)
 cmake --build build --target DistortionSoak -j && \

@@ -97,7 +97,7 @@ juce_add_plugin(Distortion
     PLUGIN_MANUFACTURER_CODE Mbds
     PLUGIN_CODE Dist
     FORMATS VST3 Standalone
-    PRODUCT_NAME "Distortion"
+    PRODUCT_NAME "Sledge Distortion"
 )
 
 target_sources(Distortion PRIVATE ${PLUGIN_SOURCES})

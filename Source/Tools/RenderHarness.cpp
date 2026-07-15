@@ -272,7 +272,7 @@ int main(int argc, char* argv[])
     if (args.has("help"))
     {
         std::cout <<
-            "Offline render harness for Distortion (Monolit Beatz)\n\n"
+            "Offline render harness for Sledge Distortion (Monolit Beatz)\n\n"
             "  --signal noise|sweep|kickbass         synthetic input (default kickbass)\n"
             "  --mode hp|lp|bp  --filterfreq <Hz>    input filter mode / cutoff\n"
             "  --in <file.wav>                       use a WAV file as input\n"
