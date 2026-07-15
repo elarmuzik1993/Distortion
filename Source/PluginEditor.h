@@ -38,6 +38,7 @@ public:
     void setScopeLength(int samples)
     {
         samples = juce::jlimit(64, 1024, samples);
+        displayLength = samples;
         cachedBuffer.setSize(2, samples + DSPConstants::SCOPE_TRIGGER_MARGIN);
         cachedBuffer.clear();
     }
@@ -136,6 +137,9 @@ private:
     juce::AudioBuffer<float> cachedBuffer;   // Use this for drawing
     bool stereoMode = true;
     int triggerOffset = 0;
+    // Window of samples spanned by the display. Unlike SCOPE_DISPLAY_POINTS
+    // (path resolution cap), this is what the scope-length slider controls.
+    int displayLength = DSPConstants::SCOPE_DISPLAY_POINTS;
 
     // Build a waveform path from an arbitrary sample reader.
     // readSample(index) returns the float sample at the given (trigger-relative) index.
@@ -202,7 +206,7 @@ private:
 
     void drawChannelWithGlow(juce::Graphics& g, int channel, juce::Colour colour)
     {
-        const int numSamples = juce::jmin(DSPConstants::SCOPE_DISPLAY_POINTS,
+        const int numSamples = juce::jmin(displayLength,
                                            cachedBuffer.getNumSamples() - triggerOffset);
         if (numSamples < 2 || channel >= cachedBuffer.getNumChannels()) return;
 
@@ -215,7 +219,7 @@ private:
 
     void drawMonoWithGlow(juce::Graphics& g, juce::Colour colour)
     {
-        const int numSamples = juce::jmin(DSPConstants::SCOPE_DISPLAY_POINTS,
+        const int numSamples = juce::jmin(displayLength,
                                            cachedBuffer.getNumSamples() - triggerOffset);
         const int numChannels = cachedBuffer.getNumChannels();
         if (numSamples < 2 || numChannels < 1) return;
