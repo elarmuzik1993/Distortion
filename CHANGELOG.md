@@ -1,4 +1,4 @@
-# Changelog — Monolit Distortion
+# Changelog — Distortion (Monolit Beatz)
 
 Full development history, newest first.
 

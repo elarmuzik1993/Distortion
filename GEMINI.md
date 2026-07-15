@@ -1,3 +1,3 @@
-# Monolit Distortion — GEMINI.md
+# Distortion — GEMINI.md
 
 For project rules and engineering standards, refer to: **AGENTS.md**

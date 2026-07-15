@@ -1,22 +1,22 @@
 ; ============================================================================
-; Inno Setup script — Monolit Distortion (VST3, Windows x64)
+; Inno Setup script — Distortion (Monolit Beatz, VST3, Windows x64)
 ;
 ; Build locally or in CI:
 ;   iscc /DMyAppVersion=2.2.0 installer\Distortion.iss
 ;
 ; Expects the built VST3 bundle at (relative to this script's parent):
-;   build\Distortion_artefacts\Release\VST3\Monolit Distortion.vst3
-; Produces: dist\MonolitDistortion-<version>-Windows.exe
+;   build\Distortion_artefacts\Release\VST3\Distortion.vst3
+; Produces: dist\Distortion-<version>-Windows.exe
 ; ============================================================================
 
 #ifndef MyAppVersion
   #define MyAppVersion "2.2.0"
 #endif
 
-#define MyAppName "Monolit Distortion"
-#define MyPublisher "Boris Miscenco"
+#define MyAppName "Distortion"
+#define MyPublisher "Monolit Beatz"
 #define MyPublisherURL "https://monolitbeatz.com"
-#define Vst3Source "..\build\Distortion_artefacts\Release\VST3\Monolit Distortion.vst3"
+#define Vst3Source "..\build\Distortion_artefacts\Release\VST3\Distortion.vst3"
 
 [Setup]
 ; Stable AppId so upgrades replace cleanly (do not change between versions).
@@ -31,7 +31,7 @@ DisableProgramGroupPage=yes
 ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
 OutputDir=..\dist
-OutputBaseFilename=MonolitDistortion-{#MyAppVersion}-Windows
+OutputBaseFilename=Distortion-{#MyAppVersion}-Windows
 Compression=lzma2
 SolidCompression=yes
 UninstallDisplayName={#MyAppName}
@@ -40,8 +40,8 @@ LicenseFile=..\LICENSE
 
 [Files]
 ; VST3 is a folder bundle — install it recursively into the shared VST3 dir.
-Source: "{#Vst3Source}\*"; DestDir: "{commoncf}\VST3\Monolit Distortion.vst3"; \
+Source: "{#Vst3Source}\*"; DestDir: "{commoncf}\VST3\Distortion.vst3"; \
     Flags: recursesubdirs createallsubdirs ignoreversion
 
 [UninstallDelete]
-Type: filesandordirs; Name: "{commoncf}\VST3\Monolit Distortion.vst3"
+Type: filesandordirs; Name: "{commoncf}\VST3\Distortion.vst3"

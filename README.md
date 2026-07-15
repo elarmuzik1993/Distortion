@@ -1,10 +1,10 @@
-# Monolit Distortion v2.2 - Audio Plugin
+# Distortion v2.2 - Audio Plugin
 
 A professional JUCE audio plugin featuring multi-stage distortion, LA2A-style compression, LFO modulation routing, and advanced signal processing.
 
 ## Project Overview
 
-**Monolit Distortion** - A JUCE audio plugin by Boris Miscenco (Monolit Beats)
+**Distortion** - A JUCE audio plugin by Monolit Beatz
 - **Version**: 2.2
 - **Type**: Audio Plugin (VST3, Standalone)
 - **Framework**: JUCE 7.0.12
