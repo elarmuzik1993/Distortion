@@ -100,13 +100,25 @@ begin
     ((Major > 14) or ((Major = 14) and (Minor >= MinMinor)));
 end;
 
+function VCRuntimeFilesPresent(): Boolean;
+begin
+  { The registry can claim the runtime is installed after the DLLs were
+    deleted (cleanup tools, AV quarantine). Check the files the plugin
+    actually links; "sys" resolves to the native System32 in 64-bit mode. }
+  Result :=
+    FileExists(ExpandConstant('{sys}\vcruntime140.dll')) and
+    FileExists(ExpandConstant('{sys}\vcruntime140_1.dll')) and
+    FileExists(ExpandConstant('{sys}\msvcp140.dll'));
+end;
+
 function VCRedistNeedsInstall(): Boolean;
 begin
   { The plugin is built with MSVC v143, which needs runtime >= 14.30. Older
     runtimes (e.g. a bare 2015 redist) lack vcruntime140_1.dll and fail to
     load the VST3. The redist writes its key to either registry view
     depending on version, so accept a hit in either. }
-  Result := not (VCRuntimeAtLeast(HKLM64, 30) or VCRuntimeAtLeast(HKLM32, 30));
+  Result := not ((VCRuntimeAtLeast(HKLM64, 30) or VCRuntimeAtLeast(HKLM32, 30))
+                 and VCRuntimeFilesPresent());
 end;
 
 #ifdef BundleRedist
