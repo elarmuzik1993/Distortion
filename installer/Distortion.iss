@@ -48,6 +48,12 @@ SelectDirLabel3=Setup will install the [name] VST3 bundle into the following fol
 [InstallDelete]
 ; Remove the previous bundle from the selected target first so stale files cannot survive upgrades.
 Type: filesandordirs; Name: "{app}\Sledge Distortion.vst3"
+; Pre-rebrand builds installed "Monolit Distortion.vst3" (always into {commoncf}\VST3 —
+; the dir page was disabled then). Same plugin UID, so a leftover copy makes DAWs scan
+; two bundles claiming one class ID, which crashes some hosts. v1.8's generic
+; "Distortion.vst3" is deliberately NOT deleted: another vendor could own that name.
+Type: filesandordirs; Name: "{app}\Monolit Distortion.vst3"
+Type: filesandordirs; Name: "{commoncf}\VST3\Monolit Distortion.vst3"
 
 [Files]
 ; VST3 is a folder bundle — install it recursively into the shared VST3 dir.
