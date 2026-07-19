@@ -7,6 +7,13 @@
 ; Expects the built VST3 bundle at (relative to this script's parent):
 ;   build\Distortion_artefacts\Release\VST3\Sledge Distortion.vst3
 ; Produces: dist\SledgeDistortion-<version>-Windows.exe
+;
+; The plugin links the dynamic CRT (/MD), so machines without the VC++
+; 2015-2022 x64 runtime fail to load it (clean Windows 10 installs lack it).
+; Place vc_redist.x64.exe (https://aka.ms/vs/17/release/vc_redist.x64.exe)
+; at installer\redist\ before compiling to have Setup install it when the
+; target machine's runtime is missing or older than 14.30 (VS2022 / v143).
+; Compiling without it still works but skips the runtime safety net.
 ; ============================================================================
 
 #ifndef MyAppVersion
@@ -18,6 +25,12 @@
 #define MyPublisherURL "https://monolitbeatz.com"
 #define MyAppUninstallKey "Software\Microsoft\Windows\CurrentVersion\Uninstall\{B3D2A1F0-7C4E-4E2A-9F6B-2D8C1A5E9F30}_is1"
 #define Vst3Source "..\build\Distortion_artefacts\Release\VST3\Sledge Distortion.vst3"
+
+#ifexist AddBackslash(SourcePath) + "redist\vc_redist.x64.exe"
+  #define BundleRedist
+#else
+  #pragma warning "installer\redist\vc_redist.x64.exe not found - Setup will NOT install the VC++ runtime on machines that lack it"
+#endif
 
 [Setup]
 ; Stable AppId so upgrades replace cleanly (do not change between versions).
@@ -59,14 +72,79 @@ Type: filesandordirs; Name: "{commoncf}\VST3\Monolit Distortion.vst3"
 ; VST3 is a folder bundle — install it recursively into the shared VST3 dir.
 Source: "{#Vst3Source}\*"; DestDir: "{app}\Sledge Distortion.vst3"; \
     Flags: recursesubdirs createallsubdirs ignoreversion
+#ifdef BundleRedist
+; Run from [Code] (CurStepChanged) rather than [Run] so the exit code is
+; checked — [Run] would silently swallow a failed runtime install.
+Source: "redist\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
+#endif
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\Sledge Distortion.vst3"
 
 [Code]
+const
+  VCRuntimeKey = 'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64';
+
 var
   PreviousInstallPage: TInputOptionWizardPage;
   PreviousUninstallerPath: String;
+
+function VCRuntimeAtLeast(RootKey: Integer; MinMinor: Cardinal): Boolean;
+var
+  Installed, Major, Minor: Cardinal;
+begin
+  Result :=
+    RegQueryDWordValue(RootKey, VCRuntimeKey, 'Installed', Installed) and (Installed = 1) and
+    RegQueryDWordValue(RootKey, VCRuntimeKey, 'Major', Major) and
+    RegQueryDWordValue(RootKey, VCRuntimeKey, 'Minor', Minor) and
+    ((Major > 14) or ((Major = 14) and (Minor >= MinMinor)));
+end;
+
+function VCRedistNeedsInstall(): Boolean;
+begin
+  { The plugin is built with MSVC v143, which needs runtime >= 14.30. Older
+    runtimes (e.g. a bare 2015 redist) lack vcruntime140_1.dll and fail to
+    load the VST3. The redist writes its key to either registry view
+    depending on version, so accept a hit in either. }
+  Result := not (VCRuntimeAtLeast(HKLM64, 30) or VCRuntimeAtLeast(HKLM32, 30));
+end;
+
+#ifdef BundleRedist
+procedure InstallVCRuntime();
+var
+  ResultCode: Integer;
+begin
+  if not VCRedistNeedsInstall() then
+    exit;
+
+  WizardForm.StatusLabel.Caption :=
+    'Installing Microsoft Visual C++ runtime (required by the plugin)...';
+
+  if not Exec(ExpandConstant('{tmp}\vc_redist.x64.exe'),
+              '/install /quiet /norestart', '',
+              SW_SHOW, ewWaitUntilTerminated, ResultCode) then
+    ResultCode := -1;
+
+  { 0 = ok; 3010/1641 = ok, reboot pending. Anything else means the plugin
+    will not load, so say so instead of finishing with a false "success". }
+  if (ResultCode <> 0) and (ResultCode <> 3010) and (ResultCode <> 1641) then
+    SuppressibleMsgBox(
+      'The Microsoft Visual C++ runtime could not be installed (exit code '
+        + IntToStr(ResultCode) + ').'#13#10
+        + 'Sledge Distortion will not load until this runtime is present.'#13#10#13#10
+        + 'Please install it manually from:'#13#10
+        + 'https://aka.ms/vs/17/release/vc_redist.x64.exe',
+      mbError, MB_OK, IDOK);
+end;
+#endif
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+#ifdef BundleRedist
+  if CurStep = ssPostInstall then
+    InstallVCRuntime();
+#endif
+end;
 
 function QueryPreviousUninstallerFromRoot(RootKey: Integer; var UninstallerPath: String): Boolean;
 begin

@@ -42,6 +42,7 @@ Distortion.exe
 # Installer output
 Installer Output/
 My plugin package/
+installer/redist/
 
 # Python/misc
 __pycache__/
