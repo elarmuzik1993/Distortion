@@ -102,10 +102,15 @@ Distortion/
 
 ## Installation
 
-- **Windows**: `%CommonProgramFiles%\VST3\`
-- **Linux**: `~/.vst3/`
+- **Windows**: run the installer (`SledgeDistortion-<version>-Windows.exe`) — installs to `%CommonProgramFiles%\VST3\` by default, replaces any previous version cleanly, and automatically installs the Microsoft VC++ runtime if the machine is missing it (required on clean Windows 10 installs).
+- **Linux**: unpack the tarball to `~/.vst3/`
 
-## Requirements
+### End-user requirements (Windows)
+
+- 64-bit Windows 10 or later (ARM64 Windows works via x64 emulation)
+- VC++ 2015–2022 x64 runtime — bundled with the installer; only needed manually for zip installs: https://aka.ms/vs/17/release/vc_redist.x64.exe
+
+## Build requirements
 
 - CMake 3.22+
 - C++17 compiler

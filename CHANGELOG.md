@@ -29,6 +29,9 @@ Full development history, newest first.
 **Platform / packaging**
 - VST3 + Standalone only (**VST2 removed**), Windows + Linux.
 - CI host-validation via **pluginval (strictness 10)**; Windows installer + Linux tarball + SHA256SUMS packaging.
+- **Windows installer hardening**: bundles the VC++ 2015-2022 x64 runtime and installs it when the target machine's runtime is missing, older than 14.30, or has its DLLs deleted despite the registry entry (the "works everywhere but one clean Windows 10 machine" failure mode); redist exit code is verified and failures surface an error with the manual download link instead of a false success.
+- **Upgrade reliability**: Setup waits for the previous version's uninstaller to fully finish before copying files (fixes a race where the detached uninstall phase could delete freshly installed files), and removes leftover pre-rebrand `Monolit Distortion.vst3` bundles that would otherwise be scanned alongside the new one (same plugin UID — crashes some hosts).
+- **Supply chain / reach**: CI verifies the downloaded redist's Authenticode signature (Microsoft, Valid) before bundling; architecture identifiers moved to `x64compatible`, admitting ARM64 Windows machines running x64 DAWs under emulation.
 
 ---
 

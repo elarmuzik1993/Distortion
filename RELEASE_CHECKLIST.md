@@ -43,6 +43,7 @@ every box on the `release/vX.Y-*` branch before tagging `vX.Y`.
 
 - [x] 🤖 Format claims match the build (VST3 + Standalone; VST2 dropped).
 - [x] 🤖 Installers wired — Inno (`installer/Distortion.iss`, Win) + tarball + `SHA256SUMS` (Linux); built in CI on every run.
+- [x] 🤖 **VC++ runtime bundled** — installer detects a missing/outdated/broken VC++ 2015-2022 x64 runtime and installs the bundled `vc_redist.x64.exe` (Authenticode-verified in CI); redist exit code checked, failure surfaces an error. Upgrade flow waits for the previous uninstall to complete and purges legacy `Monolit Distortion.vst3` bundles.
 - [x] 🤖 Release-publish wired — installer + tarball + `SHA256SUMS` attached to the GitHub Release on tag.
 - [ ] 🤖 **Windows code-signing** — Azure Trusted Signing steps wired but *inert until the `AZURE_*` repo secrets are set* (needs an Azure Trusted Signing account + identity validation).
 - [~] macOS build + AU + notarize — **deferred to v2.3** (no Apple Developer account / Mac).
@@ -73,8 +74,10 @@ pluginval --strictness-level 10 --validate \
 cmake --build build --target DistortionSoak -j && \
   ./build/DistortionSoak_artefacts/Debug/DistortionSoak --instances 10 --seconds 120
 
-# Windows installer (on Windows, with Inno Setup installed)
-iscc /DMyAppVersion=2.2.0 installer\Distortion.iss   # -> dist\MonolitDistortion-2.2.0-Windows.exe
+# Windows installer (on Windows, with Inno Setup installed).
+# First place vc_redist.x64.exe (https://aka.ms/vs/17/release/vc_redist.x64.exe)
+# at installer\redist\ or the build skips the VC++ runtime safety net (warning).
+iscc /DMyAppVersion=2.2.0 installer\Distortion.iss   # -> dist\SledgeDistortion-2.2.0-Windows.exe
 ```
 
 ## Activating Windows code-signing
