@@ -44,8 +44,8 @@ AppendDefaultDirName=no
 DisableDirPage=no
 DisableProgramGroupPage=yes
 AlwaysShowDirOnReadyPage=yes
-ArchitecturesAllowed=x64
-ArchitecturesInstallIn64BitMode=x64
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=..\dist
 OutputBaseFilename=SledgeDistortion-{#MyAppVersion}-Windows
 Compression=lzma2
@@ -215,14 +215,18 @@ end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
+  UninstallerExe: String;
   ResultCode: Integer;
+  Tries: Integer;
 begin
   Result := '';
 
   if (PreviousUninstallerPath <> '') and PreviousInstallPage.Values[0] then
   begin
+    UninstallerExe := ExtractExecutablePath(PreviousUninstallerPath);
+
     if not Exec(
-      ExtractExecutablePath(PreviousUninstallerPath),
+      UninstallerExe,
       '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART',
       '',
       SW_SHOW,
@@ -230,10 +234,22 @@ begin
       ResultCode) then
     begin
       Result := 'Setup could not start the previous uninstaller. Please uninstall the existing version manually, then run Setup again.';
-    end
-    else if ResultCode <> 0 then
-    begin
-      Result := 'The previous uninstaller did not complete successfully. Please uninstall the existing version manually, then run Setup again.';
+      exit;
     end;
+
+    { The exit code above only covers the launcher: Inno uninstallers copy
+      themselves to temp, spawn the real (second-phase) uninstall and return
+      immediately. Racing ahead here lets that detached phase delete files
+      the new install just copied. The second phase removes the original
+      uninstaller exe as its final act, so wait for that (30 s cap). }
+    Tries := 0;
+    while FileExists(UninstallerExe) and (Tries < 120) do
+    begin
+      Sleep(250);
+      Tries := Tries + 1;
+    end;
+
+    if FileExists(UninstallerExe) then
+      Result := 'The previous uninstaller did not complete successfully. Please uninstall the existing version manually, then run Setup again.';
   end;
 end;

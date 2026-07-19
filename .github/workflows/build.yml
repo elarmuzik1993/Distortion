@@ -85,6 +85,10 @@ jobs:
       run: |
         New-Item -ItemType Directory -Force installer\redist | Out-Null
         curl.exe -fsSL -o installer\redist\vc_redist.x64.exe https://aka.ms/vs/17/release/vc_redist.x64.exe
+        $sig = Get-AuthenticodeSignature installer\redist\vc_redist.x64.exe
+        if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
+          throw "vc_redist.x64.exe failed signature verification: status=$($sig.Status) signer=$($sig.SignerCertificate.Subject)"
+        }
 
     - name: Build installer (Inno Setup)
       shell: pwsh
