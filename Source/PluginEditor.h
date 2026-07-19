@@ -412,7 +412,7 @@ private:
     float smoothedCorrelation = 1.0f;
 };
 
-// Logo Title Component - Displays branded logo image
+// Logo Title Component - Displays branded logo image, clickable link to monolitbeatz.com
 class LogoTitle : public juce::Component
 {
 public:
@@ -429,6 +429,8 @@ public:
         {
             DBG("WARNING: Logo Title image failed to load!");
         }
+
+        setMouseCursor(juce::MouseCursor::PointingHandCursor);
     }
 
     void paint(juce::Graphics& g) override
@@ -441,6 +443,31 @@ public:
             g.drawText("Logo Missing", getLocalBounds(), juce::Justification::centred);
             return;
         }
+
+        // Draw logo with high quality interpolation
+        g.setOpacity(1.0f);
+        g.drawImage(logoImage, getLogoBounds(),
+                    juce::RectanglePlacement::centred | juce::RectanglePlacement::onlyReduceInSize);
+    }
+
+    // Only the drawn logo reacts to the mouse; the rest of the header strip stays click-through
+    bool hitTest(int x, int y) override
+    {
+        return logoImage.isValid() && getLogoBounds().contains((float)x, (float)y);
+    }
+
+    void mouseUp(const juce::MouseEvent& event) override
+    {
+        if (event.mouseWasClicked() && getLogoBounds().contains(event.position))
+            juce::URL("https://monolitbeatz.com").launchInDefaultBrowser();
+    }
+
+private:
+    // Area the logo is drawn into: centre third of the component, aspect-ratio preserved
+    juce::Rectangle<float> getLogoBounds() const
+    {
+        if (!logoImage.isValid())
+            return {};
 
         auto bounds = getLocalBounds().toFloat();
 
@@ -455,40 +482,26 @@ public:
         const float imageAspect = (float)logoImage.getWidth() / (float)logoImage.getHeight();
         const float boundsAspect = scaledBounds.getWidth() / scaledBounds.getHeight();
 
-        juce::Rectangle<float> targetBounds;
-
         if (imageAspect > boundsAspect)
         {
             // Image is wider - fit to width
             float scaledHeight = scaledBounds.getWidth() / imageAspect;
             float yOffset = (scaledBounds.getHeight() - scaledHeight) * 0.5f;
-            targetBounds = juce::Rectangle<float>(
-                scaledBounds.getX(),
-                scaledBounds.getY() + yOffset,
-                scaledBounds.getWidth(),
-                scaledHeight
-            );
-        }
-        else
-        {
-            // Image is taller - fit to height
-            float scaledWidth = scaledBounds.getHeight() * imageAspect;
-            float xOffset = (scaledBounds.getWidth() - scaledWidth) * 0.5f;
-            targetBounds = juce::Rectangle<float>(
-                scaledBounds.getX() + xOffset,
-                scaledBounds.getY(),
-                scaledWidth,
-                scaledBounds.getHeight()
-            );
+            return { scaledBounds.getX(),
+                     scaledBounds.getY() + yOffset,
+                     scaledBounds.getWidth(),
+                     scaledHeight };
         }
 
-        // Draw logo with high quality interpolation
-        g.setOpacity(1.0f);
-        g.drawImage(logoImage, targetBounds,
-                    juce::RectanglePlacement::centred | juce::RectanglePlacement::onlyReduceInSize);
+        // Image is taller - fit to height
+        float scaledWidth = scaledBounds.getHeight() * imageAspect;
+        float xOffset = (scaledBounds.getWidth() - scaledWidth) * 0.5f;
+        return { scaledBounds.getX() + xOffset,
+                 scaledBounds.getY(),
+                 scaledWidth,
+                 scaledBounds.getHeight() };
     }
 
-private:
     juce::Image logoImage;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LogoTitle)
