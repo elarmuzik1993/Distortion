@@ -10,7 +10,7 @@ on:
 
 env:
   BUILD_TYPE: Release
-  PLUGIN_NAME: "Monolit Distortion"
+  PLUGIN_NAME: "Sledge Distortion"
 
 jobs:
   build-windows:
@@ -64,7 +64,7 @@ jobs:
       run: |
         curl -fsSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip
         unzip -q -o pluginval.zip
-        ./pluginval.exe --strictness-level 10 --timeout-ms 600000 --validate "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Monolit Distortion.vst3"
+        ./pluginval.exe --strictness-level 10 --timeout-ms 600000 --validate "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Sledge Distortion.vst3"
 
     - name: Sign VST3 (Azure Trusted Signing)
       if: env.AZURE_CLIENT_ID != ''
@@ -76,7 +76,7 @@ jobs:
         endpoint: ${{ env.TS_ENDPOINT }}
         trusted-signing-account-name: ${{ env.TS_ACCOUNT }}
         certificate-profile-name: ${{ env.TS_PROFILE }}
-        files-folder: build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Monolit Distortion.vst3/Contents/x86_64-win
+        files-folder: build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Sledge Distortion.vst3/Contents/x86_64-win
         files-folder-filter: vst3
         files-folder-recurse: true
 
@@ -105,7 +105,7 @@ jobs:
     - name: Upload Windows installer
       uses: actions/upload-artifact@v4
       with:
-        name: MonolitDistortion-Installer-Windows
+        name: SledgeDistortion-Installer-Windows
         path: dist/*.exe
         retention-days: 30
 
@@ -115,13 +115,13 @@ jobs:
         mkdir -p artifact/Windows
         echo "=== Distortion_artefacts contents ==="
         find build/Distortion_artefacts -type d | head -30
-        cp -r "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Monolit Distortion.vst3" artifact/Windows/
+        cp -r "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Sledge Distortion.vst3" artifact/Windows/
 
     - name: Upload Windows VST3
       uses: actions/upload-artifact@v4
       with:
-        name: MonolitDistortion-VST3-Windows
-        path: artifact/Windows/Monolit Distortion.vst3
+        name: SledgeDistortion-VST3-Windows
+        path: artifact/Windows/Sledge Distortion.vst3
         retention-days: 30
 
   build-linux:
@@ -187,32 +187,32 @@ jobs:
         curl -fsSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Linux.zip
         unzip -q -o pluginval.zip
         chmod +x pluginval
-        xvfb-run -a ./pluginval --strictness-level 10 --timeout-ms 600000 --validate "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Monolit Distortion.vst3"
+        xvfb-run -a ./pluginval --strictness-level 10 --timeout-ms 600000 --validate "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Sledge Distortion.vst3"
 
     - name: Prepare Linux Artifact
       run: |
         mkdir -p artifact/Linux
-        cp -r "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Monolit Distortion.vst3" artifact/Linux/
+        cp -r "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Sledge Distortion.vst3" artifact/Linux/
 
     - name: Upload Linux VST3
       uses: actions/upload-artifact@v4
       with:
-        name: MonolitDistortion-VST3-Linux
-        path: artifact/Linux/Monolit Distortion.vst3
+        name: SledgeDistortion-VST3-Linux
+        path: artifact/Linux/Sledge Distortion.vst3
         retention-days: 30
 
     - name: Package Linux tarball + checksum
       run: |
-        tar -C artifact/Linux -czf "MonolitDistortion-Linux.tar.gz" "Monolit Distortion.vst3"
-        sha256sum "MonolitDistortion-Linux.tar.gz" > "MonolitDistortion-Linux.tar.gz.sha256"
+        tar -C artifact/Linux -czf "SledgeDistortion-Linux.tar.gz" "Sledge Distortion.vst3"
+        sha256sum "SledgeDistortion-Linux.tar.gz" > "SledgeDistortion-Linux.tar.gz.sha256"
 
     - name: Upload Linux tarball
       uses: actions/upload-artifact@v4
       with:
-        name: MonolitDistortion-Linux-tarball
+        name: SledgeDistortion-Linux-tarball
         path: |
-          MonolitDistortion-Linux.tar.gz
-          MonolitDistortion-Linux.tar.gz.sha256
+          SledgeDistortion-Linux.tar.gz
+          SledgeDistortion-Linux.tar.gz.sha256
         retention-days: 30
 
   # Create release when a tag is pushed
@@ -225,13 +225,13 @@ jobs:
     - name: Download Windows installer
       uses: actions/download-artifact@v4
       with:
-        name: MonolitDistortion-Installer-Windows
+        name: SledgeDistortion-Installer-Windows
         path: release
 
     - name: Download Linux tarball
       uses: actions/download-artifact@v4
       with:
-        name: MonolitDistortion-Linux-tarball
+        name: SledgeDistortion-Linux-tarball
         path: release
 
     - name: Generate combined checksums

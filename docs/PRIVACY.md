@@ -1,6 +1,6 @@
-# Monolit Distortion — Privacy & Bug Reporting
+# Sledge Distortion — Privacy & Bug Reporting (Monolit Beatz)
 
-Monolit Distortion can send **anonymous bug reports** to help us find and fix
+Sledge Distortion can send **anonymous bug reports** to help us find and fix
 problems. This page explains exactly what is (and isn't) collected, and how to
 turn it off.
 
@@ -47,9 +47,9 @@ random per-install UUID above.
 
 ## How it's sent
 Reports are queued as small JSON files under your user application-data folder
-(e.g. `~/.config/MonolitBeats/Monolit Distortion/reports/` on Linux; the
+(e.g. `~/.config/Monolit Beatz/Sledge Distortion/reports/` on Linux; the
 equivalent AppData/Application Support folder on Windows/macOS) and POSTed over
-HTTPS to an endpoint operated by Monolit Beats on the next launch. The queue is
+HTTPS to an endpoint operated by Monolit Beatz on the next launch. The queue is
 **bounded** (a small cap on count and age), so it can never grow without limit —
 even if the network is unavailable for a long time. If `libcurl` isn't present
 on Linux, reporting simply does nothing (it never blocks the plugin from
@@ -61,4 +61,4 @@ loading).
 - Manual reports are only ever sent when you click **Send**.
 - To clear the local queue, delete the `reports/` folder shown above.
 
-*Questions: contact Monolit Beats (elar.muzik@gmail.com).*
+*Questions: contact Monolit Beatz (elar.muzik@gmail.com).*

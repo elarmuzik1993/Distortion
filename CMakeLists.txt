@@ -86,7 +86,7 @@ set(TEST_SOURCES
 # ============================================================================
 juce_add_plugin(Distortion
     VERSION 2.2.0
-    COMPANY_NAME "Boris Miscenco"
+    COMPANY_NAME "Monolit Beatz"
     BUNDLE_ID "com.monolitbeatz.MonolitDistortion"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
@@ -97,7 +97,7 @@ juce_add_plugin(Distortion
     PLUGIN_MANUFACTURER_CODE Mbds
     PLUGIN_CODE Dist
     FORMATS VST3 Standalone
-    PRODUCT_NAME "Monolit Distortion"
+    PRODUCT_NAME "Sledge Distortion"
 )
 
 target_sources(Distortion PRIVATE ${PLUGIN_SOURCES})
@@ -168,7 +168,7 @@ endif()
 # Test Runner Target (Console Application)
 # ============================================================================
 juce_add_console_app(DistortionTests
-    COMPANY_NAME "Boris Miscenco"
+    COMPANY_NAME "Monolit Beatz"
     BUNDLE_ID "com.monolitbeatz.MonolitDistortionTests"
     PRODUCT_NAME "DistortionTests"
 )
@@ -233,7 +233,7 @@ add_custom_target(run_tests
 # the Sub Guard crossover is magnitude-flat. See Source/Tools/RenderHarness.cpp.
 # ============================================================================
 juce_add_console_app(DistortionRender
-    COMPANY_NAME "Boris Miscenco"
+    COMPANY_NAME "Monolit Beatz"
     BUNDLE_ID "com.monolitbeatz.MonolitDistortionRender"
     PRODUCT_NAME "DistortionRender"
 )
@@ -284,7 +284,7 @@ target_link_libraries(DistortionRender
 # See Source/Tools/SoakHarness.cpp.
 # ============================================================================
 juce_add_console_app(DistortionSoak
-    COMPANY_NAME "Boris Miscenco"
+    COMPANY_NAME "Monolit Beatz"
     BUNDLE_ID "com.monolitbeatz.MonolitDistortionSoak"
     PRODUCT_NAME "DistortionSoak"
 )

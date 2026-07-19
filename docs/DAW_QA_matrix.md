@@ -1,4 +1,4 @@
-# DAW QA Matrix — Monolit Distortion
+# DAW QA Matrix — Sledge Distortion (Monolit Beatz)
 
 Manual host-compatibility pass for the release. `pluginval` (in CI) covers the
 host *contract*; this covers real-DAW *behaviour* that can't be automated.

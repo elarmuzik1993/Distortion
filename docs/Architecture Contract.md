@@ -4,7 +4,7 @@ status: active
 tags: [project, plugin, audio, juce, dsp, contract, reference]
 ---
 
-# Monolit Distortion — Architecture Contract
+# Sledge Distortion — Architecture Contract
 
 Updated on `ship/v2.1` after PR-10..PR-14. Use as a reference alongside handoff notes. Changes that break anything here are contract violations.
 

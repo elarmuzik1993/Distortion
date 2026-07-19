@@ -1261,8 +1261,8 @@ juce::File PluginEditor::getPresetDirectory()
 {
     // Get user's AppData folder
     auto presetDir = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-        .getChildFile("MonolitBeats")
-        .getChildFile("Monolit Distortion")
+        .getChildFile("Monolit Beatz")
+        .getChildFile("Sledge Distortion")
         .getChildFile("Presets");
 
     // Create directory if it doesn't exist

@@ -1,6 +1,6 @@
-# Monolit Distortion Audio Plugin - Claude Initialization
+# Sledge Distortion Audio Plugin - Claude Initialization
 
-> Professional JUCE audio plugin by Boris Miscenco (Monolit Beats) featuring multi-stage distortion processing, LA2A-style optical compression, and advanced signal processing.
+> Professional JUCE audio plugin by Monolit Beatz featuring multi-stage distortion processing, LA2A-style optical compression, and advanced signal processing.
 
 ## Quick Reference
 
