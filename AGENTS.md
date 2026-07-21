@@ -5,7 +5,7 @@
 - **Projects HUB:** [[03 Projects/Projects HUB]]
 
 ## Project Overview
-**Sledge Distortion** is a professional JUCE audio plugin by Monolit Beatz featuring multi-stage distortion processing, LA2A-style optical compression, and advanced signal processing. The plugin supports VST3 and Standalone formats.
+**Sledge Distortion** is a professional JUCE audio plugin by Monolit Beatz featuring multi-stage distortion processing, LA2A-style optical compression, and advanced signal processing. The plugin supports VST3 and Standalone on all platforms, plus **AU (Audio Unit)** on macOS.
 
 ## Key Specifications
 - **DSP Specs**: See `DSP Architecture` section below.
@@ -35,6 +35,14 @@ cmake --build . --target DistortionTests -j$(nproc)
 ./DistortionTests_artefacts/Debug/DistortionTests
 ```
 **IMPORTANT**: Do NOT use `--target Distortion`. Always use `--target Distortion_Standalone` to ensure fresh linking.
+
+### macOS (CMake)
+On Apple, CMake adds an **AU** format target (`Distortion_AU`) alongside VST3 + Standalone, and builds a **universal binary** (`arm64;x86_64`, min deployment target 11.0) — the arch/target are set at the top of `CMakeLists.txt` under `if(APPLE)` and can be overridden on the command line for a faster single-arch dev build:
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
+cmake --build build --target Distortion_VST3 Distortion_AU Distortion_Standalone -j
+```
+Artefacts land in `build/Distortion_artefacts/<Config>/{VST3,AU,Standalone}/`. Local install dirs: VST3 → `~/Library/Audio/Plug-Ins/VST3`, AU → `~/Library/Audio/Plug-Ins/Components`. The `.pkg` installer is built by `installer/macos/build_pkg.sh` (see Release & Packaging).
 
 ### Projucer (Windows VS2022)
 - Edit settings via `Distortion.jucer`.
@@ -80,9 +88,10 @@ python scripts/fix_moduleinfo_json.py build --all
 - **Soak/stress**: `DistortionSoak` console tool (`Source/Tools/SoakHarness.cpp`) runs N instances faster-than-realtime, failing on non-finite output or RSS growth (DoD 24h/10+-instance gates).
 
 ## Release & Packaging
-- **Formats shipped**: VST3 + Standalone, Windows + Linux. macOS deferred (see Linear USE-50).
+- **Formats shipped**: VST3 + Standalone on Windows + Linux; VST3 + AU + Standalone on macOS (universal arm64 + x86_64).
 - **Factory presets**: single source of truth in `Source/FactoryPresets.h` (baseline + table + `apply`/`isFactory`), consumed by the editor and tests. Do NOT re-hardcode preset lists in `PluginEditor`.
 - **Windows installer**: Inno Setup (`installer/Distortion.iss`) → CommonFiles\VST3; built in CI. Bundles the VC++ 2015-2022 x64 runtime (CI downloads + Authenticode-verifies `vc_redist.x64.exe` into `installer/redist/`, gitignored) and installs it when the target machine's runtime is missing, older than 14.30, or has deleted DLLs; the plugin links the dynamic CRT so this is load-bearing on clean Windows 10 machines. Code-signing (Azure Trusted Signing) is wired but **inert until the `AZURE_*` repo secrets are set** — unsigned installer builds fine without them.
+- **macOS installer**: `.pkg` (`installer/macos/build_pkg.sh` + `distribution.xml`) installing VST3 → `/Library/Audio/Plug-Ins/VST3`, AU → `/Library/Audio/Plug-Ins/Components`, Standalone → `/Applications`; built in CI. Developer ID code-signing + notarization (`installer/macos/entitlements.plist`) is wired but **inert until the `APPLE_*` repo secrets are set** — an unsigned `.pkg` builds fine without them (Gatekeeper warns until signed).
 - **Linux**: tarball + `SHA256SUMS`.
 - **Release gate**: `RELEASE_CHECKLIST.md` (DoD gates, automated/manual). Manual host pass: `docs/DAW_QA_matrix.md`.
 - **Publish**: tag `v*` → CI attaches installer + tarball + `SHA256SUMS` to the GitHub Release.

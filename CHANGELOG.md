@@ -12,6 +12,10 @@ Full development history, newest first.
 - **Toolbar overlay toggles**: title-bar buttons (matching the scope/settings buttons) quick-toggle the XY Morph and Graphic EQ overlays on/off; they're mutually exclusive and stay in sync with the Settings selector.
 - **One-click EQ bypass**: a power button on the EQ overlay (new `eqEnabled` param) mutes the EQ click-free while preserving the drawn curve — a true A/B, not a destructive flatten.
 
+**Platform / packaging**
+- **macOS build**: universal binary (arm64 + x86_64, min macOS 11.0) shipping **VST3 + AU + Standalone** — AU adds Logic Pro / GarageBand support. CMake adds the AU format and universal arch on Apple; a new `build-macos` CI job (`macos-14`) builds, runs the unit suite, and validates the VST3 with `pluginval` strictness 10 plus the AU with `auval`.
+- **macOS installer**: signed/notarizable `.pkg` (`installer/macos/`) installing VST3 → `/Library/Audio/Plug-Ins/VST3`, AU → `/Library/Audio/Plug-Ins/Components`, Standalone → `/Applications`. Developer ID code-signing + notarization are wired but inert until the `APPLE_*` repo secrets are set (mirrors the Windows Azure signing pattern); unsigned `.pkg` builds until then.
+
 ---
 
 ## v2.2 — Filters, Modulation & Reliability
