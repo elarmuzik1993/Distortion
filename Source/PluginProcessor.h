@@ -394,6 +394,7 @@ private:
     std::array<juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>>, DSPConstants::EQ_NUM_BANDS> eqBands;
     std::atomic<float>* eqBandParam[DSPConstants::EQ_NUM_BANDS] = {};  // eqBand0..N gain (dB)
+    std::atomic<float>* eqEnabledParam = nullptr;   // EQ master bypass (1 = active, 0 = bypassed)
     juce::SmoothedValue<float> eqGainSmoothed[DSPConstants::EQ_NUM_BANDS];
     float eqLastGainDb[DSPConstants::EQ_NUM_BANDS] = {};               // last coeffs written
     double eqSampleRate = 44100.0;                                     // base rate for coeff writes

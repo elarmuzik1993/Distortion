@@ -238,6 +238,7 @@ PluginProcessor::PluginProcessor()
     cleanBoostParam = parameters.getRawParameterValue("cleanBoost");
     for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
         eqBandParam[i] = parameters.getRawParameterValue("eqBand" + juce::String(i));
+    eqEnabledParam = parameters.getRawParameterValue("eqEnabled");
     // Verify all parameters were found
     jassert(inputGainParam && outputGainParam && distortionAmountParam
         && highPassFreqParam && filterModeParam && subGuardFreqParam && clipTypeParam
@@ -246,7 +247,7 @@ PluginProcessor::PluginProcessor()
         && compPeakReductionParam && compMakeupGainParam && compRatioParam && compEnabledParam
         && autoGainEnabledParam && extremeEnabledParam && globalMixParam
         && distMixParam && toneParam && waveshaperCleanParam && linearPhaseDryParam && cleanBoostParam);
-    jassert(eqBandParam[0] && eqBandParam[DSPConstants::EQ_NUM_BANDS - 1]);
+    jassert(eqBandParam[0] && eqBandParam[DSPConstants::EQ_NUM_BANDS - 1] && eqEnabledParam);
 
     // Initialize SmoothedValues with default sample rate to prevent assertions
     // They will be properly re-initialized in prepareToPlay() with actual sample rate
@@ -2940,13 +2941,20 @@ void PluginProcessor::processGraphicEq(juce::AudioBuffer<float>& buffer)
     if (numSamples <= 0)
         return;
 
+    // Master bypass: when off, ramp the applied gains to flat (0 dB) instead of a
+    // hard cut — click-free, and the drawn curve (eqBand params) is left intact so
+    // re-enabling restores it. The whole-bank bypass below then kicks in once the
+    // ramp settles, so a bypassed EQ costs nothing.
+    const bool eqEnabled = eqEnabledParam == nullptr || eqEnabledParam->load() > 0.5f;
+
     // Push the latest drawn gains into the smoothers and find out whether the
     // curve is doing anything. A smoother is "settled flat" only when both its
     // current value and its target are within epsilon of 0 dB.
     bool anyActive = false;
     for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
     {
-        const float target = eqBandParam[i] ? eqBandParam[i]->load() : 0.0f;
+        const float raw = eqBandParam[i] ? eqBandParam[i]->load() : 0.0f;
+        const float target = eqEnabled ? raw : 0.0f;
         eqGainSmoothed[i].setTargetValue(target);
 
         if (std::abs(target) > DSPConstants::EQ_FLAT_EPS_DB
@@ -3433,6 +3441,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         juce::ParameterID{ "cleanBoost", 1 },
         "Clean Boost",
         false));  // Default OFF — pre-emphasis boost in front of the distortion
+
+    // Free-draw graphic EQ master bypass. Default ON; when off, the DSP ramps the
+    // applied gains to flat (click-free) while the drawn curve params are kept.
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{ "eqEnabled", 1 },
+        "EQ Enabled",
+        true));
 
     // Free-draw graphic EQ — one gain (dB) per peaking band. Default flat (0 dB),
     // so a fresh instance bypasses the whole bank. Automatable + saved in state.

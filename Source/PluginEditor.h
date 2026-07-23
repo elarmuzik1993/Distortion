@@ -1697,6 +1697,9 @@ public:
     // Editor supplies these to read/write the APVTS eqBand params.
     std::function<float(int)>        getBandGainDb;
     std::function<void(int, float)>  onBandChanged;
+    // ...and the eqEnabled (master bypass) param.
+    std::function<bool()>            getBypassed;      // true = EQ audio bypassed
+    std::function<void(bool)>        onBypassToggle;   // set bypass state
 
     // Pull the current param values into the display curve (call when the EQ
     // mode becomes active, or on preset load).
@@ -1705,6 +1708,8 @@ public:
         if (getBandGainDb)
             for (int i = 0; i < kNumBands; ++i)
                 gains[i] = getBandGainDb(i);
+        if (getBypassed)
+            bypassed = getBypassed();
         repaint();
     }
 
@@ -1712,6 +1717,16 @@ public:
     {
         if (! e.mods.isLeftButtonDown())
             return;
+
+        // Power button (top-right) toggles the EQ bypass — one click, curve kept.
+        if (powerButtonArea().contains(e.position))
+        {
+            bypassed = ! bypassed;
+            if (onBypassToggle)
+                onBypassToggle(bypassed);
+            repaint();
+            return;
+        }
 
         if (e.getNumberOfClicks() >= 2)   // double-click resets the curve to flat
         {
@@ -1748,6 +1763,11 @@ public:
                 changed = true;
             }
         }
+        if (getBypassed)
+        {
+            const bool b = getBypassed();
+            if (b != bypassed) { bypassed = b; changed = true; }
+        }
         if (changed)
             repaint();
     }
@@ -1759,6 +1779,8 @@ public:
             return;
 
         const juce::Colour neon(0xffFF0044);
+        // Whole curve dims when the EQ is bypassed (curve stays visible/editable).
+        const float ca = bypassed ? 0.30f : 1.0f;
 
         // dB grid: 0 dB centre emphasised, ±6 / ±12 faint.
         g.setColour(juce::Colours::white.withAlpha(0.06f));
@@ -1784,10 +1806,10 @@ public:
         fill.lineTo(b.getRight(), dbToY(0.0f, b));
         fill.lineTo(b.getX(),     dbToY(0.0f, b));
         fill.closeSubPath();
-        g.setColour(neon.withAlpha(0.12f));
+        g.setColour(neon.withAlpha(0.12f * ca));
         g.fillPath(fill);
 
-        g.setColour(neon.withAlpha(0.9f));
+        g.setColour(neon.withAlpha(0.9f * ca));
         g.strokePath(curve, juce::PathStrokeType(1.8f));
 
         // Band handles.
@@ -1796,22 +1818,50 @@ public:
             const float x = bandX(i, b);
             const float y = dbToY(gains[i], b);
             const bool active = std::abs(gains[i]) > 0.05f;
-            g.setColour(active ? neon : neon.withAlpha(0.45f));
+            g.setColour((active ? neon : neon.withAlpha(0.45f)).withMultipliedAlpha(ca));
             g.fillEllipse(x - 2.6f, y - 2.6f, 5.2f, 5.2f);
         }
 
-        // Corner label.
+        // Power / bypass button (top-left): ring + top stroke. Lit neon when the
+        // EQ is active, dim grey when bypassed.
+        auto pb = powerButtonArea();
+        const juce::Colour powerCol = bypassed ? juce::Colour(0xff777777) : neon;
+        auto ring = pb.reduced(pb.getWidth() * 0.22f);
+        g.setColour(powerCol);
+        g.drawEllipse(ring, 1.4f);
+        // "break" the ring at the top and draw the power stem through it
+        g.setColour(juce::Colours::black);
+        g.fillRect(ring.getCentreX() - 1.6f, ring.getY() - 1.0f, 3.2f, 3.0f);
+        g.setColour(powerCol);
+        g.drawLine(ring.getCentreX(), ring.getY() - 1.0f,
+                   ring.getCentreX(), ring.getCentreY(), 1.4f);
+
+        // Label, to the right of the power button.
         g.setColour(neon.withAlpha(0.55f));
         g.setFont(9.0f);
-        g.drawText("GRAPHIC EQ", b.reduced(4.0f).removeFromTop(12.0f),
-                   juce::Justification::topLeft);
+        auto labelArea = juce::Rectangle<float>(pb.getRight() + 4.0f, pb.getY(),
+                                                b.getWidth() * 0.6f, pb.getHeight());
+        g.drawText(bypassed ? "GRAPHIC EQ  (BYPASSED)" : "GRAPHIC EQ",
+                   labelArea, juce::Justification::centredLeft);
     }
 
 private:
     std::array<float, kNumBands> gains { };
     bool  dragging = false;
+    bool  bypassed = false;
     int   lastBand = -1;
     float lastDb   = 0.0f;
+
+    // Hit/paint area for the power (bypass) button — top-left corner. Kept on the
+    // left because the LFO/Compression panels expand over the scope's top-right.
+    juce::Rectangle<float> powerButtonArea() const
+    {
+        auto b = getLocalBounds().toFloat();
+        constexpr float sz = 18.0f;
+        // Nudged down so it clears the global-Mix slider that sits at the scope's
+        // top edge, and kept on the left of the LFO/Compression panels.
+        return { b.getX() + 6.0f, b.getY() + 20.0f, sz, sz };
+    }
 
     float dbToY(float db, juce::Rectangle<float> b) const
     {

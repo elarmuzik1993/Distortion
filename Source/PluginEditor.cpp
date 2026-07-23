@@ -49,6 +49,18 @@ PluginEditor::PluginEditor(PluginProcessor& p)
         if (auto* p = audioProcessor.parameters.getParameter("eqBand" + juce::String(i)))
             p->setValueNotifyingHost(p->convertTo0to1(db));
     };
+    // eqEnabled is stored as "1 = active"; the overlay speaks in terms of bypass.
+    graphicEqOverlay.getBypassed = [this]() -> bool
+    {
+        if (auto* p = audioProcessor.parameters.getParameter("eqEnabled"))
+            return p->getValue() < 0.5f;   // enabled < 0.5 => bypassed
+        return false;
+    };
+    graphicEqOverlay.onBypassToggle = [this](bool bypass)
+    {
+        if (auto* p = audioProcessor.parameters.getParameter("eqEnabled"))
+            p->setValueNotifyingHost(bypass ? 0.0f : 1.0f);
+    };
 
     addAndMakeVisible(gainReductionMeter);
     addAndMakeVisible(phaseCorrelationMeter);

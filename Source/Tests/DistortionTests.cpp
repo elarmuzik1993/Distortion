@@ -4362,6 +4362,53 @@ void GraphicEqTests::runTest()
         expect(cut   < flat * 0.85f, "Peaking -12 dB at 1 kHz did not lower the level");
     }
 
+    beginTest("Master bypass mutes the EQ but preserves the drawn curve");
+    {
+        const double f = 1000.0;
+
+        // Baseline (curve flat, EQ enabled) and boosted (band 6 = +12, enabled).
+        const float flat  = steadyRms(6, 0.0f, f);
+
+        // Boosted then bypassed: same +12 curve, but eqEnabled = 0.
+        PluginProcessor p;
+        p.setRateAndBufferSizeDetails(sr, blockSize);
+        p.prepareToPlay(sr, blockSize);
+        setParameter(p.parameters, "distortionAmount", 0.0f);
+        setParameter(p.parameters, "compEnabled",       1.0f);
+        setParameter(p.parameters, "compPeakReduction", 0.0f);
+        setParameter(p.parameters, "subGuardFreq",      0.0f);
+        setParameter(p.parameters, "autoGainEnabled",   0.0f);
+        setParameter(p.parameters, "globalMix",         100.0f);
+        setParameter(p.parameters, "inputGain",         50.0f);
+        setParameter(p.parameters, "outputGain",        50.0f);
+        setParameter(p.parameters, "eqBand6",           12.0f);
+        setParameter(p.parameters, "eqEnabled",         0.0f);   // bypassed
+
+        juce::MidiBuffer midi;
+        for (int b = 0; b < 40; ++b)
+        {
+            auto buf = generateSineWave(f, sr, blockSize, amp);
+            p.processBlock(buf, midi);
+        }
+        auto meas = generateSineWave(f, sr, blockSize, amp);
+        p.processBlock(meas, midi);
+        const float bypassedRms = calculateRMS(meas);
+
+        logMessage(juce::String::formatted(
+            "1kHz RMS  flat=%.5f  boosted+bypassed=%.5f", flat, bypassedRms));
+
+        // Bypassed output should collapse back to (near) the flat baseline...
+        expectWithinAbsoluteError(bypassedRms, flat, flat * 0.05f,
+            "Bypassed EQ did not return the signal to the flat baseline");
+
+        // ...while the drawn curve (eqBand6) is left fully intact.
+        auto* band6 = p.parameters.getParameter("eqBand6");
+        expect(band6 != nullptr, "eqBand6 missing");
+        if (band6 != nullptr)
+            expectWithinAbsoluteError(band6->convertFrom0to1(band6->getValue()), 12.0f, 0.05f,
+                "Bypass must not alter the stored curve");
+    }
+
     beginTest("A band's boost is localised (does not move a distant frequency)");
     {
         const int    hiBand = 9;         // EQ_FREQS[9] = 5600 Hz

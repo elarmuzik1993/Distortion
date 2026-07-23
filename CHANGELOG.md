@@ -10,6 +10,7 @@ Full development history, newest first.
 - **Free-draw Graphic EQ overlay**: draw a magnitude curve directly on the oscilloscope to shape a 12-band peaking EQ (log-spaced ~30 Hz–16 kHz, ±12 dB) at the output stage. Double-click flattens the curve; band gains are automatable and saved with presets. Engages only when the curve is non-flat (bit-transparent otherwise). RT-safe: coefficients are written in place (no audio-thread allocation).
 - **Scope overlay selector**: a single Settings "Overlay" dropdown chooses which overlay owns the oscilloscope — Off (clicks pass through), XY Morph, or Graphic EQ — replacing the standalone XY Morph toggle. Existing `xyMorph` settings migrate automatically.
 - **Toolbar overlay toggles**: title-bar buttons (matching the scope/settings buttons) quick-toggle the XY Morph and Graphic EQ overlays on/off; they're mutually exclusive and stay in sync with the Settings selector.
+- **One-click EQ bypass**: a power button on the EQ overlay (new `eqEnabled` param) mutes the EQ click-free while preserving the drawn curve — a true A/B, not a destructive flatten.
 
 ---
 
