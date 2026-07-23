@@ -2676,8 +2676,13 @@ void ThreadSafetyTests::testScopeBufferAccess()
     juce::MidiBuffer midi;
     processor.processBlock(buffer, midi);
 
-    // Simulate GUI thread reading
+    // Simulate GUI thread reading. fillScopeBuffer is a sliding window that only
+    // refreshes the newest samples and keeps the rest, so it expects a persistent,
+    // pre-cleared buffer — exactly what the real Oscilloscope owns (its ctor clears
+    // cachedBuffer). Clear here too; otherwise the un-refreshed tail reads
+    // uninitialised memory (which can hold NaN bit-patterns depending on layout).
     juce::AudioBuffer<float> displayBuffer(2, 512);
+    displayBuffer.clear();
     processor.fillScopeBuffer(displayBuffer);
 
     // Should not crash and produce valid data
@@ -4298,6 +4303,177 @@ void FastMathAccuracyTest::runTest()
         expect(rms > 0.01f && rms < 2.0f,
                "Unexpected RMS " + juce::String(rms) + " with fast math enabled");
     }
+}
+
+// =============================================================================
+// Free-draw graphic EQ (output-stage peaking bank)
+// =============================================================================
+void GraphicEqTests::runTest()
+{
+    constexpr double sr = 48000.0;
+    constexpr int    blockSize = 512;
+    const float amp = juce::Decibels::decibelsToGain(-6.0f);
+
+    // Build a fresh processor whose chain is otherwise transparent (distortion
+    // OFF but comp ON with zero peak-reduction, so the signal exits true-bypass
+    // and reaches the output-stage EQ), optionally set one band, warm up past the
+    // gain ramp + filter settle, then return the steady-state RMS at testFreq.
+    // Every knob but the EQ band is identical across calls, so any RMS delta is
+    // purely the EQ's doing.
+    auto steadyRms = [&](int bandIndex, float bandDb, double testFreq) -> float
+    {
+        PluginProcessor p;
+        p.setRateAndBufferSizeDetails(sr, blockSize);
+        p.prepareToPlay(sr, blockSize);
+        setParameter(p.parameters, "distortionAmount", 0.0f);
+        setParameter(p.parameters, "compEnabled",       1.0f);
+        setParameter(p.parameters, "compPeakReduction", 0.0f);
+        setParameter(p.parameters, "subGuardFreq",      0.0f);
+        setParameter(p.parameters, "autoGainEnabled",   0.0f);
+        setParameter(p.parameters, "globalMix",         100.0f);
+        setParameter(p.parameters, "inputGain",         50.0f);
+        setParameter(p.parameters, "outputGain",        50.0f);
+        if (bandIndex >= 0)
+            setParameter(p.parameters, "eqBand" + juce::String(bandIndex), bandDb);
+
+        juce::MidiBuffer midi;
+        for (int b = 0; b < 40; ++b)   // ~426 ms: past the 30 ms EQ ramp + settle
+        {
+            auto buf = generateSineWave(testFreq, sr, blockSize, amp);
+            p.processBlock(buf, midi);
+        }
+        auto meas = generateSineWave(testFreq, sr, blockSize, amp);
+        p.processBlock(meas, midi);
+        return calculateRMS(meas);
+    };
+
+    beginTest("Boosting a band raises its level; cutting lowers it");
+    {
+        const int   band = 6;        // EQ_FREQS[6] = 1000 Hz
+        const double f    = 1000.0;
+        const float flat  = steadyRms(band,   0.0f, f);
+        const float boost = steadyRms(band, +12.0f, f);
+        const float cut   = steadyRms(band, -12.0f, f);
+
+        logMessage(juce::String::formatted(
+            "1kHz RMS  flat=%.5f  +12dB=%.5f  -12dB=%.5f", flat, boost, cut));
+        expect(flat > 1.0e-4f, "Baseline signal unexpectedly silent");
+        expect(boost > flat * 1.30f, "Peaking +12 dB at 1 kHz did not raise the level");
+        expect(cut   < flat * 0.85f, "Peaking -12 dB at 1 kHz did not lower the level");
+    }
+
+    beginTest("A band's boost is localised (does not move a distant frequency)");
+    {
+        const int    hiBand = 9;         // EQ_FREQS[9] = 5600 Hz
+        const double fHigh   = 5600.0;
+        const double fLow    = 1000.0;   // ~2.5 octaves below the boosted band
+
+        const float highFlat  = steadyRms(-1,      0.0f, fHigh);
+        const float highBoost = steadyRms(hiBand, +12.0f, fHigh);
+        const float lowFlat   = steadyRms(-1,      0.0f, fLow);
+        const float lowBoost  = steadyRms(hiBand, +12.0f, fLow);
+
+        logMessage(juce::String::formatted(
+            "5.6k boost: highFlat=%.5f highBoost=%.5f | lowFlat=%.5f lowBoost=%.5f",
+            highFlat, highBoost, lowFlat, lowBoost));
+        expect(highBoost > highFlat * 1.30f, "Boost did not raise its own band (5.6 kHz)");
+        expect(lowBoost < lowFlat * 1.20f && lowBoost > lowFlat * 0.80f,
+               "Boosting 5.6 kHz noticeably moved the 1 kHz level");
+    }
+
+    beginTest("Wild curve stays finite across 44.1/48/96/192 kHz");
+    {
+        for (double rate : { 44100.0, 48000.0, 96000.0, 192000.0 })
+        {
+            PluginProcessor p;
+            p.setRateAndBufferSizeDetails(rate, blockSize);
+            p.prepareToPlay(rate, blockSize);
+            setParameter(p.parameters, "distortionAmount", 50.0f);
+            // Alternating full boost/cut — an aggressive, jagged curve.
+            for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
+                setParameter(p.parameters, "eqBand" + juce::String(i),
+                             (i % 2 == 0) ? +12.0f : -12.0f);
+
+            juce::MidiBuffer midi;
+            bool clean = true;
+            for (int b = 0; b < 24; ++b)
+            {
+                auto buf = generateWhiteNoise(blockSize, 0.5f);
+                p.processBlock(buf, midi);
+                if (containsInvalidSamples(buf))
+                    clean = false;
+            }
+            expect(clean, "Non-finite output with a full EQ curve at "
+                          + juce::String(rate) + " Hz");
+        }
+    }
+
+    beginTest("EQ band gains round-trip through state save/load");
+    {
+        PluginProcessor a;
+        a.setRateAndBufferSizeDetails(sr, blockSize);
+        a.prepareToPlay(sr, blockSize);
+
+        // Distinct values across the bands.
+        std::array<float, DSPConstants::EQ_NUM_BANDS> vals { };
+        for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
+        {
+            vals[i] = -10.0f + (float) i * 1.7f;   // spread across the ±12 range
+            setParameter(a.parameters, "eqBand" + juce::String(i), vals[i]);
+        }
+
+        juce::MemoryBlock state;
+        a.getStateInformation(state);
+
+        PluginProcessor b;
+        b.setRateAndBufferSizeDetails(sr, blockSize);
+        b.prepareToPlay(sr, blockSize);
+        b.setStateInformation(state.getData(), (int) state.getSize());
+
+        for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
+        {
+            auto* param = b.parameters.getParameter("eqBand" + juce::String(i));
+            expect(param != nullptr, "eqBand" + juce::String(i) + " missing after load");
+            if (param == nullptr) continue;
+            const float restored = param->convertFrom0to1(param->getValue());
+            expectWithinAbsoluteError(restored, vals[i], 0.05f,
+                "eqBand" + juce::String(i) + " did not round-trip");
+        }
+    }
+
+#if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD
+    beginTest("No allocation while an active EQ curve updates on the audio thread");
+    {
+        PluginProcessor p;
+        p.setRateAndBufferSizeDetails(sr, blockSize);
+        p.prepareToPlay(sr, blockSize);
+        setParameter(p.parameters, "distortionAmount", 50.0f);
+        setParameter(p.parameters, "subGuardFreq",      0.0f);
+        for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
+            setParameter(p.parameters, "eqBand" + juce::String(i), 3.0f);
+
+        auto* band6 = p.parameters.getParameter("eqBand6");
+        auto* band6f = dynamic_cast<juce::AudioParameterFloat*>(band6);
+        expect(band6f != nullptr, "eqBand6 parameter not found / type mismatch");
+        if (band6f == nullptr) return;
+
+        juce::MidiBuffer midi;
+        auto warm = generateSineWave(1000.0, sr, blockSize, 0.25f);
+        p.processBlock(warm, midi);
+
+        rt_guard::resetAllocationCounter();
+        for (int i = 0; i < 100; ++i)
+        {
+            // Drive live coefficient rewrites every block.
+            const float g = -12.0f + 24.0f * (float) i / 99.0f;
+            band6->setValueNotifyingHost(band6f->convertTo0to1(g));
+            auto buf = generateSineWave(1000.0, sr, blockSize, 0.25f);
+            p.processBlock(buf, midi);
+        }
+        expectEquals(rt_guard::getAllocationCount(), 0,
+                     "Graphic EQ coefficient updates must not allocate on the audio thread");
+    }
+#endif
 }
 
 // =============================================================================

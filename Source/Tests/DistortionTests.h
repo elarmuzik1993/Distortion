@@ -322,6 +322,14 @@ public:
     void runTest() override;
 };
 
+// Free-draw graphic EQ: boost/cut, band selectivity, SR stability, RT-safety, state.
+class GraphicEqTests : public juce::UnitTest
+{
+public:
+    GraphicEqTests() : UnitTest("Graphic EQ", TestCategories::DSP) {}
+    void runTest() override;
+};
+
 /** Tests for state save/load */
 class StateIOTests : public juce::UnitTest
 {
@@ -848,6 +856,7 @@ inline void registerAllTests()
     static LinearPhaseDryTest linearPhaseDryTest;
     static CoefficientPropagationTest coefficientPropagationTest;
     static FastMathAccuracyTest fastMathAccuracyTest;
+    static GraphicEqTests graphicEqTests;
     static ProcessBlockDecompTest processBlockDecompTest;
     static StateIOTests stateIOTests;
     static FactoryPresetTests factoryPresetTests;
