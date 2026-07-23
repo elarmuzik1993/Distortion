@@ -594,6 +594,11 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addAndMakeVisible(scopeButton);
     scopeButton.onClick = [this]() { toggleOscilloscopeMode(); };
 
+    // Toolbar quick-toggle for the Graphic EQ overlay — mirrors the Settings
+    // "Overlay" selector's EQ position.
+    addAndMakeVisible(eqButton);
+    eqButton.onClick = [this]() { toggleGraphicEqOverlay(); };
+
     // Load UI settings — capture first-run state before loading
     const bool settingsFileExisted = getSettingsFile().existsAsFile();
     loadSettings();
@@ -760,6 +765,9 @@ void PluginEditor::resized()
 
     scopeButton.setBounds(settingsButton.getRight() + presetSpacing,
                           presetY, settingsBtnSize, settingsBtnSize);
+
+    eqButton.setBounds(scopeButton.getRight() + presetSpacing,
+                       presetY, settingsBtnSize, settingsBtnSize);
 
     // Global Mix slider - directly below preset selector
     const int mixLabelWidth = S(28);
@@ -1496,6 +1504,7 @@ void PluginEditor::applyScopeOverlayMode(int mode)
     settingsState.scopeOverlayMode = juce::jlimit(0, 2, mode);
     if (settingsState.scopeOverlayMode == 2)
         graphicEqOverlay.syncFromParams();   // seed the curve from the live params
+    eqButton.setActive(settingsState.scopeOverlayMode == 2);  // keep the toolbar toggle in sync
     updateScopeOverlays(oscilloscope.getAlpha());
 }
 
@@ -1587,6 +1596,17 @@ void PluginEditor::toggleOscilloscopeMode()
     applyOscilloscopeEnabled(newState);
     // Defer the disk write — a synchronous XML save on the message thread here
     // would block the fold timer's first tick (~click→first-frame latency).
+    juce::Component::SafePointer<PluginEditor> safeThis (this);
+    juce::MessageManager::callAsync ([safeThis] { if (safeThis != nullptr) safeThis->saveSettings(); });
+}
+
+void PluginEditor::toggleGraphicEqOverlay()
+{
+    // Quick toggle: turn the Graphic EQ overlay on (mode 2), or off (mode 0) if
+    // it is already the active overlay. applyScopeOverlayMode syncs eqButton's lit
+    // state; the Settings dropdown re-reads settingsState next time it opens.
+    const int newMode = (settingsState.scopeOverlayMode == 2) ? 0 : 2;
+    applyScopeOverlayMode(newMode);
     juce::Component::SafePointer<PluginEditor> safeThis (this);
     juce::MessageManager::callAsync ([safeThis] { if (safeThis != nullptr) safeThis->saveSettings(); });
 }

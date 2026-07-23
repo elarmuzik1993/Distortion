@@ -667,6 +667,56 @@ private:
     bool fullMode = true;
 };
 
+// Toolbar quick-toggle for the free-draw Graphic EQ overlay. Draws a small
+// graphic-EQ fader glyph; bright when the EQ overlay is active, dim otherwise
+// (matches ScopeButton's active/dim convention). Stays in sync with the
+// Settings "Overlay" selector via applyScopeOverlayMode.
+class EqButton : public juce::Button
+{
+public:
+    EqButton() : juce::Button("Graphic EQ") {}
+
+    void setActive(bool shouldBeActive)
+    {
+        if (active != shouldBeActive) { active = shouldBeActive; repaint(); }
+    }
+    bool isActive() const { return active; }
+
+    void paintButton(juce::Graphics& g, bool isMouseOver, bool isButtonDown) override
+    {
+        auto bounds = getLocalBounds().toFloat().reduced(2.0f);
+
+        juce::Colour col = isButtonDown ? juce::Colours::white
+                         : isMouseOver  ? juce::Colour(0xFFFF4466)
+                                        : juce::Colour(0xFFFF0044);
+        if (! active)
+            col = col.withAlpha(0.45f); // dim when the EQ overlay is off
+
+        // Frame (matches ScopeButton)
+        g.setColour(col.withAlpha(active ? 0.5f : 0.3f));
+        g.drawRoundedRectangle(bounds, 2.0f, 1.0f);
+
+        // Three fader tracks with handles at varying heights — reads as a
+        // graphic EQ, distinct from the scope's waveform glyph.
+        auto area = bounds.reduced(bounds.getWidth() * 0.20f, bounds.getHeight() * 0.22f);
+        constexpr int numBars = 3;
+        const float pos[numBars] = { 0.30f, 0.68f, 0.48f }; // handle height (0=bottom,1=top)
+        const float dotR = juce::jmax(1.1f, area.getWidth() * 0.10f);
+        for (int i = 0; i < numBars; ++i)
+        {
+            const float x = area.getX() + (i + 0.5f) * area.getWidth() / (float) numBars;
+            g.setColour(col.withAlpha(active ? 0.4f : 0.25f));
+            g.drawLine(x, area.getY(), x, area.getBottom(), 1.0f);
+            const float y = area.getBottom() - pos[i] * area.getHeight();
+            g.setColour(col);
+            g.fillEllipse(x - dotR, y - dotR, dotR * 2.0f, dotR * 2.0f);
+        }
+    }
+
+private:
+    bool active = false;
+};
+
 // Settings state for UI-only settings persisted via XML
 struct SettingsState
 {
@@ -2077,6 +2127,7 @@ private:
     std::unique_ptr<FirstRunNotice> firstRunNotice;
     GearButton settingsButton;
     ScopeButton scopeButton;  // Toolbar duplicate of the Settings oscilloscope toggle
+    EqButton eqButton;        // Toolbar quick-toggle for the Graphic EQ overlay
     SettingsState settingsState;
 
     void showSettingsOverlay();
@@ -2094,6 +2145,7 @@ private:
 
     // Toolbar oscilloscope view toggle + smooth compact<->full window fold animation
     void toggleOscilloscopeMode();
+    void toggleGraphicEqOverlay();  // toolbar EQ button: overlay mode EQ <-> Off
     void startFoldAnimation();
     void stepFoldAnimation();
     void finishFoldAnimation();
