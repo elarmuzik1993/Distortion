@@ -54,6 +54,33 @@ void writeSecondOrderHighPassCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
     coeffs[4] = static_cast<float>(c1 * (1.0 - invQ * n + nSquared));
 }
 
+// RBJ peaking-EQ biquad, written in place (a0-normalized to 5 raw coeffs) so we
+// never allocate on the audio thread. Mirrors juce::dsp::IIR::Coefficients::
+// makePeakFilter(sampleRate, frequency, Q, gainFactor) exactly, so the live
+// coefficient updates match a prepare-time makePeakFilter bit-for-bit.
+// gainFactor is linear (juce::Decibels::decibelsToGain(dB)).
+void writePeakFilterCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
+                           const double sampleRate,
+                           const double frequency,
+                           const double q,
+                           const double gainFactor) noexcept
+{
+    const auto A = std::sqrt(gainFactor);
+    const auto omega = (2.0 * juce::MathConstants<double>::pi * frequency) / sampleRate;
+    const auto alpha = std::sin(omega) / (2.0 * q);
+    const auto c2 = -2.0 * std::cos(omega);
+    const auto alphaTimesA = alpha * A;
+    const auto alphaOverA = alpha / A;
+    const auto a0inv = 1.0 / (1.0 + alphaOverA);
+    auto* coeffs = dest.getRawCoefficients();
+
+    coeffs[0] = static_cast<float>((1.0 + alphaTimesA) * a0inv);  // b0
+    coeffs[1] = static_cast<float>(c2 * a0inv);                   // b1
+    coeffs[2] = static_cast<float>((1.0 - alphaTimesA) * a0inv);  // b2
+    coeffs[3] = static_cast<float>(c2 * a0inv);                   // a1
+    coeffs[4] = static_cast<float>((1.0 - alphaOverA) * a0inv);   // a2
+}
+
 // First-order Butterworth sections, written in place (a0-normalized) so we never
 // allocate on the audio thread. These mirror juce::dsp::IIR::Coefficients
 // makeFirstOrderLowPass / makeFirstOrderHighPass exactly, so live coefficient
@@ -209,6 +236,8 @@ PluginProcessor::PluginProcessor()
     waveshaperCleanParam = parameters.getRawParameterValue("waveshaperClean");
     linearPhaseDryParam = parameters.getRawParameterValue("linearPhaseDry");
     cleanBoostParam = parameters.getRawParameterValue("cleanBoost");
+    for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
+        eqBandParam[i] = parameters.getRawParameterValue("eqBand" + juce::String(i));
     // Verify all parameters were found
     jassert(inputGainParam && outputGainParam && distortionAmountParam
         && highPassFreqParam && filterModeParam && subGuardFreqParam && clipTypeParam
@@ -217,6 +246,7 @@ PluginProcessor::PluginProcessor()
         && compPeakReductionParam && compMakeupGainParam && compRatioParam && compEnabledParam
         && autoGainEnabledParam && extremeEnabledParam && globalMixParam
         && distMixParam && toneParam && waveshaperCleanParam && linearPhaseDryParam && cleanBoostParam);
+    jassert(eqBandParam[0] && eqBandParam[DSPConstants::EQ_NUM_BANDS - 1]);
 
     // Initialize SmoothedValues with default sample rate to prevent assertions
     // They will be properly re-initialized in prepareToPlay() with actual sample rate
@@ -802,6 +832,9 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     updateCleanBoostCoefficients(boostOn, spec.sampleRate);
     emphasisFilter.reset();
     deEmphasisFilter.reset();
+
+    // Free-draw graphic EQ — output-stage peaking bank at BASE rate.
+    prepareEqBands(baseSpec);
 
     // Sub Guard variable-slope crossover filters (oversampled domain)
     const float sgFreq = subGuardFreqParam ? subGuardFreqParam->load() : DSPConstants::SUBGUARD_FREQ_DEFAULT;
@@ -2838,6 +2871,10 @@ void PluginProcessor::applyAutoGainAndISP(juce::AudioBuffer<float>& buffer)
         }
     }
 
+    // Free-draw graphic EQ — output-stage tone shaping at base rate. Runs after
+    // DC blocking, before the final output-gain stage. Bypassed when flat.
+    processGraphicEq(buffer);
+
     // Apply output gain to the final downsampled result
     // Per-sample LFO for destination 4 (output gain / tremolo) at base sample rate
     for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
@@ -2876,6 +2913,72 @@ void PluginProcessor::applyAutoGainAndISP(juce::AudioBuffer<float>& buffer)
         lfoPhaseForUI.store(lfoPhase, std::memory_order_relaxed);
 }
 
+//==============================================================================
+// Free-draw graphic EQ (output-stage peaking bank, base rate)
+
+void PluginProcessor::prepareEqBands(const juce::dsp::ProcessSpec& baseSpec)
+{
+    eqSampleRate = baseSpec.sampleRate;
+    for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
+    {
+        eqBands[i].prepare(baseSpec);
+        // Seed with unity (0 dB) peak at this band's centre frequency.
+        writePeakFilterCoeffs(*eqBands[i].state, eqSampleRate,
+                              DSPConstants::EQ_FREQS[i], DSPConstants::EQ_Q, 1.0);
+        eqBands[i].reset();
+
+        eqGainSmoothed[i].reset(baseSpec.sampleRate, DSPConstants::EQ_GAIN_SMOOTH_TIME_S);
+        const float g = eqBandParam[i] ? eqBandParam[i]->load() : 0.0f;
+        eqGainSmoothed[i].setCurrentAndTargetValue(g);
+        eqLastGainDb[i] = 1.0e9f;  // force first coeff write when non-flat
+    }
+}
+
+void PluginProcessor::processGraphicEq(juce::AudioBuffer<float>& buffer)
+{
+    const int numSamples = buffer.getNumSamples();
+    if (numSamples <= 0)
+        return;
+
+    // Push the latest drawn gains into the smoothers and find out whether the
+    // curve is doing anything. A smoother is "settled flat" only when both its
+    // current value and its target are within epsilon of 0 dB.
+    bool anyActive = false;
+    for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
+    {
+        const float target = eqBandParam[i] ? eqBandParam[i]->load() : 0.0f;
+        eqGainSmoothed[i].setTargetValue(target);
+
+        if (std::abs(target) > DSPConstants::EQ_FLAT_EPS_DB
+            || std::abs(eqGainSmoothed[i].getCurrentValue()) > DSPConstants::EQ_FLAT_EPS_DB)
+            anyActive = true;
+    }
+
+    // Whole-bank bypass while flat — zero CPU and bit-transparent for a fresh
+    // instance or a flattened curve.
+    if (! anyActive)
+        return;
+
+    juce::dsp::AudioBlock<float> block(buffer);
+    juce::dsp::ProcessContextReplacing<float> context(block);
+
+    for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
+    {
+        // Advance the ramp across this block; rewrite coefficients only when the
+        // gain actually moved (in place, no allocation).
+        const float g = eqGainSmoothed[i].skip(numSamples);
+        if (std::abs(g - eqLastGainDb[i]) > 1.0e-3f)
+        {
+            writePeakFilterCoeffs(*eqBands[i].state, eqSampleRate,
+                                  DSPConstants::EQ_FREQS[i], DSPConstants::EQ_Q,
+                                  juce::Decibels::decibelsToGain(g));
+            eqLastGainDb[i] = g;
+        }
+
+        eqBands[i].process(context);
+    }
+}
+
 void PluginProcessor::resetDSPState()
 {
     // Reset all filters when loading state to prevent stale coefficients/state
@@ -2892,6 +2995,9 @@ void PluginProcessor::resetDSPState()
         toneFilter.reset();
     if (toneFilterLow.state)
         toneFilterLow.reset();
+    for (auto& band : eqBands)
+        if (band.state)
+            band.reset();
 
     // Reset envelope states
     preCompEnvelope[0] = 1.0f;
@@ -3327,6 +3433,19 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         juce::ParameterID{ "cleanBoost", 1 },
         "Clean Boost",
         false));  // Default OFF — pre-emphasis boost in front of the distortion
+
+    // Free-draw graphic EQ — one gain (dB) per peaking band. Default flat (0 dB),
+    // so a fresh instance bypasses the whole bank. Automatable + saved in state.
+    for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
+    {
+        const int freqHz = static_cast<int>(DSPConstants::EQ_FREQS[i]);
+        params.push_back(std::make_unique<juce::AudioParameterFloat>(
+            juce::ParameterID{ "eqBand" + juce::String(i), 1 },
+            "EQ " + juce::String(freqHz) + " Hz",
+            juce::NormalisableRange<float>(-DSPConstants::EQ_GAIN_RANGE_DB,
+                                            DSPConstants::EQ_GAIN_RANGE_DB, 0.01f),
+            0.0f));
+    }
 
     return { params.begin(), params.end() };
 }

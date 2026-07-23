@@ -14,6 +14,7 @@
 #include <juce_dsp/juce_dsp.h>
 #include "LinearRamp.h"
 #include <atomic>
+#include <array>
 #include "Diagnostics/DiagnosticsSink.h"
 #include "Diagnostics/ReportStore.h"
 #include "Diagnostics/ReportSender.h"
@@ -67,6 +68,20 @@ namespace DSPConstants
 
     // Parameter smoothing times (in seconds)
     constexpr double GAIN_SMOOTH_TIME_S = 0.02;               // 20ms for gain changes
+
+    // Free-draw graphic EQ (output-stage tone shaping, base rate).
+    // A bank of peaking filters at fixed log-spaced centre frequencies; the
+    // drawn curve sets each band's gain. Engages whenever the curve is non-flat.
+    constexpr int   EQ_NUM_BANDS = 12;                        // Number of peaking bands
+    constexpr float EQ_GAIN_RANGE_DB = 12.0f;                 // ±12 dB per band
+    constexpr float EQ_Q = 1.4f;                              // Fixed Q (~0.75-oct, gentle overlap)
+    constexpr float EQ_FLAT_EPS_DB = 0.05f;                   // Below this |gain|, treat as flat
+    constexpr double EQ_GAIN_SMOOTH_TIME_S = 0.03;            // 30ms gain ramp (kills zipper on drag)
+    // Log-spaced centre frequencies (30 Hz → 16 kHz). Kept in-band at 44.1 kHz.
+    constexpr float EQ_FREQS[EQ_NUM_BANDS] = {
+        30.0f, 55.0f, 100.0f, 180.0f, 320.0f, 560.0f,
+        1000.0f, 1800.0f, 3200.0f, 5600.0f, 9000.0f, 16000.0f
+    };
 
     // Pre-distortion transient tamer (hardcoded, always-on)
     constexpr float PRE_COMP_ATTACK_TIME_S = 0.001f;         // 1ms attack (catches transients)
@@ -373,6 +388,16 @@ private:
     juce::SmoothedValue<float> smoothedBoostDepth;  // 0=off, 1=full boost (morphs the toggle)
     float lastBoostDepth = -1.0f;
 
+    // Free-draw graphic EQ — output-stage peaking bank at BASE rate. Coefficients
+    // mutate .state in place (see writePeakFilterCoeffs) from per-band smoothed
+    // gains, so nothing allocates on the audio thread.
+    std::array<juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+        juce::dsp::IIR::Coefficients<float>>, DSPConstants::EQ_NUM_BANDS> eqBands;
+    std::atomic<float>* eqBandParam[DSPConstants::EQ_NUM_BANDS] = {};  // eqBand0..N gain (dB)
+    juce::SmoothedValue<float> eqGainSmoothed[DSPConstants::EQ_NUM_BANDS];
+    float eqLastGainDb[DSPConstants::EQ_NUM_BANDS] = {};               // last coeffs written
+    double eqSampleRate = 44100.0;                                     // base rate for coeff writes
+
     juce::AudioBuffer<float> lowBandBuffer;   // For clean low frequencies
     juce::AudioBuffer<float> highBandBuffer;  // For distorted high frequencies
     // Secondary band buffers — hold the incoming order's split during an order crossfade.
@@ -594,6 +619,12 @@ private:
     // on the output buffer (after the global dry/wet blend) so a hot dry signal can't
     // push the blended output past the ceiling. Shared by the bypass and active paths.
     void applyFinalLimiter(juce::AudioBuffer<float>& buffer);
+
+    // Free-draw graphic EQ (output-stage). prepareEqBands seeds unity coeffs at
+    // each band's centre frequency; processGraphicEq updates changed bands in
+    // place and processes the base-rate buffer. Bypassed when the curve is flat.
+    void prepareEqBands(const juce::dsp::ProcessSpec& baseSpec);
+    void processGraphicEq(juce::AudioBuffer<float>& buffer);
 
     // Helper methods for studio distortion DSP
     float applyStudioDistortion(float x, float gain, float drive, int clipType, float harmonicScale, int channel = 0);

@@ -677,7 +677,9 @@ struct SettingsState
     int oversamplingMode = 2; // 0=Off, 1=2x, 2=4x
     int scopeLength = 512;
     bool bugReportsEnabled = true;
-    bool xyMorphEnabled = false; // XY Morph pad interaction (off = scope clicks pass through)
+    // Which overlay owns the scope: 0 = Off (clicks pass through), 1 = XY Morph,
+    // 2 = Graphic EQ. Replaces the legacy boolean xyMorph flag.
+    int scopeOverlayMode = 0;
 
     void saveToFile(const juce::File& file) const
     {
@@ -689,7 +691,7 @@ struct SettingsState
         xml.setAttribute("oversampling", oversamplingMode);
         xml.setAttribute("scopeLength", scopeLength);
         xml.setAttribute("bugReports", bugReportsEnabled);
-        xml.setAttribute("xyMorph", xyMorphEnabled);
+        xml.setAttribute("scopeOverlay", scopeOverlayMode);
         xml.writeTo(file);
     }
 
@@ -705,7 +707,9 @@ struct SettingsState
         oversamplingMode = xml->getIntAttribute("oversampling", 2);
         scopeLength = xml->getIntAttribute("scopeLength", 512);
         bugReportsEnabled = xml->getBoolAttribute("bugReports", true);
-        xyMorphEnabled = xml->getBoolAttribute("xyMorph", false);
+        // Migrate the legacy boolean xyMorph flag → overlay mode (1 = XY Morph).
+        const int legacyXy = xml->getBoolAttribute("xyMorph", false) ? 1 : 0;
+        scopeOverlayMode = juce::jlimit(0, 2, xml->getIntAttribute("scopeOverlay", legacyXy));
     }
 };
 
@@ -915,16 +919,20 @@ public:
                 onOscilloscopeToggled(oscilloscopeToggle.getToggleState());
         };
 
-        // XY Morph toggle — enables the invisible XY pad overlay on the scope.
-        // When off, scope clicks pass through and no parameter morphing occurs.
-        addAndMakeVisible(xyMorphToggle);
-        xyMorphToggle.setButtonText("");
-        xyMorphToggle.setLookAndFeel(&pillLnf);
-        xyMorphToggle.setToggleState(state.xyMorphEnabled, juce::dontSendNotification);
-        xyMorphToggle.onClick = [this]() {
-            settingsState.xyMorphEnabled = xyMorphToggle.getToggleState();
-            if (onXYMorphToggled)
-                onXYMorphToggled(xyMorphToggle.getToggleState());
+        // Overlay selector — picks which overlay owns the oscilloscope: Off (clicks
+        // pass through), XY Morph pad, or the free-draw Graphic EQ. Only one is
+        // interactive at a time.
+        addAndMakeVisible(overlayModeCombo);
+        overlayModeCombo.addItem("Off", 1);
+        overlayModeCombo.addItem("XY Morph", 2);
+        overlayModeCombo.addItem("Graphic EQ", 3);
+        overlayModeCombo.setSelectedId(state.scopeOverlayMode + 1, juce::dontSendNotification);
+        overlayModeCombo.setLookAndFeel(&comboLnf);
+        overlayModeCombo.onChange = [this]() {
+            const int mode = overlayModeCombo.getSelectedId() - 1;  // 0=Off,1=XY,2=EQ
+            settingsState.scopeOverlayMode = mode;
+            if (onOverlayModeChanged)
+                onOverlayModeChanged(mode);
         };
 
         // Scope Stereo/Mono toggle
@@ -988,10 +996,10 @@ public:
         linearPhaseToggle.setLookAndFeel(nullptr);
         tooltipsToggle.setLookAndFeel(nullptr);
         oscilloscopeToggle.setLookAndFeel(nullptr);
-        xyMorphToggle.setLookAndFeel(nullptr);
         scopeStereoToggle.setLookAndFeel(nullptr);
         oversamplingCombo.setLookAndFeel(nullptr);
         windowScaleCombo.setLookAndFeel(nullptr);
+        overlayModeCombo.setLookAndFeel(nullptr);
         bugReportsToggle.setLookAndFeel(nullptr);
     }
 
@@ -1062,9 +1070,9 @@ public:
         g.drawText("Oscilloscope", scRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
         inner.removeFromTop(4.0f);
 
-        // XY Morph row label
+        // Overlay selector row label
         auto xyRow = inner.removeFromTop(20.0f);
-        g.drawText("XY Morph", xyRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
+        g.drawText("Overlay", xyRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
         inner.removeFromTop(4.0f);
 
         // Stereo row label
@@ -1157,10 +1165,10 @@ public:
         oscilloscopeToggle.setBounds(scRow.removeFromLeft(50).reduced(0, 2));
         inner.removeFromTop(4);
 
-        // XY Morph row
+        // Overlay selector row
         auto xyRow = inner.removeFromTop(20);
         xyRow.removeFromLeft(140);
-        xyMorphToggle.setBounds(xyRow.removeFromLeft(50).reduced(0, 2));
+        overlayModeCombo.setBounds(xyRow.removeFromLeft(70).reduced(0, 2));
         inner.removeFromTop(4);
 
         // Stereo row
@@ -1193,7 +1201,7 @@ public:
     }
 
     std::function<void(bool)> onOscilloscopeToggled;
-    std::function<void(bool)> onXYMorphToggled;
+    std::function<void(int)>  onOverlayModeChanged;   // 0=Off, 1=XY Morph, 2=Graphic EQ
     std::function<void(bool)> onScopeChannelModeChanged;
     std::function<void(int)>  onWindowScaleChanged;
     std::function<void(int)>  onScopeLengthChanged;
@@ -1225,7 +1233,7 @@ private:
     juce::ComboBox windowScaleCombo;
     juce::ToggleButton tooltipsToggle;
     juce::ToggleButton oscilloscopeToggle;
-    juce::ToggleButton xyMorphToggle;
+    juce::ComboBox overlayModeCombo;
     juce::ToggleButton scopeStereoToggle;
     juce::Slider scopeLengthSlider;
     juce::ToggleButton bugReportsToggle;
@@ -1246,7 +1254,7 @@ public:
 
         content = std::make_unique<SettingsContent>(apvts, state, proc);
         content->onOscilloscopeToggled    = [this](bool b) { if (onOscilloscopeToggled)    onOscilloscopeToggled(b); };
-        content->onXYMorphToggled         = [this](bool b) { if (onXYMorphToggled)         onXYMorphToggled(b); };
+        content->onOverlayModeChanged      = [this](int m)  { if (onOverlayModeChanged)      onOverlayModeChanged(m); };
         content->onScopeChannelModeChanged = [this](bool b) { if (onScopeChannelModeChanged) onScopeChannelModeChanged(b); };
         content->onWindowScaleChanged      = [this](int p)  { if (onWindowScaleChanged)      onWindowScaleChanged(p); };
         content->onScopeLengthChanged      = [this](int v)  { if (onScopeLengthChanged)      onScopeLengthChanged(v); };
@@ -1316,7 +1324,7 @@ public:
 
     std::function<void()>     onClose;
     std::function<void(bool)> onOscilloscopeToggled;
-    std::function<void(bool)> onXYMorphToggled;
+    std::function<void(int)>  onOverlayModeChanged;   // 0=Off, 1=XY Morph, 2=Graphic EQ
     std::function<void(bool)> onScopeChannelModeChanged;
     std::function<void(int)>  onWindowScaleChanged;
     std::function<void(int)>  onScopeLengthChanged;
@@ -1570,6 +1578,232 @@ private:
     }
 };
 
+//==============================================================================
+// Free-draw graphic EQ overlay — sits over the oscilloscope (same slot as
+// XYMorphPad). Drag to draw a magnitude curve; each of the kNumBands control
+// points maps to one peaking band in the DSP (eqBand0..N params). Double-click
+// flattens the curve. When not being dragged it mirrors the params, so preset
+// recall and host automation are reflected live.
+class GraphicEqOverlay : public juce::Component, public juce::Timer
+{
+public:
+    // Must match DSPConstants::EQ_NUM_BANDS / EQ_GAIN_RANGE_DB.
+    static constexpr int   kNumBands = 12;
+    static constexpr float kRangeDb  = 12.0f;
+
+    GraphicEqOverlay()
+    {
+        setInterceptsMouseClicks(false, false);  // enabled only in EQ mode
+        setOpaque(false);
+    }
+
+    ~GraphicEqOverlay() override { stopTimer(); }
+
+    // Editor supplies these to read/write the APVTS eqBand params.
+    std::function<float(int)>        getBandGainDb;
+    std::function<void(int, float)>  onBandChanged;
+
+    // Pull the current param values into the display curve (call when the EQ
+    // mode becomes active, or on preset load).
+    void syncFromParams()
+    {
+        if (getBandGainDb)
+            for (int i = 0; i < kNumBands; ++i)
+                gains[i] = getBandGainDb(i);
+        repaint();
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        if (! e.mods.isLeftButtonDown())
+            return;
+
+        if (e.getNumberOfClicks() >= 2)   // double-click resets the curve to flat
+        {
+            flatten();
+            return;
+        }
+
+        dragging = true;
+        lastBand = -1;
+        paintAt(e.position);
+    }
+
+    void mouseDrag(const juce::MouseEvent& e) override
+    {
+        if (dragging)
+            paintAt(e.position);
+    }
+
+    void mouseUp(const juce::MouseEvent&) override { dragging = false; }
+
+    void timerCallback() override
+    {
+        // Mirror params while idle so automation / preset recall shows up.
+        if (dragging || ! getBandGainDb)
+            return;
+
+        bool changed = false;
+        for (int i = 0; i < kNumBands; ++i)
+        {
+            const float g = getBandGainDb(i);
+            if (std::abs(g - gains[i]) > 1.0e-3f)
+            {
+                gains[i] = g;
+                changed = true;
+            }
+        }
+        if (changed)
+            repaint();
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        auto b = getLocalBounds().toFloat();
+        if (b.getWidth() < 2.0f || b.getHeight() < 2.0f)
+            return;
+
+        const juce::Colour neon(0xffFF0044);
+
+        // dB grid: 0 dB centre emphasised, ±6 / ±12 faint.
+        g.setColour(juce::Colours::white.withAlpha(0.06f));
+        for (float db : { 6.0f, -6.0f })
+            g.drawHorizontalLine(juce::roundToInt(dbToY(db, b)), b.getX(), b.getRight());
+        g.setColour(juce::Colours::white.withAlpha(0.14f));
+        g.drawHorizontalLine(juce::roundToInt(dbToY(0.0f, b)), b.getX(), b.getRight());
+
+        // Smooth curve through the band control points.
+        juce::Path curve;
+        const int steps = juce::jmax(kNumBands * 8, juce::roundToInt(b.getWidth()));
+        for (int s = 0; s <= steps; ++s)
+        {
+            const float x = b.getX() + b.getWidth() * (float) s / (float) steps;
+            const float db = sampleCurveDb(x, b);
+            const float y = dbToY(db, b);
+            if (s == 0) curve.startNewSubPath(x, y);
+            else        curve.lineTo(x, y);
+        }
+
+        // Translucent fill from the curve down to the 0 dB line.
+        juce::Path fill = curve;
+        fill.lineTo(b.getRight(), dbToY(0.0f, b));
+        fill.lineTo(b.getX(),     dbToY(0.0f, b));
+        fill.closeSubPath();
+        g.setColour(neon.withAlpha(0.12f));
+        g.fillPath(fill);
+
+        g.setColour(neon.withAlpha(0.9f));
+        g.strokePath(curve, juce::PathStrokeType(1.8f));
+
+        // Band handles.
+        for (int i = 0; i < kNumBands; ++i)
+        {
+            const float x = bandX(i, b);
+            const float y = dbToY(gains[i], b);
+            const bool active = std::abs(gains[i]) > 0.05f;
+            g.setColour(active ? neon : neon.withAlpha(0.45f));
+            g.fillEllipse(x - 2.6f, y - 2.6f, 5.2f, 5.2f);
+        }
+
+        // Corner label.
+        g.setColour(neon.withAlpha(0.55f));
+        g.setFont(9.0f);
+        g.drawText("GRAPHIC EQ", b.reduced(4.0f).removeFromTop(12.0f),
+                   juce::Justification::topLeft);
+    }
+
+private:
+    std::array<float, kNumBands> gains { };
+    bool  dragging = false;
+    int   lastBand = -1;
+    float lastDb   = 0.0f;
+
+    float dbToY(float db, juce::Rectangle<float> b) const
+    {
+        const float t = 0.5f - db / (2.0f * kRangeDb);   // +range → top
+        return b.getY() + t * b.getHeight();
+    }
+
+    float yToDb(float y, juce::Rectangle<float> b) const
+    {
+        const float t = (y - b.getY()) / b.getHeight();
+        return juce::jlimit(-kRangeDb, kRangeDb, (0.5f - t) * 2.0f * kRangeDb);
+    }
+
+    float bandX(int i, juce::Rectangle<float> b) const
+    {
+        return b.getX() + (i + 0.5f) * b.getWidth() / (float) kNumBands;
+    }
+
+    // Catmull-Rom interpolation of the control points at pixel x.
+    float sampleCurveDb(float x, juce::Rectangle<float> b) const
+    {
+        float fb = (x - b.getX()) / b.getWidth() * (float) kNumBands - 0.5f;
+        fb = juce::jlimit(0.0f, (float) (kNumBands - 1), fb);
+        const int i1 = (int) fb;
+        const int i0 = juce::jmax(0, i1 - 1);
+        const int i2 = juce::jmin(kNumBands - 1, i1 + 1);
+        const int i3 = juce::jmin(kNumBands - 1, i1 + 2);
+        const float t = fb - (float) i1;
+        const float t2 = t * t, t3 = t2 * t;
+        return 0.5f * ((2.0f * gains[i1])
+                     + (-gains[i0] + gains[i2]) * t
+                     + (2.0f * gains[i0] - 5.0f * gains[i1] + 4.0f * gains[i2] - gains[i3]) * t2
+                     + (-gains[i0] + 3.0f * gains[i1] - 3.0f * gains[i2] + gains[i3]) * t3);
+    }
+
+    void paintAt(juce::Point<float> p)
+    {
+        auto b = getLocalBounds().toFloat();
+        if (b.isEmpty())
+            return;
+
+        const float db = yToDb(p.y, b);
+
+        // Nearest band to the cursor.
+        int nearest = 0;
+        float best = 1.0e9f;
+        for (int i = 0; i < kNumBands; ++i)
+        {
+            const float d = std::abs(p.x - bandX(i, b));
+            if (d < best) { best = d; nearest = i; }
+        }
+
+        // Fill any bands skipped since the last event (fast sweeps stay smooth),
+        // lerping the gain across the gap for a natural stroke.
+        if (lastBand >= 0 && lastBand != nearest)
+        {
+            const int step = nearest > lastBand ? 1 : -1;
+            for (int i = lastBand + step; i != nearest; i += step)
+            {
+                const float f = (float) (i - lastBand) / (float) (nearest - lastBand);
+                setBand(i, lastDb + (db - lastDb) * f);
+            }
+        }
+
+        setBand(nearest, db);
+        lastBand = nearest;
+        lastDb   = db;
+    }
+
+    void setBand(int i, float db)
+    {
+        db = juce::jlimit(-kRangeDb, kRangeDb, db);
+        gains[i] = db;
+        if (onBandChanged)
+            onBandChanged(i, db);
+        repaint();
+    }
+
+    void flatten()
+    {
+        for (int i = 0; i < kNumBands; ++i)
+            setBand(i, 0.0f);
+    }
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(GraphicEqOverlay)
+};
+
 // Custom LookAndFeel for neon red ComboBox styling
 class ComboBoxLookAndFeel : public juce::LookAndFeel_V4
 {
@@ -1691,6 +1925,7 @@ private:
     PluginProcessor& audioProcessor;
     Oscilloscope oscilloscope;
     XYMorphPad xyMorphPad;  // Invisible XY pad overlay on oscilloscope
+    GraphicEqOverlay graphicEqOverlay;  // Free-draw EQ overlay on oscilloscope (shares the slot)
     GainReductionMeter gainReductionMeter;
     PhaseCorrelationMeter phaseCorrelationMeter;
     CheckboxLookAndFeel checkboxLookAndFeel;
@@ -1849,7 +2084,8 @@ private:
     void showFirstRunNotice();
     void hideFirstRunNotice();
     void applyOscilloscopeEnabled(bool enabled);
-    void applyXYMorphEnabled(bool enabled);
+    void applyScopeOverlayMode(int mode);       // 0=Off, 1=XY Morph, 2=Graphic EQ
+    void updateScopeOverlays(float alpha);      // sync both overlays to mode + fold alpha
     void applyWindowScale(int scalePercent);
     void loadSettings();
     void saveSettings();

@@ -34,6 +34,22 @@ PluginEditor::PluginEditor(PluginProcessor& p)
         morphDistortionParameters(x, y);
     };
 
+    // Free-draw Graphic EQ overlay — shares the scope slot with the XY pad; the
+    // Settings "Overlay" selector decides which one is interactive. Reads/writes
+    // the eqBand0..N APVTS params so the curve automates and saves with presets.
+    addChildComponent(graphicEqOverlay);
+    graphicEqOverlay.getBandGainDb = [this](int i) -> float
+    {
+        if (auto* p = audioProcessor.parameters.getParameter("eqBand" + juce::String(i)))
+            return p->convertFrom0to1(p->getValue());
+        return 0.0f;
+    };
+    graphicEqOverlay.onBandChanged = [this](int i, float db)
+    {
+        if (auto* p = audioProcessor.parameters.getParameter("eqBand" + juce::String(i)))
+            p->setValueNotifyingHost(p->convertTo0to1(db));
+    };
+
     addAndMakeVisible(gainReductionMeter);
     addAndMakeVisible(phaseCorrelationMeter);
 
@@ -584,7 +600,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     // Sync oversampling setting to processor (in case it was saved as non-default)
     audioProcessor.requestOversamplingRebuild(settingsState.oversamplingMode);
     applyOscilloscopeEnabled(settingsState.oscilloscopeEnabled);
-    applyXYMorphEnabled(settingsState.xyMorphEnabled);
+    applyScopeOverlayMode(settingsState.scopeOverlayMode);
     scopeButton.setFullMode(settingsState.oscilloscopeEnabled);
     oscilloscope.setStereoMode(settingsState.oscilloscopeStereo);
     oscilloscope.setScopeLength(settingsState.scopeLength);
@@ -709,6 +725,7 @@ void PluginEditor::resized()
     oscilloscope.setBounds((int)borderWidth, titleHeight,
                           getWidth() - (int)(borderWidth * 2), scopeH);
     xyMorphPad.setBounds(oscilloscope.getBounds());
+    graphicEqOverlay.setBounds(oscilloscope.getBounds());
     phaseCorrelationMeter.setBounds((int)borderWidth, oscilloscope.getBottom(),
                                     getWidth() - (int)(borderWidth * 2), phaseH);
 
@@ -1442,8 +1459,8 @@ void PluginEditor::showSettingsOverlay()
         scopeButton.setFullMode(enabled);  // keep the toolbar duplicate in sync
         applyOscilloscopeEnabled(enabled);
     };
-    settingsOverlay->onXYMorphToggled = [this](bool enabled) {
-        applyXYMorphEnabled(enabled);
+    settingsOverlay->onOverlayModeChanged = [this](int mode) {
+        applyScopeOverlayMode(mode);
     };
     settingsOverlay->onScopeChannelModeChanged = [this](bool isStereo) {
         oscilloscope.setStereoMode(isStereo);
@@ -1472,21 +1489,37 @@ void PluginEditor::applyWindowScale(int scalePercent)
     setSize(w, h);
 }
 
-void PluginEditor::applyXYMorphEnabled(bool enabled)
+void PluginEditor::applyScopeOverlayMode(int mode)
 {
-    // The XY pad overlays the scope. When enabled it intercepts clicks and morphs
-    // parameters on drag; when disabled it lets clicks fall through to the scope
-    // and stops its 30Hz update timer. Visibility stays governed by the scope.
-    xyMorphPad.setInterceptsMouseClicks(enabled, false);
-    if (enabled)
-    {
-        if (! xyMorphPad.isTimerRunning())
-            xyMorphPad.startTimerHz(30);
-    }
-    else
-    {
-        xyMorphPad.stopTimer();
-    }
+    // 0 = Off (scope clicks pass through), 1 = XY Morph, 2 = Graphic EQ. Only one
+    // overlay is interactive/visible at a time; the others release the mouse.
+    settingsState.scopeOverlayMode = juce::jlimit(0, 2, mode);
+    if (settingsState.scopeOverlayMode == 2)
+        graphicEqOverlay.syncFromParams();   // seed the curve from the live params
+    updateScopeOverlays(oscilloscope.getAlpha());
+}
+
+void PluginEditor::updateScopeOverlays(float alpha)
+{
+    // Both overlays share the scope's slot. Which one is live depends on the
+    // selected mode; whether ANY is shown tracks the scope's own visibility/alpha
+    // (so they fade with it during the fold animation).
+    const int  mode         = settingsState.scopeOverlayMode;
+    const bool scopeShowing = oscilloscope.isVisible();
+    const bool xyActive     = scopeShowing && mode == 1;
+    const bool eqActive     = scopeShowing && mode == 2;
+
+    xyMorphPad.setVisible(xyActive);
+    xyMorphPad.setAlpha(alpha);
+    xyMorphPad.setInterceptsMouseClicks(xyActive, false);
+    if (xyActive && ! xyMorphPad.isTimerRunning())  xyMorphPad.startTimerHz(30);
+    if (! xyActive && xyMorphPad.isTimerRunning())  xyMorphPad.stopTimer();
+
+    graphicEqOverlay.setVisible(eqActive);
+    graphicEqOverlay.setAlpha(alpha);
+    graphicEqOverlay.setInterceptsMouseClicks(eqActive, false);
+    if (eqActive && ! graphicEqOverlay.isTimerRunning())  graphicEqOverlay.startTimerHz(30);
+    if (! eqActive && graphicEqOverlay.isTimerRunning())  graphicEqOverlay.stopTimer();
 }
 
 void PluginEditor::applyOscilloscopeEnabled(bool enabled)
@@ -1502,13 +1535,13 @@ void PluginEditor::applyOscilloscopeEnabled(bool enabled)
         if (willAnimateFold)
         {
             oscilloscope.setAlpha (0.0f);
-            xyMorphPad.setAlpha (0.0f);
             phaseCorrelationMeter.setAlpha (0.0f);
         }
 
         oscilloscope.setVisible(true);
-        xyMorphPad.setVisible(true);
         phaseCorrelationMeter.setVisible(true);
+        // Sync the active overlay (XY / EQ) to the scope's visibility + fade alpha.
+        updateScopeOverlays(willAnimateFold ? 0.0f : 1.0f);
 
         // Defer the scope's 30Hz repaint timer until the fade finishes; running
         // it during the fade just wastes paints on a near-transparent component.
@@ -1528,8 +1561,8 @@ void PluginEditor::applyOscilloscopeEnabled(bool enabled)
         {
             oscilloscope.stopTimer();
             oscilloscope.setVisible(false);
-            xyMorphPad.setVisible(false);
             phaseCorrelationMeter.setVisible(false);
+            updateScopeOverlays(1.0f);  // scope hidden → overlays hidden, timers stop
         }
     }
 
@@ -1609,8 +1642,8 @@ void PluginEditor::stepFoldAnimation()
     const float alpha = (float) (settingsState.oscilloscopeEnabled ? e : (1.0 - e));
 
     oscilloscope.setAlpha (alpha);
-    xyMorphPad.setAlpha (alpha);
     phaseCorrelationMeter.setAlpha (alpha);
+    updateScopeOverlays(alpha);
 }
 
 void PluginEditor::finishFoldAnimation()
@@ -1624,19 +1657,18 @@ void PluginEditor::finishFoldAnimation()
         // snap the window to compact size in a single resize.
         oscilloscope.stopTimer();
         oscilloscope.setAlpha (1.0f);
-        xyMorphPad.setAlpha (1.0f);
         phaseCorrelationMeter.setAlpha (1.0f);
         oscilloscope.setVisible (false);
-        xyMorphPad.setVisible (false);
         phaseCorrelationMeter.setVisible (false);
+        updateScopeOverlays (1.0f);  // scope hidden → overlays hidden, timers stop
         applyWindowScale (settingsState.windowScalePercent);
     }
     else
     {
         // Expand done: lock alpha at 1.0 and kick off live scope repaints.
         oscilloscope.setAlpha (1.0f);
-        xyMorphPad.setAlpha (1.0f);
         phaseCorrelationMeter.setAlpha (1.0f);
+        updateScopeOverlays (1.0f);
         if (! oscilloscope.isTimerRunning())
             oscilloscope.startTimerHz (DSPConstants::SCOPE_REFRESH_RATE_HZ);
     }
