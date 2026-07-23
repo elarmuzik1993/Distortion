@@ -717,6 +717,51 @@ private:
     bool active = false;
 };
 
+// Toolbar quick-toggle for the XY Morph pad overlay. Draws an XY-pad glyph
+// (crosshair + handle dot); bright when the XY overlay is active, dim otherwise.
+// Mutually exclusive with EqButton via the shared overlay mode.
+class XyButton : public juce::Button
+{
+public:
+    XyButton() : juce::Button("XY Morph") {}
+
+    void setActive(bool shouldBeActive)
+    {
+        if (active != shouldBeActive) { active = shouldBeActive; repaint(); }
+    }
+    bool isActive() const { return active; }
+
+    void paintButton(juce::Graphics& g, bool isMouseOver, bool isButtonDown) override
+    {
+        auto bounds = getLocalBounds().toFloat().reduced(2.0f);
+
+        juce::Colour col = isButtonDown ? juce::Colours::white
+                         : isMouseOver  ? juce::Colour(0xFFFF4466)
+                                        : juce::Colour(0xFFFF0044);
+        if (! active)
+            col = col.withAlpha(0.45f); // dim when the XY overlay is off
+
+        // Frame (matches ScopeButton / EqButton)
+        g.setColour(col.withAlpha(active ? 0.5f : 0.3f));
+        g.drawRoundedRectangle(bounds, 2.0f, 1.0f);
+
+        // Crosshair + off-centre handle dot — reads as an XY morph pad.
+        auto area = bounds.reduced(bounds.getWidth() * 0.18f, bounds.getHeight() * 0.18f);
+        g.setColour(col.withAlpha(active ? 0.4f : 0.25f));
+        g.drawLine(area.getX(), area.getCentreY(), area.getRight(), area.getCentreY(), 1.0f);
+        g.drawLine(area.getCentreX(), area.getY(), area.getCentreX(), area.getBottom(), 1.0f);
+
+        const float dotR = juce::jmax(1.4f, area.getWidth() * 0.16f);
+        const float hx = area.getX() + area.getWidth()  * 0.68f;
+        const float hy = area.getY() + area.getHeight() * 0.34f;
+        g.setColour(col);
+        g.fillEllipse(hx - dotR, hy - dotR, dotR * 2.0f, dotR * 2.0f);
+    }
+
+private:
+    bool active = false;
+};
+
 // Settings state for UI-only settings persisted via XML
 struct SettingsState
 {
@@ -2127,6 +2172,7 @@ private:
     std::unique_ptr<FirstRunNotice> firstRunNotice;
     GearButton settingsButton;
     ScopeButton scopeButton;  // Toolbar duplicate of the Settings oscilloscope toggle
+    XyButton xyButton;        // Toolbar quick-toggle for the XY Morph overlay
     EqButton eqButton;        // Toolbar quick-toggle for the Graphic EQ overlay
     SettingsState settingsState;
 
@@ -2145,6 +2191,7 @@ private:
 
     // Toolbar oscilloscope view toggle + smooth compact<->full window fold animation
     void toggleOscilloscopeMode();
+    void toggleXyMorphOverlay();    // toolbar XY button: overlay mode XY <-> Off
     void toggleGraphicEqOverlay();  // toolbar EQ button: overlay mode EQ <-> Off
     void startFoldAnimation();
     void stepFoldAnimation();

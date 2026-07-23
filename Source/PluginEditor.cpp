@@ -594,8 +594,11 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addAndMakeVisible(scopeButton);
     scopeButton.onClick = [this]() { toggleOscilloscopeMode(); };
 
-    // Toolbar quick-toggle for the Graphic EQ overlay — mirrors the Settings
-    // "Overlay" selector's EQ position.
+    // Toolbar quick-toggles for the scope overlays — mirror the Settings
+    // "Overlay" selector's XY / EQ positions (mutually exclusive).
+    addAndMakeVisible(xyButton);
+    xyButton.onClick = [this]() { toggleXyMorphOverlay(); };
+
     addAndMakeVisible(eqButton);
     eqButton.onClick = [this]() { toggleGraphicEqOverlay(); };
 
@@ -766,7 +769,10 @@ void PluginEditor::resized()
     scopeButton.setBounds(settingsButton.getRight() + presetSpacing,
                           presetY, settingsBtnSize, settingsBtnSize);
 
-    eqButton.setBounds(scopeButton.getRight() + presetSpacing,
+    xyButton.setBounds(scopeButton.getRight() + presetSpacing,
+                       presetY, settingsBtnSize, settingsBtnSize);
+
+    eqButton.setBounds(xyButton.getRight() + presetSpacing,
                        presetY, settingsBtnSize, settingsBtnSize);
 
     // Global Mix slider - directly below preset selector
@@ -1504,7 +1510,8 @@ void PluginEditor::applyScopeOverlayMode(int mode)
     settingsState.scopeOverlayMode = juce::jlimit(0, 2, mode);
     if (settingsState.scopeOverlayMode == 2)
         graphicEqOverlay.syncFromParams();   // seed the curve from the live params
-    eqButton.setActive(settingsState.scopeOverlayMode == 2);  // keep the toolbar toggle in sync
+    xyButton.setActive(settingsState.scopeOverlayMode == 1);  // keep the toolbar toggles in sync
+    eqButton.setActive(settingsState.scopeOverlayMode == 2);
     updateScopeOverlays(oscilloscope.getAlpha());
 }
 
@@ -1596,6 +1603,17 @@ void PluginEditor::toggleOscilloscopeMode()
     applyOscilloscopeEnabled(newState);
     // Defer the disk write — a synchronous XML save on the message thread here
     // would block the fold timer's first tick (~click→first-frame latency).
+    juce::Component::SafePointer<PluginEditor> safeThis (this);
+    juce::MessageManager::callAsync ([safeThis] { if (safeThis != nullptr) safeThis->saveSettings(); });
+}
+
+void PluginEditor::toggleXyMorphOverlay()
+{
+    // Quick toggle: turn the XY Morph overlay on (mode 1), or off (mode 0) if it
+    // is already the active overlay. Switching from EQ to XY is handled by the
+    // shared mode (applyScopeOverlayMode dims the EQ button automatically).
+    const int newMode = (settingsState.scopeOverlayMode == 1) ? 0 : 1;
+    applyScopeOverlayMode(newMode);
     juce::Component::SafePointer<PluginEditor> safeThis (this);
     juce::MessageManager::callAsync ([safeThis] { if (safeThis != nullptr) safeThis->saveSettings(); });
 }
