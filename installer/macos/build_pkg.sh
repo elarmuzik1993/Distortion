@@ -30,7 +30,11 @@ APP_PATH="${4:?missing Standalone (.app) bundle path}"
 OUT_DIR="${5:-dist}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PKG_ID_BASE="com.monolitbeatz.MonolitDistortion"
+# Installer receipt identifiers. macOS keys upgrade tracking off these, so they
+# must stay stable once a .pkg ships publicly — set them to the current product
+# name now, before the first macOS release. Must match distribution.xml's
+# pkg-ref ids exactly or productbuild fails to resolve the components.
+PKG_ID_BASE="com.monolitbeatz.SledgeDistortion"
 
 for p in "$VST3_PATH" "$AU_PATH" "$APP_PATH"; do
     if [[ ! -e "$p" ]]; then

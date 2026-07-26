@@ -21,16 +21,16 @@
     </choices-outline>
 
     <choice id="choice_vst3" title="VST3 Plug-In" description="Install the VST3 into /Library/Audio/Plug-Ins/VST3.">
-        <pkg-ref id="com.monolitbeatz.MonolitDistortion.vst3"/>
+        <pkg-ref id="com.monolitbeatz.SledgeDistortion.vst3"/>
     </choice>
     <choice id="choice_au" title="Audio Unit (AU)" description="Install the Audio Unit into /Library/Audio/Plug-Ins/Components (Logic Pro / GarageBand).">
-        <pkg-ref id="com.monolitbeatz.MonolitDistortion.au"/>
+        <pkg-ref id="com.monolitbeatz.SledgeDistortion.au"/>
     </choice>
     <choice id="choice_app" title="Standalone App" description="Install the standalone Sledge Distortion app into /Applications.">
-        <pkg-ref id="com.monolitbeatz.MonolitDistortion.app"/>
+        <pkg-ref id="com.monolitbeatz.SledgeDistortion.app"/>
     </choice>
 
-    <pkg-ref id="com.monolitbeatz.MonolitDistortion.vst3" version="0">vst3.pkg</pkg-ref>
-    <pkg-ref id="com.monolitbeatz.MonolitDistortion.au" version="0">au.pkg</pkg-ref>
-    <pkg-ref id="com.monolitbeatz.MonolitDistortion.app" version="0">app.pkg</pkg-ref>
+    <pkg-ref id="com.monolitbeatz.SledgeDistortion.vst3" version="0">vst3.pkg</pkg-ref>
+    <pkg-ref id="com.monolitbeatz.SledgeDistortion.au" version="0">au.pkg</pkg-ref>
+    <pkg-ref id="com.monolitbeatz.SledgeDistortion.app" version="0">app.pkg</pkg-ref>
 </installer-gui-script>
