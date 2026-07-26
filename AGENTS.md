@@ -86,6 +86,14 @@ python scripts/fix_moduleinfo_json.py build --all
 - **Golden Audio**: Reference file comparison tests included.
 - **Host validation**: CI gates on `pluginval --strictness-level 10` (Windows + Linux; xvfb on Linux).
 - **Soak/stress**: `DistortionSoak` console tool (`Source/Tools/SoakHarness.cpp`) runs N instances faster-than-realtime, failing on non-finite output or RSS growth (DoD 24h/10+-instance gates).
+- **UI/layout changes**: verify with `DistortionUiSnapshot` (`Source/Tools/UiSnapshot.cpp`), **not** by screenshotting the standalone — its menu bar and "audio input is muted" banner shift and clip the editor, pushing the knob row outside the window. The tool paints the real `PluginEditor` offscreen at exact geometry:
+  ```bash
+  cmake --build build --target DistortionUiSnapshot
+  ./DistortionUiSnapshot --out shots              # all four window scales
+  ./DistortionUiSnapshot --collapsed --out shots  # scope folded away (reads the fold flag from settings.xml)
+  ./DistortionUiSnapshot --extreme --out shots    # after the EXTREME crack fade settles
+  ```
+  It is the only target built with `JUCE_MODAL_LOOPS_PERMITTED=1`, so it can pump the message loop and capture timer-driven animation in its settled state.
 
 ## Release & Packaging
 - **Formats shipped**: VST3 + Standalone on Windows + Linux; VST3 + AU + Standalone on macOS (universal arm64 + x86_64).
@@ -104,10 +112,24 @@ Privacy-light, **opt-out** bug reporting. Lives in `Source/Diagnostics/` (namesp
 - **Payload**: minimal/anonymous (version, OS, host, SR/block, anomaly counts, random install-id, optional user text). The free-text message is the only PII vector — see `docs/PRIVACY.md`.
 - **Build**: `JUCE_USE_CURL=1` + `JUCE_LOAD_CURL_SYMBOLS_LAZILY=1` on the **plugin target only**; tests/render/soak stay curl-free and use a `FakeTransport`. `DISTORTION_UNIT_TEST=1` gates appdata I/O + the drain out of unit-test builds. Set `DISTORTION_REPORT_ENDPOINT` (`Source/Diagnostics/ReportEndpoint.h`) before release.
 
+## UI Texture
+Cracked-glass / diamond-plate artwork behind the editor. `Resources/ui_texture.png` is authored **1:1 against the expanded 960x564 layout** — metal at the title strip, red glass across the scope, metal with knob cutouts below — and is stored at exactly 960x564, the largest the window ever reaches (100% scale). Every scale setting therefore downsamples; nothing upscales.
+
+**Alpha semantics matter here.** In the artwork the red *fill* is low-alpha but vivid (a≈25, RGB≈163,0,0) while the *cracks* are high-alpha but dark (a≈221, RGB≈33,0,0). Two consequences:
+- Drawn **behind** an opaque backdrop the cracks disappear entirely, and lifting alpha globally hazes the whole band red instead of revealing them. `Oscilloscope::paint` therefore composites the texture **on top of** its own backdrop (still under the grid and trace), which is what lets a crack darken the grey it covers.
+- The scope gets an alpha-curved copy (`kScopeAlphaGamma`, gamma > 1) that collapses the fill toward nothing while leaving the cracks intact. The title/knob bands use the **raw** artwork — they already match the design reference untouched.
+
+`PluginEditor` owns both images, rescales them on size change (`rebuildScaledTextureIfNeeded`), and hands the scope layers sized to the *full editor*; the scope samples the slice under its own bounds, so neither side tracks offsets. When the scope is folded away the editor draws only the two metal bands, taken from the rows they occupy when expanded.
+
+**Tunables**: `kTextureOpacity` and `kScopeAlphaGamma` (`PluginEditor.cpp`), the scope backdrop gradient and `kExtremeFadeSeconds` (`PluginEditor.h`).
+
+**Replacing the artwork**: keep the 960x564 canvas and registration; export flattened, since Photoshop blend modes do not survive a PNG (a Screen/Linear-Dodge layer baked into alpha is what produces the low-alpha fill described above). `ui_texture_extreme.png` is the EXTREME layer — cracks only, transparent elsewhere, same canvas. The file currently in the repo is a **placeholder** derived from the base crack geometry with the red pushed hotter; it adds no new cracks and is meant to be replaced by a real export.
+
 ## Project Layout
 - `Source/`: PluginProcessor, PluginEditor, CustomKnob, `FactoryPresets.h`, and DSP logic.
 - `Source/Diagnostics/`: bug-reporting subsystem (`diag` namespace) — sink, store, composer, sender, transport. See "Diagnostics / Bug Reporting" above.
-- `Source/Tools/`: headless console tools — `RenderHarness` (audition), `SoakHarness` (stress).
+- `Source/Tools/`: headless console tools — `RenderHarness` (audition), `SoakHarness` (stress), `UiSnapshot` (editor screenshots).
+- `Resources/`: embedded binary data — `ui_texture.png` / `ui_texture_extreme.png` (see "UI Texture" below), logo, Orbitron fonts.
 - `installer/`: Inno Setup script for the Windows installer.
 - `library/`: Shared utility code.
 - `scripts/`: Python fix scripts and build utilities.

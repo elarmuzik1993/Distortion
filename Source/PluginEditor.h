@@ -21,12 +21,30 @@ class Oscilloscope : public juce::Component, public juce::Timer
 {
 public:
 
+    // Seconds for the EXTREME crack layer to fade fully in or out.
+    static constexpr float kExtremeFadeSeconds = 0.28f;
+
     Oscilloscope(PluginProcessor& p) : processor(p)
     {
+        // Opaque: the backdrop below is drawn at full opacity and the texture is
+        // composited on top of it, so this component still covers every pixel of
+        // its bounds. Keeping it opaque spares the parent a repaint each frame.
         setOpaque(true);
         startTimerHz(DSPConstants::SCOPE_REFRESH_RATE_HZ);
         cachedBuffer.setSize(2, DSPConstants::SCOPE_DISPLAY_POINTS + DSPConstants::SCOPE_TRIGGER_MARGIN);
         cachedBuffer.clear();
+        // Cached once so the 60Hz tick doesn't repeat a parameter-map lookup.
+        extremeParam = processor.parameters.getRawParameterValue("extremeEnabled");
+    }
+
+    // The editor hands over both crack layers, already scaled to the full editor
+    // size. The scope samples the slice matching its own bounds, so the artwork
+    // stays registered to the layout without either side tracking offsets.
+    void setTextureLayers(juce::Image base, juce::Image extreme)
+    {
+        textureBase = std::move(base);
+        textureExtreme = std::move(extreme);
+        repaint();
     }
 
     void setStereoMode(bool isStereo)
@@ -53,13 +71,34 @@ public:
             return;
         }
 
-        // Darker background with subtle gradient
+        // Darker background with subtle gradient. Held below the old 0x0a..0x1a
+        // so the composited texture lands on the reference comp's interior level
+        // rather than sitting ~5 levels brighter than it.
         juce::ColourGradient bgGradient(
-            juce::Colour(0xff0a0a0a), 0, 0,
-            juce::Colour(0xff1a1a1a), 0, bounds.getHeight(),
+            juce::Colour(0xff070707), 0, 0,
+            juce::Colour(0xff121212), 0, bounds.getHeight(),
             false);
         g.setGradientFill(bgGradient);
         g.fillAll();
+
+        // UI texture on top of the backdrop, under the grid and trace. Compositing
+        // over the backdrop (rather than behind it) is what lets a crack darken the
+        // grey it covers instead of merely tinting it — the cracks in the artwork
+        // are high-alpha but dark, so drawn behind an opaque backdrop they vanish.
+        // The source rect is this component's own position in the parent, which is
+        // where the artwork was authored to line up.
+        if (textureBase.isValid())
+        {
+            const int sx = getX(), sy = getY(), w = getWidth(), h = getHeight();
+            g.drawImage(textureBase, 0, 0, w, h, sx, sy, w, h);
+
+            if (extremeMix > 0.001f && textureExtreme.isValid())
+            {
+                g.setOpacity(extremeMix);
+                g.drawImage(textureExtreme, 0, 0, w, h, sx, sy, w, h);
+                g.setOpacity(1.0f);
+            }
+        }
 
         // Draw grid with better styling
         g.setColour(juce::Colours::grey.withAlpha(0.15f));
@@ -107,6 +146,7 @@ public:
     {
         if (getWidth() > 0 && getHeight() > 0)
         {
+            advanceExtremeFade();
             processor.fillScopeBuffer(cachedBuffer);
 
             // Rising zero-crossing trigger on left channel
@@ -133,10 +173,40 @@ public:
     }
 
 private:
+    // Ease the EXTREME crack layer toward the parameter's current state. Runs on
+    // the scope's existing repaint tick, so an in-flight fade costs one extra
+    // blit per frame and a settled one costs nothing beyond the layer itself.
+    void advanceExtremeFade()
+    {
+        if (extremeParam == nullptr)
+            return;
+
+        const float target = extremeParam->load() > 0.5f ? 1.0f : 0.0f;
+        if (extremePhase == target)
+            return;
+
+        const float step = 1.0f / juce::jmax(1.0f, kExtremeFadeSeconds
+                                                 * (float) DSPConstants::SCOPE_REFRESH_RATE_HZ);
+        extremePhase = target > extremePhase ? juce::jmin(target, extremePhase + step)
+                                             : juce::jmax(target, extremePhase - step);
+
+        // Quintic ease-in-out, matching the fold animation's curve.
+        const float t = extremePhase;
+        extremeMix = t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+    }
+
     PluginProcessor& processor;
     juce::AudioBuffer<float> cachedBuffer;   // Use this for drawing
     bool stereoMode = true;
     int triggerOffset = 0;
+
+    // Crack layers, scaled to the full editor size by the editor; this component
+    // samples the slice under its own bounds. extremePhase is the linear ramp,
+    // extremeMix the eased value actually used as the layer's opacity.
+    juce::Image textureBase, textureExtreme;
+    std::atomic<float>* extremeParam = nullptr;
+    float extremePhase = 0.0f;
+    float extremeMix   = 0.0f;
     // Window of samples spanned by the display. Unlike SCOPE_DISPLAY_POINTS
     // (path resolution cap), this is what the scope-length slider controls.
     int displayLength = DSPConstants::SCOPE_DISPLAY_POINTS;
@@ -2173,7 +2243,15 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> subGuardAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> clipTypeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> filterModeAttachment;
+    // UI texture: authored 1:1 against the 960x564 expanded layout (metal at the
+    // title strip, red glass across the scope, metal + knob cutouts below), so it
+    // is drawn to the full bounds rather than tiled or letterboxed. The source is
+    // stored at exactly 960x564 — the largest the window ever gets at 100% scale —
+    // so every scale setting downsamples and none upscale.
     juce::Image backgroundImage;
+    juce::Image extremeTextureImage;         // intensified cracks, faded in on EXTREME
+    juce::Image scaledTexture;      // backgroundImage resampled to scaledTextureSize
+    juce::Rectangle<int> scaledTextureSize;  // bounds scaledTexture was built for
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoRateAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoDepthAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lfoWaveformAttachment;
@@ -2234,6 +2312,7 @@ private:
     void applyScopeOverlayMode(int mode);       // 0=Off, 1=XY Morph, 2=Graphic EQ
     void updateScopeOverlays(float alpha);      // sync both overlays to mode + fold alpha
     void applyWindowScale(int scalePercent);
+    void rebuildScaledTextureIfNeeded();
     void loadSettings();
     void saveSettings();
     juce::File getSettingsFile();

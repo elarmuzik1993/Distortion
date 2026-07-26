@@ -21,7 +21,8 @@
               file="Source/Tests/TestUtilities.h"/>
       </GROUP>
     </GROUP>
-    <FILE id="UwTQgs" name="background.png" compile="0" resource="1" file="Resources/background.png"/>
+    <FILE id="UwTQgs" name="ui_texture.png" compile="0" resource="1" file="Resources/ui_texture.png"/>
+    <FILE id="UxTQht" name="ui_texture_extreme.png" compile="0" resource="1" file="Resources/ui_texture_extreme.png"/>
     <FILE id="k8TTjs" name="CustomKnob.cpp" compile="1" resource="0" file="Source/CustomKnob.cpp"/>
     <FILE id="Cj3vPi" name="CustomKnob.h" compile="0" resource="0" file="Source/CustomKnob.h"/>
     <FILE id="cyccmb" name="CyclingComboBox.h" compile="0" resource="0" file="Source/CyclingComboBox.h"/>

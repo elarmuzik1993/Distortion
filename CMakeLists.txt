@@ -133,7 +133,8 @@ juce_generate_juce_header(Distortion)
 
 # Add binary data (background image)
 juce_add_binary_data(DistortionData SOURCES
-    Resources/background.png
+    Resources/ui_texture.png
+    Resources/ui_texture_extreme.png
     "Resources/Logo Title.png"
     Resources/Orbitron-Bold.ttf
     Resources/Orbitron-Regular.ttf
@@ -282,6 +283,60 @@ target_compile_definitions(DistortionRender
 )
 
 target_link_libraries(DistortionRender
+    PRIVATE
+        DistortionData
+        juce::juce_audio_basics
+        juce::juce_audio_devices
+        juce::juce_audio_formats
+        juce::juce_audio_processors
+        juce::juce_audio_utils
+        juce::juce_core
+        juce::juce_data_structures
+        juce::juce_dsp
+        juce::juce_events
+        juce::juce_graphics
+        juce::juce_gui_basics
+        juce::juce_gui_extra
+    PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+)
+
+# ============================================================================
+# DistortionUiSnapshot
+# Headless tool that paints the real PluginEditor into PNGs at every window
+# scale, with no host window to shift or clip it. See Source/Tools/UiSnapshot.cpp.
+# ============================================================================
+juce_add_console_app(DistortionUiSnapshot
+    COMPANY_NAME "Monolit Beatz"
+    BUNDLE_ID "com.monolitbeatz.MonolitDistortionUiSnapshot"
+    PRODUCT_NAME "DistortionUiSnapshot"
+)
+
+target_sources(DistortionUiSnapshot PRIVATE
+    ${PLUGIN_SOURCES}
+    Source/Tools/UiSnapshot.cpp
+)
+
+juce_generate_juce_header(DistortionUiSnapshot)
+
+target_compile_definitions(DistortionUiSnapshot
+    PRIVATE
+        # Tool-only: lets the harness pump the message loop so timer-driven
+        # animations (the EXTREME crack fade) settle before a frame is captured.
+        JUCE_MODAL_LOOPS_PERMITTED=1
+        JucePlugin_Name="Distortion"
+        JucePlugin_IsSynth=0
+        JucePlugin_WantsMidiInput=0
+        JucePlugin_ProducesMidiOutput=0
+        JucePlugin_IsMidiEffect=0
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_STRICT_REFCOUNTEDPOINTER=1
+        JUCE_STANDALONE_APPLICATION=1
+)
+
+target_link_libraries(DistortionUiSnapshot
     PRIVATE
         DistortionData
         juce::juce_audio_basics

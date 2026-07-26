@@ -78,10 +78,16 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     // Note: setSize moved to end of constructor so all components exist when resized() fires
     setResizable(false, false);
 
-    // Load background image from Resources folder
+    // Load UI texture from Resources folder
     backgroundImage = juce::ImageCache::getFromMemory(
-        BinaryData::background_png,
-        BinaryData::background_pngSize
+        BinaryData::ui_texture_png,
+        BinaryData::ui_texture_pngSize
+    );
+
+    // Intensified crack layer, crossfaded in by the scope while EXTREME is on.
+    extremeTextureImage = juce::ImageCache::getFromMemory(
+        BinaryData::ui_texture_extreme_png,
+        BinaryData::ui_texture_extreme_pngSize
     );
 
 
@@ -709,10 +715,121 @@ void PluginEditor::setupSlider(CustomKnob& slider,
 }
 
 //==============================================================================
+// Opacity the UI texture is composited at, over the black fill and under the
+// neon frame. The artwork is already mostly low-alpha; this is the single knob
+// for how present it reads. 1.0f draws it exactly as authored.
+static constexpr float kTextureOpacity = 1.00f;
+
+// Alpha contrast applied to the copy the oscilloscope composites over its own
+// backdrop. The artwork's red *fill* is low-alpha but vivid (a≈25, RGB≈163,0,0)
+// while the cracks are high-alpha but dark (a≈221, RGB≈33,0,0). Drawn as-authored
+// over the backdrop the fill hazes the whole band red; a gamma above 1 collapses
+// the fill toward nothing while leaving the cracks essentially untouched.
+static constexpr float kScopeAlphaGamma = 1.80f;
+
+// Re-curve an image's alpha channel. JUCE stores ARGB premultiplied, so each
+// pixel is unpremultiplied before its alpha is remapped and premultiplied after.
+static juce::Image withAlphaGamma(const juce::Image& source, float gamma)
+{
+    if (! source.isValid())
+        return source;
+
+    juce::uint8 lut[256];
+    for (int i = 0; i < 256; ++i)
+        lut[i] = (juce::uint8) juce::roundToInt(255.0f * std::pow(i / 255.0f, gamma));
+
+    juce::Image out = source.createCopy();
+    juce::Image::BitmapData data(out, juce::Image::BitmapData::readWrite);
+
+    for (int y = 0; y < data.height; ++y)
+    {
+        for (int x = 0; x < data.width; ++x)
+        {
+            auto* px = reinterpret_cast<juce::PixelARGB*>(data.getPixelPointer(x, y));
+            px->unpremultiply();
+            px->setAlpha(lut[px->getAlpha()]);
+            px->premultiply();
+        }
+    }
+
+    return out;
+}
+
+void PluginEditor::rebuildScaledTextureIfNeeded()
+{
+    if (! backgroundImage.isValid() || getWidth() <= 0)
+        return;
+
+    // The texture is authored 1:1 against the *expanded* 960x564 layout, so it is
+    // always scaled to the expanded size for the current window scale. The
+    // collapsed strip blits sub-regions out of this same image, which keeps the
+    // metal bands pinned to the title and control rows at identical scale.
+    // Derived from width alone: width tracks the scale setting in both fold
+    // states, so this stays correct without depending on the current height.
+    const int w = getWidth();
+    const int h = juce::roundToInt(w * 564.0f / 960.0f);
+
+    if (scaledTexture.isValid() && scaledTextureSize == juce::Rectangle<int>(w, h))
+        return;
+
+    scaledTexture = backgroundImage.rescaled(w, h, juce::Graphics::highResamplingQuality);
+    scaledTextureSize = juce::Rectangle<int>(w, h);
+
+    // The scope composites over its own backdrop rather than sitting behind it,
+    // so it gets the alpha-curved copy; the metal bands keep the raw artwork,
+    // which already matches the reference.
+    auto scopeBase = withAlphaGamma(scaledTexture, kScopeAlphaGamma);
+    auto scopeExtreme = extremeTextureImage.isValid()
+        ? extremeTextureImage.rescaled(w, h, juce::Graphics::highResamplingQuality)
+        : juce::Image();
+
+    oscilloscope.setTextureLayers(std::move(scopeBase), std::move(scopeExtreme));
+}
+
 void PluginEditor::paint(juce::Graphics& g)
 {
     // Black background
     g.fillAll(juce::Colours::black);
+
+    rebuildScaledTextureIfNeeded();
+
+    if (scaledTexture.isValid())
+    {
+        const int w = getWidth();
+        const int texH = scaledTextureSize.getHeight();
+
+        g.setOpacity(kTextureOpacity);
+
+        // Key off the fold state, not the measured height: a host (the standalone
+        // included) can hand the editor a height a few pixels off the nominal
+        // 564-per-960, and inferring the state from pixels flips the branch.
+        if (settingsState.oscilloscopeEnabled)
+        {
+            // Expanded: the artwork maps straight onto the window it was drawn for.
+            g.drawImage(scaledTexture,
+                        0, 0, w, getHeight(),
+                        0, 0, w, texH);
+        }
+        else
+        {
+            // Collapsed (scope folded away): draw only the two metal bands, taken
+            // from the rows they occupy when expanded, so they stay welded to the
+            // title strip and the control row. The red glass band belongs to the
+            // scope and is omitted along with it.
+            const float s = w / 960.0f;
+            const int titleH  = juce::roundToInt(50.0f * s);
+            const int bottomH = juce::roundToInt(130.0f * s);
+
+            g.drawImage(scaledTexture,
+                        0, 0, w, titleH,
+                        0, 0, w, titleH);
+            g.drawImage(scaledTexture,
+                        0, getHeight() - bottomH, w, bottomH,
+                        0, texH - bottomH,        w, bottomH);
+        }
+
+        g.setOpacity(1.0f);
+    }
 
     // Draw solid neon red frame (consistent width on all 4 sides)
     g.setColour(juce::Colour(0xFF, 0x00, 0x44));  // Fully opaque neon red
