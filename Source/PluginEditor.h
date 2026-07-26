@@ -21,9 +21,6 @@ class Oscilloscope : public juce::Component, public juce::Timer
 {
 public:
 
-    // Seconds for the EXTREME crack layer to fade fully in or out.
-    static constexpr float kExtremeFadeSeconds = 0.28f;
-
     Oscilloscope(PluginProcessor& p) : processor(p)
     {
         // Opaque: the backdrop below is drawn at full opacity and the texture is
@@ -33,8 +30,6 @@ public:
         startTimerHz(DSPConstants::SCOPE_REFRESH_RATE_HZ);
         cachedBuffer.setSize(2, DSPConstants::SCOPE_DISPLAY_POINTS + DSPConstants::SCOPE_TRIGGER_MARGIN);
         cachedBuffer.clear();
-        // Cached once so the 60Hz tick doesn't repeat a parameter-map lookup.
-        extremeParam = processor.parameters.getRawParameterValue("extremeEnabled");
     }
 
     // The editor hands over both crack layers, already scaled to the full editor
@@ -46,6 +41,11 @@ public:
         textureExtreme = std::move(extreme);
         repaint();
     }
+
+    // Driven by the editor, which owns the fade so the cracks spanning the title
+    // and knob bands stay in step with the ones inside the scope. No repaint here
+    // — this component already repaints on its own tick.
+    void setExtremeMix(float mix) { extremeMix = mix; }
 
     void setStereoMode(bool isStereo)
     {
@@ -146,7 +146,6 @@ public:
     {
         if (getWidth() > 0 && getHeight() > 0)
         {
-            advanceExtremeFade();
             processor.fillScopeBuffer(cachedBuffer);
 
             // Rising zero-crossing trigger on left channel
@@ -173,40 +172,16 @@ public:
     }
 
 private:
-    // Ease the EXTREME crack layer toward the parameter's current state. Runs on
-    // the scope's existing repaint tick, so an in-flight fade costs one extra
-    // blit per frame and a settled one costs nothing beyond the layer itself.
-    void advanceExtremeFade()
-    {
-        if (extremeParam == nullptr)
-            return;
-
-        const float target = extremeParam->load() > 0.5f ? 1.0f : 0.0f;
-        if (extremePhase == target)
-            return;
-
-        const float step = 1.0f / juce::jmax(1.0f, kExtremeFadeSeconds
-                                                 * (float) DSPConstants::SCOPE_REFRESH_RATE_HZ);
-        extremePhase = target > extremePhase ? juce::jmin(target, extremePhase + step)
-                                             : juce::jmax(target, extremePhase - step);
-
-        // Quintic ease-in-out, matching the fold animation's curve.
-        const float t = extremePhase;
-        extremeMix = t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
-    }
-
     PluginProcessor& processor;
     juce::AudioBuffer<float> cachedBuffer;   // Use this for drawing
     bool stereoMode = true;
     int triggerOffset = 0;
 
     // Crack layers, scaled to the full editor size by the editor; this component
-    // samples the slice under its own bounds. extremePhase is the linear ramp,
-    // extremeMix the eased value actually used as the layer's opacity.
+    // samples the slice under its own bounds. extremeMix is the eased crossfade
+    // opacity, pushed in by the editor.
     juce::Image textureBase, textureExtreme;
-    std::atomic<float>* extremeParam = nullptr;
-    float extremePhase = 0.0f;
-    float extremeMix   = 0.0f;
+    float extremeMix = 0.0f;
     // Window of samples spanned by the display. Unlike SCOPE_DISPLAY_POINTS
     // (path resolution cap), this is what the scope-length slider controls.
     int displayLength = DSPConstants::SCOPE_DISPLAY_POINTS;
@@ -2251,7 +2226,16 @@ private:
     juce::Image backgroundImage;
     juce::Image extremeTextureImage;         // intensified cracks, faded in on EXTREME
     juce::Image scaledTexture;      // backgroundImage resampled to scaledTextureSize
+    juce::Image scaledExtremeTexture;        // extremeTextureImage at the same size
     juce::Rectangle<int> scaledTextureSize;  // bounds scaledTexture was built for
+
+    // EXTREME crack crossfade. The layer spans the whole canvas — cracks cross the
+    // title strip and knob band as well as the scope — so the editor drives the
+    // fade and pushes the eased value down to the scope, keeping them in step.
+    static constexpr float kExtremeFadeSeconds = 0.28f;
+    std::atomic<float>* extremeParam = nullptr;
+    float extremePhase = 0.0f;   // linear ramp
+    float extremeMix   = 0.0f;   // eased value used as the layer's opacity
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoRateAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoDepthAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lfoWaveformAttachment;
@@ -2313,6 +2297,7 @@ private:
     void updateScopeOverlays(float alpha);      // sync both overlays to mode + fold alpha
     void applyWindowScale(int scalePercent);
     void rebuildScaledTextureIfNeeded();
+    void advanceExtremeFade();
     void loadSettings();
     void saveSettings();
     juce::File getSettingsFile();

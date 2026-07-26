@@ -121,9 +121,11 @@ Cracked-glass / diamond-plate artwork behind the editor. `Resources/ui_texture.p
 
 `PluginEditor` owns both images, rescales them on size change (`rebuildScaledTextureIfNeeded`), and hands the scope layers sized to the *full editor*; the scope samples the slice under its own bounds, so neither side tracks offsets. When the scope is folded away the editor draws only the two metal bands, taken from the rows they occupy when expanded.
 
-**Tunables**: `kTextureOpacity` and `kScopeAlphaGamma` (`PluginEditor.cpp`), the scope backdrop gradient and `kExtremeFadeSeconds` (`PluginEditor.h`).
+**EXTREME layer**: `ui_texture_extreme.png` is a full-canvas shatter — cracks cross the title strip and knob band as well as the scope — so `PluginEditor` owns the crossfade and pushes the eased value down to the scope (`setExtremeMix`) to keep them in step. It repaints only while the fade is moving; settled states cost nothing beyond the extra layer. The two alpha curves pull in **opposite directions on purpose**: `kScopeAlphaGamma` (> 1) curves the resting state *down* so the band stays clean, while `kExtremeAlphaGamma` (< 1) curves the engaged state *up* so it reads as an event. Applying the resting curve to the EXTREME layer guts it — the shatter's fill sits near alpha 25, which that curve drops to ~4, compositing at ~1.5%.
 
-**Replacing the artwork**: keep the 960x564 canvas and registration; export flattened, since Photoshop blend modes do not survive a PNG (a Screen/Linear-Dodge layer baked into alpha is what produces the low-alpha fill described above). `ui_texture_extreme.png` is the EXTREME layer — cracks only, transparent elsewhere, same canvas. The file currently in the repo is a **placeholder** derived from the base crack geometry with the red pushed hotter; it adds no new cracks and is meant to be replaced by a real export.
+**Tunables**: `kTextureOpacity`, `kScopeAlphaGamma`, `kExtremeAlphaGamma` (`PluginEditor.cpp`); the scope backdrop gradient and `kExtremeFadeSeconds` (`PluginEditor.h`).
+
+**Replacing the artwork**: keep the 960x564 canvas and registration; export flattened, since Photoshop blend modes do not survive a PNG (a Screen/Linear-Dodge layer baked into alpha is what produces the low-alpha fill described above). Source art is authored on a 1202x778 canvas and cropped to `y=71..777, x=0..1200` before scaling — both layers share that crop, which is what registers them. Verify a replacement with `DistortionUiSnapshot --extreme` rather than by eye.
 
 ## Project Layout
 - `Source/`: PluginProcessor, PluginEditor, CustomKnob, `FactoryPresets.h`, and DSP logic.

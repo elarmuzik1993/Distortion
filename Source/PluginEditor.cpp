@@ -84,11 +84,15 @@ PluginEditor::PluginEditor(PluginProcessor& p)
         BinaryData::ui_texture_pngSize
     );
 
-    // Intensified crack layer, crossfaded in by the scope while EXTREME is on.
+    // Intensified crack layer, crossfaded in while EXTREME is on. Same canvas and
+    // registration as the base texture, so one geometry serves both.
     extremeTextureImage = juce::ImageCache::getFromMemory(
         BinaryData::ui_texture_extreme_png,
         BinaryData::ui_texture_extreme_pngSize
     );
+
+    // Cached once so the 60Hz tick doesn't repeat a parameter-map lookup.
+    extremeParam = audioProcessor.parameters.getRawParameterValue("extremeEnabled");
 
 
     setupSlider(inputGainSlider, inputGainLabel, "Input Gain",
@@ -727,6 +731,13 @@ static constexpr float kTextureOpacity = 1.00f;
 // the fill toward nothing while leaving the cracks essentially untouched.
 static constexpr float kScopeAlphaGamma = 1.80f;
 
+// Alpha lift for the EXTREME crack layer. Mirror image of the above: the resting
+// state is curved *down* to stay clean, the engaged state is curved *up* to read
+// as an event. The shatter artwork averages ~22% alpha, so composited as authored
+// over a dark UI it stays subdued — a gamma below 1 makes the panel go red-hot
+// without touching the resting look. Raise toward 1.0 for a subtler EXTREME.
+static constexpr float kExtremeAlphaGamma = 0.55f;
+
 // Re-curve an image's alpha channel. JUCE stores ARGB premultiplied, so each
 // pixel is unpremultiplied before its alpha is remapped and premultiplied after.
 static juce::Image withAlphaGamma(const juce::Image& source, float gamma)
@@ -773,17 +784,43 @@ void PluginEditor::rebuildScaledTextureIfNeeded()
         return;
 
     scaledTexture = backgroundImage.rescaled(w, h, juce::Graphics::highResamplingQuality);
+    scaledExtremeTexture = extremeTextureImage.isValid()
+        ? withAlphaGamma(extremeTextureImage.rescaled(w, h, juce::Graphics::highResamplingQuality),
+                         kExtremeAlphaGamma)
+        : juce::Image();
     scaledTextureSize = juce::Rectangle<int>(w, h);
 
     // The scope composites over its own backdrop rather than sitting behind it,
-    // so it gets the alpha-curved copy; the metal bands keep the raw artwork,
-    // which already matches the reference.
-    auto scopeBase = withAlphaGamma(scaledTexture, kScopeAlphaGamma);
-    auto scopeExtreme = extremeTextureImage.isValid()
-        ? extremeTextureImage.rescaled(w, h, juce::Graphics::highResamplingQuality)
-        : juce::Image();
+    // so the *base* layer gets the alpha curve; the metal bands keep the raw
+    // artwork, which already matches the reference.
+    //
+    // The EXTREME layer carries its own lift (kExtremeAlphaGamma, applied above)
+    // rather than this curve. Applying the resting curve here would gut it: the
+    // shatter's fill sits around alpha 25, which the curve drops to ~4, so the
+    // layer would composite at ~1.5% and never read.
+    oscilloscope.setTextureLayers(withAlphaGamma(scaledTexture, kScopeAlphaGamma),
+                                  scaledExtremeTexture);
+}
 
-    oscilloscope.setTextureLayers(std::move(scopeBase), std::move(scopeExtreme));
+void PluginEditor::advanceExtremeFade()
+{
+    if (extremeParam == nullptr)
+        return;
+
+    const float target = extremeParam->load() > 0.5f ? 1.0f : 0.0f;
+    if (extremePhase == target)
+        return;
+
+    const float step = 1.0f / juce::jmax(1.0f, kExtremeFadeSeconds * 60.0f);
+    extremePhase = target > extremePhase ? juce::jmin(target, extremePhase + step)
+                                         : juce::jmax(target, extremePhase - step);
+
+    // Quintic ease-in-out, matching the fold animation's curve.
+    const float t = extremePhase;
+    extremeMix = t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+
+    oscilloscope.setExtremeMix(extremeMix);
+    repaint();   // only while the fade is in flight; settled states cost nothing
 }
 
 void PluginEditor::paint(juce::Graphics& g)
@@ -798,7 +835,24 @@ void PluginEditor::paint(juce::Graphics& g)
         const int w = getWidth();
         const int texH = scaledTextureSize.getHeight();
 
-        g.setOpacity(kTextureOpacity);
+        // Draws the base artwork, then the EXTREME crack layer over it at the
+        // crossfade's current opacity. Both share a canvas and registration, so
+        // the same geometry serves each; the scope paints its own slices on top
+        // of its backdrop and is skipped here.
+        auto drawLayers = [&] (int dx, int dy, int dw, int dh,
+                               int sx, int sy, int sw, int sh)
+        {
+            g.setOpacity(kTextureOpacity);
+            g.drawImage(scaledTexture, dx, dy, dw, dh, sx, sy, sw, sh);
+
+            if (extremeMix > 0.001f && scaledExtremeTexture.isValid())
+            {
+                g.setOpacity(kTextureOpacity * extremeMix);
+                g.drawImage(scaledExtremeTexture, dx, dy, dw, dh, sx, sy, sw, sh);
+            }
+
+            g.setOpacity(1.0f);
+        };
 
         // Key off the fold state, not the measured height: a host (the standalone
         // included) can hand the editor a height a few pixels off the nominal
@@ -806,9 +860,7 @@ void PluginEditor::paint(juce::Graphics& g)
         if (settingsState.oscilloscopeEnabled)
         {
             // Expanded: the artwork maps straight onto the window it was drawn for.
-            g.drawImage(scaledTexture,
-                        0, 0, w, getHeight(),
-                        0, 0, w, texH);
+            drawLayers(0, 0, w, getHeight(), 0, 0, w, texH);
         }
         else
         {
@@ -820,15 +872,10 @@ void PluginEditor::paint(juce::Graphics& g)
             const int titleH  = juce::roundToInt(50.0f * s);
             const int bottomH = juce::roundToInt(130.0f * s);
 
-            g.drawImage(scaledTexture,
-                        0, 0, w, titleH,
-                        0, 0, w, titleH);
-            g.drawImage(scaledTexture,
-                        0, getHeight() - bottomH, w, bottomH,
-                        0, texH - bottomH,        w, bottomH);
+            drawLayers(0, 0, w, titleH, 0, 0, w, titleH);
+            drawLayers(0, getHeight() - bottomH, w, bottomH,
+                       0, texH - bottomH,        w, bottomH);
         }
-
-        g.setOpacity(1.0f);
     }
 
     // Draw solid neon red frame (consistent width on all 4 sides)
@@ -1299,6 +1346,10 @@ void PluginEditor::timerCallback()
 
     // Update LFO modulation indicator
     updateModulationHighlight();
+
+    // Advance the EXTREME crack crossfade (self-limiting: repaints only while the
+    // fade is actually moving).
+    advanceExtremeFade();
 }
 
 void PluginEditor::morphDistortionParameters(float x, float y)
