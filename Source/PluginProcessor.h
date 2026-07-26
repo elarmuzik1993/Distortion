@@ -77,6 +77,14 @@ namespace DSPConstants
     constexpr float EQ_Q = 1.4f;                              // Fixed Q (~0.75-oct, gentle overlap)
     constexpr float EQ_FLAT_EPS_DB = 0.05f;                   // Below this |gain|, treat as flat
     constexpr double EQ_GAIN_SMOOTH_TIME_S = 0.03;            // 30ms gain ramp (kills zipper on drag)
+    // Highest centre frequency we will run a peaking band at, as a fraction of the
+    // base sample rate. A peaking biquad's alpha term goes negative once its centre
+    // reaches Nyquist (sin(omega) <= 0), which pushes the poles onto/outside the unit
+    // circle and makes the band diverge. Bands above this ratio are skipped entirely
+    // — they are out of the reproducible band anyway. 0.45 keeps a margin below the
+    // 0.5 hard limit. At 44.1 kHz every band is usable; at 32 kHz and below the
+    // 16 kHz band drops out.
+    constexpr double EQ_MAX_FREQ_RATIO = 0.45;
     // Log-spaced centre frequencies (30 Hz → 16 kHz). Kept in-band at 44.1 kHz.
     constexpr float EQ_FREQS[EQ_NUM_BANDS] = {
         30.0f, 55.0f, 100.0f, 180.0f, 320.0f, 560.0f,
@@ -397,6 +405,10 @@ private:
     std::atomic<float>* eqEnabledParam = nullptr;   // EQ master bypass (1 = active, 0 = bypassed)
     juce::SmoothedValue<float> eqGainSmoothed[DSPConstants::EQ_NUM_BANDS];
     float eqLastGainDb[DSPConstants::EQ_NUM_BANDS] = {};               // last coeffs written
+    // False for bands whose centre sits at/above EQ_MAX_FREQ_RATIO * base rate —
+    // a peaking biquad is unstable there (see EQ_MAX_FREQ_RATIO). Set in
+    // prepareEqBands; such bands are never given coefficients or processed.
+    bool eqBandUsable[DSPConstants::EQ_NUM_BANDS] = {};
     double eqSampleRate = 44100.0;                                     // base rate for coeff writes
 
     juce::AudioBuffer<float> lowBandBuffer;   // For clean low frequencies

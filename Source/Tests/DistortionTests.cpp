@@ -4428,9 +4428,12 @@ void GraphicEqTests::runTest()
                "Boosting 5.6 kHz noticeably moved the 1 kHz level");
     }
 
-    beginTest("Wild curve stays finite across 44.1/48/96/192 kHz");
+    beginTest("Wild curve stays finite across 22.05/32/44.1/48/96/192 kHz");
     {
-        for (double rate : { 44100.0, 48000.0, 96000.0, 192000.0 })
+        // 22.05 and 32 kHz matter: the 16 kHz band sits at/above Nyquist there, and
+        // a peaking biquad diverges once its centre reaches Nyquist. prepareEqBands
+        // must drop those bands instead of writing unstable coefficients.
+        for (double rate : { 22050.0, 32000.0, 44100.0, 48000.0, 96000.0, 192000.0 })
         {
             PluginProcessor p;
             p.setRateAndBufferSizeDetails(rate, blockSize);

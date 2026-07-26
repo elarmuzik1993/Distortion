@@ -2920,12 +2920,19 @@ void PluginProcessor::applyAutoGainAndISP(juce::AudioBuffer<float>& buffer)
 void PluginProcessor::prepareEqBands(const juce::dsp::ProcessSpec& baseSpec)
 {
     eqSampleRate = baseSpec.sampleRate;
+    const double maxEqFreq = eqSampleRate * DSPConstants::EQ_MAX_FREQ_RATIO;
     for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
     {
+        // A peaking band at/above Nyquist is unstable (negative alpha puts the poles
+        // on or outside the unit circle), so drop those bands at low base rates
+        // rather than writing coefficients that would make the filter diverge.
+        eqBandUsable[i] = DSPConstants::EQ_FREQS[i] < maxEqFreq;
+
         eqBands[i].prepare(baseSpec);
         // Seed with unity (0 dB) peak at this band's centre frequency.
-        writePeakFilterCoeffs(*eqBands[i].state, eqSampleRate,
-                              DSPConstants::EQ_FREQS[i], DSPConstants::EQ_Q, 1.0);
+        if (eqBandUsable[i])
+            writePeakFilterCoeffs(*eqBands[i].state, eqSampleRate,
+                                  DSPConstants::EQ_FREQS[i], DSPConstants::EQ_Q, 1.0);
         eqBands[i].reset();
 
         eqGainSmoothed[i].reset(baseSpec.sampleRate, DSPConstants::EQ_GAIN_SMOOTH_TIME_S);
@@ -2957,6 +2964,10 @@ void PluginProcessor::processGraphicEq(juce::AudioBuffer<float>& buffer)
         const float target = eqEnabled ? raw : 0.0f;
         eqGainSmoothed[i].setTargetValue(target);
 
+        // Out-of-band bands never process, so their gain must not keep the bank awake.
+        if (! eqBandUsable[i])
+            continue;
+
         if (std::abs(target) > DSPConstants::EQ_FLAT_EPS_DB
             || std::abs(eqGainSmoothed[i].getCurrentValue()) > DSPConstants::EQ_FLAT_EPS_DB)
             anyActive = true;
@@ -2972,6 +2983,9 @@ void PluginProcessor::processGraphicEq(juce::AudioBuffer<float>& buffer)
 
     for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
     {
+        if (! eqBandUsable[i])
+            continue;
+
         // Advance the ramp across this block; rewrite coefficients only when the
         // gain actually moved (in place, no allocation).
         const float g = eqGainSmoothed[i].skip(numSamples);
