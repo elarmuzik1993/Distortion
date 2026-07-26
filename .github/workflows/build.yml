@@ -8,6 +8,13 @@ on:
     branches: [ main ]
   workflow_dispatch:  # Allow manual trigger
 
+# Only one run per branch/PR at a time; pushing again cancels the superseded run
+# instead of paying it out to completion. Never cancels tag runs — those publish
+# the release and must finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+
 env:
   BUILD_TYPE: Release
   PLUGIN_NAME: "Sledge Distortion"
@@ -226,6 +233,16 @@ jobs:
         retention-days: 30
 
   build-macos:
+    # GitHub bills macOS runners at 10x minutes (Linux 1x, Windows 2x), so this
+    # job is the most expensive thing in the workflow by a wide margin. It runs
+    # only where it is load-bearing: release tags, and on-demand via the Actions
+    # UI. The release job below needs it, and tags satisfy this condition, so
+    # publishing still gets a validated macOS build.
+    #
+    # Trade-off: macOS regressions surface at tag time rather than on the PR.
+    # Run the workflow manually before tagging if a change touches the macOS
+    # path (CMakeLists, installer/macos/, or anything platform-conditional).
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: macos-14
 
     # Apple Developer ID signing + notarization creds (set as repo secrets to

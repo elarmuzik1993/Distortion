@@ -21,7 +21,7 @@
 - **LFO INV Toggle**: Inverts LFO polarity in both DSP (`lfoSign = -1`) and the arc visualizer (arc sweeps below the knob value instead of above).
 - **CyclingComboBox** (`Source/CyclingComboBox.h`): Custom `juce::ComboBox` subclass — single-click cycles to next item (timer-debounced), double-click opens the full list. Used for clip type, LFO waveform/destination, compression ratio, and settings dropdowns.
 - **Safety**: Includes `realtime-audio-safety-checklist.md` for thread safety and DSP best practices.
-- **CI/CD**: GitHub Actions for automated Windows/Linux release artifacts.
+- **CI/CD**: GitHub Actions for automated Windows/Linux/macOS release artifacts. Windows + Linux run on every push/PR; **macOS (`macos-14`) runs only on `v*` tags and manual dispatch** because macOS runners bill at 10× minutes (Linux 1×, Windows 2×). A `concurrency` group cancels superseded non-tag runs. Consequence: macOS breakage surfaces at tag time, so dispatch the workflow manually after touching `CMakeLists.txt`, `installer/macos/`, or any platform-conditional code.
 
 ## Build System
 ### CMake (Linux/Mac/Windows - Recommended)
