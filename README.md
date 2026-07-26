@@ -6,9 +6,9 @@ A professional JUCE audio plugin featuring multi-stage distortion, LA2A-style co
 
 **Sledge Distortion** - A JUCE audio plugin by Monolit Beatz
 - **Version**: 2.2
-- **Type**: Audio Plugin (VST3, Standalone)
+- **Type**: Audio Plugin (VST3, Standalone; + AU on macOS)
 - **Framework**: JUCE 7.0.12
-- **Platforms**: Windows, Linux
+- **Platforms**: Windows, Linux, macOS (universal arm64 + x86_64)
 - **Build Systems**: CMake (cross-platform), Visual Studio 2022
 
 ## What's New in v2.2
@@ -22,7 +22,7 @@ A professional JUCE audio plugin featuring multi-stage distortion, LA2A-style co
 - **UI refresh** — layered-arc rotary knobs with value-driven colour, a 5-LED gain-reduction meter, scrollable settings panel, and compact window fold
 - **16 factory presets** (up from 8)
 - **Audio-quality fixes** — Sub Guard crossover phase + click-free slope changes, phase-aligned wet/dry mix, corrected LFO rate in the oversampled path, strict -0.5 dBFS output ceiling, latency-compensated true bypass
-- **Platform** — VST3 + Standalone (VST2 removed), Windows + Linux; validated with pluginval (strictness 10)
+- **Platform** — VST3 + Standalone (VST2 removed) on Windows + Linux; VST3 + AU + Standalone on macOS (universal arm64 + x86_64); validated with pluginval (strictness 10)
 
 ## Features
 
@@ -79,6 +79,14 @@ cd Builds/VisualStudio2022
 MSBuild Distortion.sln -p:Configuration=Release -p:Platform=x64
 ```
 
+### macOS (CMake)
+Builds a universal binary (arm64 + x86_64) with VST3, AU, and Standalone:
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target Distortion_VST3 Distortion_AU Distortion_Standalone -j
+```
+Add `-DCMAKE_OSX_ARCHITECTURES=arm64` for a faster single-arch dev build.
+
 ## Project Structure
 
 ```
@@ -97,13 +105,15 @@ Distortion/
 
 ## Plugin Formats
 
-- **VST3**: Primary format
+- **VST3**: Primary format (all platforms)
+- **AU (Audio Unit)**: macOS only — Logic Pro / GarageBand
 - **Standalone**: Testing without DAW
 
 ## Installation
 
 - **Windows**: run the installer (`SledgeDistortion-<version>-Windows.exe`) — installs to `%CommonProgramFiles%\VST3\` by default, replaces any previous version cleanly, and automatically installs the Microsoft VC++ runtime if the machine is missing it (required on clean Windows 10 installs).
 - **Linux**: unpack the tarball to `~/.vst3/`
+- **macOS**: run the `.pkg` installer (VST3 → `/Library/Audio/Plug-Ins/VST3`, AU → `/Library/Audio/Plug-Ins/Components`, Standalone → `/Applications`). The current builds are **unsigned** until an Apple Developer ID is configured — on first launch right-click the `.pkg` → **Open** to bypass Gatekeeper.
 
 ### End-user requirements (Windows)
 
@@ -116,6 +126,7 @@ Distortion/
 - C++17 compiler
 - JUCE 7.0.12 (auto-fetched by CMake)
 - ALSA development libraries (Linux)
+- Xcode command-line tools + macOS 11.0 SDK (macOS)
 
 ## License
 

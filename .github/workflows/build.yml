@@ -225,9 +225,157 @@ jobs:
           SledgeDistortion-Linux.tar.gz.sha256
         retention-days: 30
 
+  build-macos:
+    runs-on: macos-14
+
+    # Apple Developer ID signing + notarization creds (set as repo secrets to
+    # activate). When unset these are empty strings and every sign/notarize step
+    # below skips, so the pipeline still builds an (unsigned) universal .pkg.
+    env:
+      APPLE_CERT_BASE64: ${{ secrets.APPLE_CERT_BASE64 }}
+      APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+      APPLE_SIGN_IDENTITY: ${{ secrets.APPLE_SIGN_IDENTITY }}
+      APPLE_INSTALLER_IDENTITY: ${{ secrets.APPLE_INSTALLER_IDENTITY }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Configure CMake (universal arm64 + x86_64)
+      run: |
+        cmake -B build -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+
+    - name: Build Plugin (VST3 + AU + Standalone)
+      run: |
+        cmake --build build --config ${{ env.BUILD_TYPE }} \
+          --target Distortion_VST3 Distortion_AU Distortion_Standalone -j3
+
+    - name: Fix moduleinfo.json
+      run: |
+        python scripts/fix_moduleinfo_json.py build/Distortion_artefacts --all
+      continue-on-error: true
+
+    - name: Build Tests
+      run: |
+        cmake --build build --config ${{ env.BUILD_TYPE }} --target DistortionTests -j3
+
+    - name: Run Tests
+      run: |
+        ./build/DistortionTests_artefacts/${{ env.BUILD_TYPE }}/DistortionTests
+
+    - name: Verify universal binaries
+      run: |
+        BASE="build/Distortion_artefacts/${{ env.BUILD_TYPE }}"
+        for slice in \
+          "VST3/Sledge Distortion.vst3/Contents/MacOS/Sledge Distortion" \
+          "AU/Sledge Distortion.component/Contents/MacOS/Sledge Distortion"; do
+          echo "== $slice =="
+          lipo -archs "$BASE/$slice"
+          lipo -archs "$BASE/$slice" | grep -q "arm64" && lipo -archs "$BASE/$slice" | grep -q "x86_64" \
+            || { echo "ERROR: $slice is not universal (arm64 + x86_64)"; exit 1; }
+        done
+
+    - name: Validate with pluginval (strictness 10)
+      run: |
+        curl -fsSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+        unzip -q -o pluginval.zip
+        PV="pluginval.app/Contents/MacOS/pluginval"
+        "$PV" --strictness-level 10 --timeout-ms 600000 --validate "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Sledge Distortion.vst3"
+
+    - name: Validate AU (auval)
+      run: |
+        mkdir -p "$HOME/Library/Audio/Plug-Ins/Components"
+        cp -R "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/AU/Sledge Distortion.component" "$HOME/Library/Audio/Plug-Ins/Components/"
+        killall -9 AudioComponentRegistrar || true
+        auval -v aufx Dist Mbds
+      continue-on-error: true
+
+    - name: Import signing certificate
+      if: env.APPLE_CERT_BASE64 != ''
+      run: |
+        KEYCHAIN="$RUNNER_TEMP/app-signing.keychain-db"
+        security create-keychain -p actions "$KEYCHAIN"
+        security set-keychain-settings -lut 21600 "$KEYCHAIN"
+        security unlock-keychain -p actions "$KEYCHAIN"
+        echo "$APPLE_CERT_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+        security import "$RUNNER_TEMP/cert.p12" -P "$APPLE_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+        security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
+        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions "$KEYCHAIN"
+
+    - name: Codesign plugins (Developer ID + hardened runtime)
+      if: env.APPLE_CERT_BASE64 != '' && env.APPLE_SIGN_IDENTITY != ''
+      run: |
+        BASE="build/Distortion_artefacts/${{ env.BUILD_TYPE }}"
+        for b in \
+          "VST3/Sledge Distortion.vst3" \
+          "AU/Sledge Distortion.component" \
+          "Standalone/Sledge Distortion.app"; do
+          codesign --force --deep --options runtime --timestamp \
+            --entitlements installer/macos/entitlements.plist \
+            --sign "$APPLE_SIGN_IDENTITY" "$BASE/$b"
+          codesign --verify --strict --verbose=2 "$BASE/$b"
+        done
+
+    - name: Build installer (.pkg)
+      run: |
+        BASE="build/Distortion_artefacts/${{ env.BUILD_TYPE }}"
+        VER="${GITHUB_REF_NAME#v}"
+        case "$GITHUB_REF_NAME" in v*) : ;; *) VER=2.2.0 ;; esac
+        installer/macos/build_pkg.sh "$VER" \
+          "$BASE/VST3/Sledge Distortion.vst3" \
+          "$BASE/AU/Sledge Distortion.component" \
+          "$BASE/Standalone/Sledge Distortion.app" \
+          dist
+
+    - name: Notarize + staple installer
+      if: env.APPLE_ID != '' && env.APPLE_APP_PASSWORD != '' && env.APPLE_TEAM_ID != ''
+      run: |
+        PKG=$(ls dist/*.pkg | head -n1)
+        xcrun notarytool submit "$PKG" \
+          --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+          --wait
+        xcrun stapler staple "$PKG"
+
+    - name: Upload macOS installer
+      uses: actions/upload-artifact@v4
+      with:
+        name: SledgeDistortion-Installer-macOS
+        path: dist/*.pkg
+        retention-days: 30
+
+    - name: Package macOS bundles (zip + checksum)
+      run: |
+        BASE="build/Distortion_artefacts/${{ env.BUILD_TYPE }}"
+        mkdir -p artifact/macOS
+        cp -R "$BASE/VST3/Sledge Distortion.vst3" artifact/macOS/
+        cp -R "$BASE/AU/Sledge Distortion.component" artifact/macOS/
+        ditto -c -k artifact/macOS "SledgeDistortion-macOS.zip"
+        shasum -a 256 "SledgeDistortion-macOS.zip" > "SledgeDistortion-macOS.zip.sha256"
+
+    - name: Upload macOS bundles zip
+      uses: actions/upload-artifact@v4
+      with:
+        name: SledgeDistortion-macOS-zip
+        path: |
+          SledgeDistortion-macOS.zip
+          SledgeDistortion-macOS.zip.sha256
+        retention-days: 30
+
   # Create release when a tag is pushed
   release:
-    needs: [build-windows, build-linux]
+    needs: [build-windows, build-linux, build-macos]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
 
@@ -244,10 +392,16 @@ jobs:
         name: SledgeDistortion-Linux-tarball
         path: release
 
+    - name: Download macOS installer
+      uses: actions/download-artifact@v4
+      with:
+        name: SledgeDistortion-Installer-macOS
+        path: release
+
     - name: Generate combined checksums
       run: |
         cd release
-        sha256sum *.exe *.tar.gz > SHA256SUMS
+        sha256sum *.exe *.tar.gz *.pkg > SHA256SUMS
         cat SHA256SUMS
 
     - name: Create GitHub Release
@@ -256,6 +410,7 @@ jobs:
         files: |
           release/*.exe
           release/*.tar.gz
+          release/*.pkg
           release/SHA256SUMS
         generate_release_notes: true
         draft: false

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements applied when codesigning with --options runtime
+  (required for notarization). The plugin builds with JUCE_USE_CURL=1 +
+  JUCE_LOAD_CURL_SYMBOLS_LAZILY=1, so it dlopen()s the system libcurl at runtime;
+  disable-library-validation keeps hardened runtime from blocking that load.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+</dict>
+</plist>

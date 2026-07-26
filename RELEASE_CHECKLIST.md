@@ -39,14 +39,15 @@ every box on the `release/vX.Y-*` branch before tagging `vX.Y`.
 - [ ] 🧪 **Multi-instance** — 10+ instances, independent state/RNG (spot-checked by `ThreadSafetyTests::testMultiInstanceIndependence`; full count via the soak harness).
 - [ ] ✍️ **Host compatibility** — ≥3 DAWs per `docs/DAW_QA_matrix.md` (load, automate, save/restore, bypass).
 
-## 5. Packaging & distribution (v2.2 = Windows + Linux; macOS → v2.3)
+## 5. Packaging & distribution (Windows + Linux + macOS)
 
-- [x] 🤖 Format claims match the build (VST3 + Standalone; VST2 dropped).
-- [x] 🤖 Installers wired — Inno (`installer/Distortion.iss`, Win) + tarball + `SHA256SUMS` (Linux); built in CI on every run.
+- [x] 🤖 Format claims match the build (VST3 + Standalone everywhere; + AU on macOS; VST2 dropped).
+- [x] 🤖 Installers wired — Inno (`installer/Distortion.iss`, Win) + tarball + `SHA256SUMS` (Linux) + `.pkg` (`installer/macos/build_pkg.sh`, macOS); built in CI on every run.
 - [x] 🤖 **VC++ runtime bundled** — installer detects a missing/outdated/broken VC++ 2015-2022 x64 runtime and installs the bundled `vc_redist.x64.exe` (Authenticode-verified in CI); redist exit code checked, failure surfaces an error. Upgrade flow waits for the previous uninstall to complete and purges legacy `Monolit Distortion.vst3` bundles.
-- [x] 🤖 Release-publish wired — installer + tarball + `SHA256SUMS` attached to the GitHub Release on tag.
+- [x] 🤖 Release-publish wired — Windows installer + Linux tarball + macOS `.pkg` + `SHA256SUMS` attached to the GitHub Release on tag.
+- [x] 🤖 **macOS build + AU** — universal (arm64 + x86_64) VST3/AU/Standalone built in CI on `macos-14`; unit suite + VST3 pluginval strictness 10 + AU `auval` run there.
 - [ ] 🤖 **Windows code-signing** — Azure Trusted Signing steps wired but *inert until the `AZURE_*` repo secrets are set* (needs an Azure Trusted Signing account + identity validation).
-- [~] macOS build + AU + notarize — **deferred to v2.3** (no Apple Developer account / Mac).
+- [ ] 🤖 **macOS code-signing + notarization** — Developer ID codesign + `notarytool`/`stapler` steps wired but *inert until the `APPLE_*` repo secrets are set* (needs an Apple Developer account: Developer ID Application + Installer certs, an app-specific password, and the team ID). Until then macOS ships an unsigned `.pkg` (Gatekeeper right-click-open workaround).
 
 ## 6. Privacy & bug reporting (USE-53)
 
@@ -90,3 +91,19 @@ Secrets → Actions), at which point every build signs the VST3 + installer:
 
 Prerequisite: an [Azure Trusted Signing](https://learn.microsoft.com/azure/trusted-signing/)
 account with a validated identity and a certificate profile.
+
+## Activating macOS code-signing + notarization
+
+The `build-macos` job's sign/notarize steps stay inert until these repo secrets
+exist, at which point every build signs the plugins + `.pkg` and notarizes:
+
+- `APPLE_CERT_BASE64` — base64 of a `.p12` containing **both** the *Developer ID
+  Application* and *Developer ID Installer* certs (+ private keys).
+- `APPLE_CERT_PASSWORD` — the `.p12` export password.
+- `APPLE_SIGN_IDENTITY` — e.g. `Developer ID Application: Monolit Beatz (TEAMID)`.
+- `APPLE_INSTALLER_IDENTITY` — e.g. `Developer ID Installer: Monolit Beatz (TEAMID)`.
+- `APPLE_TEAM_ID`, `APPLE_ID`, `APPLE_APP_PASSWORD` — notarization
+  (`notarytool`) credentials; `APPLE_APP_PASSWORD` is an app-specific password.
+
+Prerequisite: a paid [Apple Developer Program](https://developer.apple.com/programs/)
+membership (for Developer ID certs + notarization).

@@ -1,5 +1,22 @@
 cmake_minimum_required(VERSION 3.22)
 
+# ============================================================================
+# macOS: universal binary + minimum deployment target.
+# These MUST be set before project()/the first target or they won't apply to
+# the universal (arm64 + x86_64) build. Guarded so Linux/Windows are untouched.
+# Overridable from the command line (e.g. a single-arch local dev build).
+# ============================================================================
+if(APPLE)
+    if(NOT DEFINED CMAKE_OSX_ARCHITECTURES OR CMAKE_OSX_ARCHITECTURES STREQUAL "")
+        set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING
+            "macOS build architectures (universal by default)" FORCE)
+    endif()
+    if(NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET OR CMAKE_OSX_DEPLOYMENT_TARGET STREQUAL "")
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING
+            "Minimum macOS version" FORCE)
+    endif()
+endif()
+
 project(Distortion VERSION 2.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -82,8 +99,13 @@ set(TEST_SOURCES
 )
 
 # ============================================================================
-# Main Plugin Target (VST3 + Standalone)
+# Main Plugin Target (VST3 + Standalone; + AU on macOS for Logic/GarageBand)
 # ============================================================================
+set(DISTORTION_FORMATS VST3 Standalone)
+if(APPLE)
+    list(APPEND DISTORTION_FORMATS AU)
+endif()
+
 juce_add_plugin(Distortion
     VERSION 2.2.0
     COMPANY_NAME "Monolit Beatz"
@@ -96,7 +118,8 @@ juce_add_plugin(Distortion
     COPY_PLUGIN_AFTER_BUILD FALSE
     PLUGIN_MANUFACTURER_CODE Mbds
     PLUGIN_CODE Dist
-    FORMATS VST3 Standalone
+    AU_MAIN_TYPE kAudioUnitType_Effect
+    FORMATS ${DISTORTION_FORMATS}
     PRODUCT_NAME "Sledge Distortion"
 )
 
