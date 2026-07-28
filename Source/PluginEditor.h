@@ -2106,6 +2106,7 @@ public:
 
     //==============================================================================
     void paint(juce::Graphics&) override;
+    void paintOverChildren(juce::Graphics&) override;
     void timerCallback() override;
     void resized() override;
     void mouseUp(const juce::MouseEvent& e) override;

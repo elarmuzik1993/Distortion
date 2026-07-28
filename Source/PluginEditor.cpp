@@ -878,7 +878,18 @@ void PluginEditor::paint(juce::Graphics& g)
         }
     }
 
-    // Draw solid neon red frame (consistent width on all 4 sides)
+    // The neon frame is drawn in paintOverChildren(), not here — see below.
+}
+
+void PluginEditor::paintOverChildren(juce::Graphics& g)
+{
+    // Solid neon red frame, consistent width on all 4 sides.
+    //
+    // Drawn over the children rather than in paint(): several components reach
+    // into the 1.5px border and would otherwise erase parts of it. The scope sits
+    // at (int) 1.5f == 1, so it covered the left stroke's anti-aliased column for
+    // its whole height, and the JUCE badge blanked the frame outright along the
+    // bottom-right. Painting last makes the frame independent of child bounds.
     g.setColour(juce::Colour(0xFF, 0x00, 0x44));  // Fully opaque neon red
     g.drawRect(getLocalBounds().toFloat(), 1.5f);  // 1.5px solid frame
 }
