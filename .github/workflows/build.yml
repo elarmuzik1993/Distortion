@@ -141,6 +141,28 @@ jobs:
         path: artifact/Windows/Sledge Distortion.vst3
         retention-days: 30
 
+    # Friction-free download: a plain ZIP of the raw .vst3 that end users
+    # unzip and drop into their VST3 folder. Extracting + copying a .vst3
+    # does not trip Windows SmartScreen the way running the unsigned .exe
+    # installer does, so this is the recommended download for an unsigned
+    # release. See INSTALL.md.
+    - name: Package Windows ZIP + checksum
+      shell: bash
+      run: |
+        cd artifact/Windows
+        7z a -tzip "../../SledgeDistortion-Windows.zip" "Sledge Distortion.vst3"
+        cd ../..
+        sha256sum "SledgeDistortion-Windows.zip" > "SledgeDistortion-Windows.zip.sha256"
+
+    - name: Upload Windows ZIP
+      uses: actions/upload-artifact@v4
+      with:
+        name: SledgeDistortion-Windows-zip
+        path: |
+          SledgeDistortion-Windows.zip
+          SledgeDistortion-Windows.zip.sha256
+        retention-days: 30
+
   build-linux:
     runs-on: ubuntu-latest
 
@@ -403,6 +425,12 @@ jobs:
         name: SledgeDistortion-Installer-Windows
         path: release
 
+    - name: Download Windows ZIP
+      uses: actions/download-artifact@v4
+      with:
+        name: SledgeDistortion-Windows-zip
+        path: release
+
     - name: Download Linux tarball
       uses: actions/download-artifact@v4
       with:
@@ -418,7 +446,7 @@ jobs:
     - name: Generate combined checksums
       run: |
         cd release
-        sha256sum *.exe *.tar.gz *.pkg > SHA256SUMS
+        sha256sum *.exe *.zip *.tar.gz *.pkg > SHA256SUMS
         cat SHA256SUMS
 
     - name: Create GitHub Release
@@ -426,6 +454,7 @@ jobs:
       with:
         files: |
           release/*.exe
+          release/*.zip
           release/*.tar.gz
           release/*.pkg
           release/SHA256SUMS
