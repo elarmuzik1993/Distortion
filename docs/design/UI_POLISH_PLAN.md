@@ -89,6 +89,23 @@ atmosphere, but it competes with small labels where it sits *behind text*.
 Same texture, same vibe — just quieter where it carries information. Concept
 stays 100% intact.
 
+**Idle vs. ignited — protect the contrast (load-bearing rule).** The cool→hot
+shift when `extremeEnabled` fires is the UI's single best moment, and it works
+because it's a *delta*: restrained idle → red bloom on ignition. So the variable
+that swings between states must be **heat/glow (cool → hot red), never texture
+presence**. Red is EXTREME's currency — don't spend it in the idle state.
+- If the idle (non-EXTREME) state reads "empty," make it **richer in cool/dark
+  tones only** — deepen the shattered-glass detail, a subtle vignette, faint cool
+  edge-lighting — so idle reads "moody premium dark," not "unfinished."
+- **Never** add red / brightness / glow to idle to make the texture "more
+  obvious" — that pre-spends the ignition contrast and flattens the EXTREME payoff.
+- Idle = rich, cool, dark. EXTREME = the same surface catching fire.
+- Sanity test: side by side, idle should read as "the calm before" and EXTREME as
+  "the impact." Added richness stays in the decorative zones — still quiet under
+  the label rows.
+- Reminder: "idle looks empty" is mostly fixed by hierarchy + the live scope + a
+  drawn EQ curve, not by louder texture.
+
 ### P2 — BF / EXTREME / BOOST grouping
 **Problem:** "BF" is a *state readout* (current clip type / Brutal Fuzz) but it's
 styled like a button and stacked with two *toggles* (EXTREME, BOOST). Three items
