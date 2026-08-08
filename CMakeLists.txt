@@ -325,6 +325,9 @@ target_compile_definitions(DistortionUiSnapshot
         # Tool-only: lets the harness pump the message loop so timer-driven
         # animations (the EXTREME crack fade) settle before a frame is captured.
         JUCE_MODAL_LOOPS_PERMITTED=1
+        # Tool-only: exposes PluginEditor::setDataRootOverride so the harness
+        # renders from settings it owns instead of the machine's saved state.
+        DISTORTION_UI_SNAPSHOT=1
         JucePlugin_Name="Distortion"
         JucePlugin_IsSynth=0
         JucePlugin_WantsMidiInput=0

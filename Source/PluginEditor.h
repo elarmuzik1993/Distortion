@@ -35,10 +35,14 @@ public:
     // The editor hands over both crack layers, already scaled to the full editor
     // size. The scope samples the slice matching its own bounds, so the artwork
     // stays registered to the layout without either side tracking offsets.
-    void setTextureLayers(juce::Image base, juce::Image extreme)
+    // Opacity rides along rather than being duplicated here: kTextureOpacity is
+    // the editor's single tunable, so the scope band and the metal bands move
+    // together when it changes.
+    void setTextureLayers(juce::Image base, juce::Image extreme, float opacity)
     {
         textureBase = std::move(base);
         textureExtreme = std::move(extreme);
+        textureOpacity = opacity;
         repaint();
     }
 
@@ -90,14 +94,16 @@ public:
         if (textureBase.isValid())
         {
             const int sx = getX(), sy = getY(), w = getWidth(), h = getHeight();
+            g.setOpacity(textureOpacity);
             g.drawImage(textureBase, 0, 0, w, h, sx, sy, w, h);
 
             if (extremeMix > 0.001f && textureExtreme.isValid())
             {
-                g.setOpacity(extremeMix);
+                g.setOpacity(textureOpacity * extremeMix);
                 g.drawImage(textureExtreme, 0, 0, w, h, sx, sy, w, h);
-                g.setOpacity(1.0f);
             }
+
+            g.setOpacity(1.0f);
         }
 
         // Draw grid with better styling
@@ -182,6 +188,7 @@ private:
     // opacity, pushed in by the editor.
     juce::Image textureBase, textureExtreme;
     float extremeMix = 0.0f;
+    float textureOpacity = 1.0f;   // kTextureOpacity, pushed in with the layers
     // Window of samples spanned by the display. Unlike SCOPE_DISPLAY_POINTS
     // (path resolution cap), this is what the scope-length slider controls.
     int displayLength = DSPConstants::SCOPE_DISPLAY_POINTS;
@@ -2104,6 +2111,17 @@ public:
     explicit PluginEditor(PluginProcessor&);
     ~PluginEditor() override;
 
+   #if defined (DISTORTION_UI_SNAPSHOT) && DISTORTION_UI_SNAPSHOT
+    // Snapshot-harness hook (absent from plugin builds). Points the settings /
+    // preset root somewhere the harness owns, so a headless render is driven by
+    // state it wrote rather than by whatever this machine happens to have saved.
+    // Without it the editor reads the real settings.xml and the fold state can
+    // silently contradict the size the harness asked for — an expanded layout
+    // squeezed into a collapsed window, which reads as a layout regression that
+    // is not actually there. Pass an invalid File to restore the default root.
+    static void setDataRootOverride(const juce::File& dir);
+   #endif
+
     //==============================================================================
     void paint(juce::Graphics&) override;
     void paintOverChildren(juce::Graphics&) override;
@@ -2302,6 +2320,9 @@ private:
     void loadSettings();
     void saveSettings();
     juce::File getSettingsFile();
+   #if defined (DISTORTION_UI_SNAPSHOT) && DISTORTION_UI_SNAPSHOT
+    static juce::File dataRootOverride;
+   #endif
     void updateExpansionBackdrop();
 
     // Toolbar oscilloscope view toggle + smooth compact<->full window fold animation

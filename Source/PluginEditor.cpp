@@ -799,7 +799,8 @@ void PluginEditor::rebuildScaledTextureIfNeeded()
     // shatter's fill sits around alpha 25, which the curve drops to ~4, so the
     // layer would composite at ~1.5% and never read.
     oscilloscope.setTextureLayers(withAlphaGamma(scaledTexture, kScopeAlphaGamma),
-                                  scaledExtremeTexture);
+                                  scaledExtremeTexture,
+                                  kTextureOpacity);
 }
 
 void PluginEditor::advanceExtremeFade()
@@ -1479,13 +1480,30 @@ void PluginEditor::randomizeAllParameters()
     // transport controls the user sets deliberately, not part of a sound roll).
 }
 
+#if defined (DISTORTION_UI_SNAPSHOT) && DISTORTION_UI_SNAPSHOT
+juce::File PluginEditor::dataRootOverride;
+
+void PluginEditor::setDataRootOverride(const juce::File& dir)
+{
+    dataRootOverride = dir;
+}
+#endif
+
 juce::File PluginEditor::getPresetDirectory()
 {
     // Get user's AppData folder
-    auto presetDir = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+    auto root = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
         .getChildFile("Monolit Beatz")
-        .getChildFile("Sledge Distortion")
-        .getChildFile("Presets");
+        .getChildFile("Sledge Distortion");
+
+   #if defined (DISTORTION_UI_SNAPSHOT) && DISTORTION_UI_SNAPSHOT
+    // Snapshot harness only; never set in a plugin build. getSettingsFile() hangs
+    // off this same root, so redirecting here moves settings.xml with it.
+    if (dataRootOverride != juce::File())
+        root = dataRootOverride;
+   #endif
+
+    auto presetDir = root.getChildFile("Presets");
 
     // Create directory if it doesn't exist
     if (!presetDir.exists())

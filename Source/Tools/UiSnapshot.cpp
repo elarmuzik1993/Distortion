@@ -30,6 +30,31 @@ namespace
 constexpr float kBaseWidth  = 960.0f;
 constexpr float kBaseHeight = 564.0f;
 
+// The editor reads its fold state, window scale and overlay mode from
+// settings.xml. Left pointing at the user's AppData that makes a render depend
+// on whatever this machine last saved: ask for --collapsed on a machine whose
+// saved state is expanded and the editor lays out expanded, then gets sized to
+// the collapsed height — every panel overlaps the knob row and it looks like a
+// layout regression that does not exist. So the harness writes the state it
+// wants into a scratch root and renders from that; the real settings are never
+// read or touched.
+juce::File writeScratchSettings(const juce::File& root, bool collapsed, int scalePercent)
+{
+    root.createDirectory();
+
+    juce::XmlElement xml("Settings");
+    xml.setAttribute("oscilloscope", collapsed ? 0 : 1);
+    xml.setAttribute("windowScale", scalePercent);
+    xml.setAttribute("oscilloscopeStereo", 1);
+    xml.setAttribute("scopeOverlay", 0);   // no overlay intercepting the scope
+    xml.setAttribute("tooltips", 0);
+    xml.setAttribute("bugReports", 0);     // headless: never queue a report
+
+    auto settings = root.getChildFile("settings.xml");
+    xml.writeTo(settings);
+    return settings;
+}
+
 bool snapshot(PluginProcessor& proc, int width, int height, const juce::File& out,
               bool extreme = false)
 {
@@ -84,9 +109,15 @@ int main(int argc, char* argv[])
         else if (t == "--extreme")               extreme   = true;
     }
 
-    // Collapsed (scope folded away) is the other fold state; the editor reads the
-    // fold flag itself from settings.xml, so set that too when rendering these.
+    // Collapsed (scope folded away) is the other fold state. The harness drives it
+    // through a scratch settings root rather than the machine's saved state, so
+    // --collapsed alone is enough and nothing here depends on the real AppData.
     const float baseHeight = collapsed ? 180.0f : kBaseHeight;
+
+    auto scratchRoot = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                           .getChildFile("DistortionUiSnapshot");
+    scratchRoot.deleteRecursively();
+    PluginEditor::setDataRootOverride(scratchRoot);
 
     auto dir = juce::File::getCurrentWorkingDirectory().getChildFile(outDir);
     dir.createDirectory();
@@ -105,11 +136,19 @@ int main(int argc, char* argv[])
 
         const int w = juce::roundToInt(kBaseWidth * pct / 100.0f);
         const int h = juce::roundToInt(baseHeight * pct / 100.0f);
+
+        // Rewritten per scale: the editor applies windowScale from settings in its
+        // constructor, so matching it to the size requested below keeps the two
+        // from disagreeing.
+        writeScratchSettings(scratchRoot, collapsed, pct);
+
         juce::String name = juce::String(collapsed ? "collapsed-" : "scale-") + juce::String(pct);
         if (extreme)
             name += "-extreme";
         allOk &= snapshot(proc, w, h, dir.getChildFile(name + ".png"), extreme);
     }
+
+    scratchRoot.deleteRecursively();
 
     std::cout << (allOk ? "OK" : "FAILED") << " -> " << dir.getFullPathName() << "\n";
     return allOk ? 0 : 1;

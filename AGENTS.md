@@ -90,10 +90,12 @@ python scripts/fix_moduleinfo_json.py build --all
   ```bash
   cmake --build build --target DistortionUiSnapshot
   ./DistortionUiSnapshot --out shots              # all four window scales
-  ./DistortionUiSnapshot --collapsed --out shots  # scope folded away (reads the fold flag from settings.xml)
+  ./DistortionUiSnapshot --collapsed --out shots  # scope folded away
   ./DistortionUiSnapshot --extreme --out shots    # after the EXTREME crack fade settles
   ```
   It is the only target built with `JUCE_MODAL_LOOPS_PERMITTED=1`, so it can pump the message loop and capture timer-driven animation in its settled state.
+
+  **The harness owns the state it renders from.** It is also the only target built with `DISTORTION_UI_SNAPSHOT=1`, which exposes `PluginEditor::setDataRootOverride`; the tool points the settings/preset root at a scratch dir under TEMP and writes the fold state and window scale it wants. Your real `settings.xml` is neither read nor written. This is load-bearing, not tidiness: the editor takes its fold state from settings (`paint()` keys off `settingsState.oscilloscopeEnabled`, deliberately not the measured height), so when the tool merely resized the window, `--collapsed` on a machine saved as *expanded* laid out expanded and squeezed it into a 180px window — every panel overlapping the knob row, which reads as a severe layout regression that is not there. A verification gate must not depend on ambient machine state.
 
 ## Release & Packaging
 - **Formats shipped**: VST3 + Standalone on Windows + Linux; VST3 + AU + Standalone on macOS (universal arm64 + x86_64).
@@ -125,7 +127,7 @@ Cracked-glass / diamond-plate artwork behind the editor. `Resources/ui_texture.p
 
 **Neon frame — keep it in `paintOverChildren()`.** The 1.5px border must be drawn *after* the children, not in `paint()`. Several components reach into it: the scope is positioned at `(int) 1.5f` == 1, i.e. one pixel inside the border, and the JUCE badge sits on the bottom-right corner. Drawn in `paint()` they overpaint it — the left stroke thinned to grey for the scope's whole height and the bottom/right stroke was blanked to black. Moving it back is a silent visual regression, so verify any change to it with `DistortionUiSnapshot` and check all four edges.
 
-**Tunables**: `kTextureOpacity`, `kScopeAlphaGamma`, `kExtremeAlphaGamma` (`PluginEditor.cpp`); the scope backdrop gradient and `kExtremeFadeSeconds` (`PluginEditor.h`).
+**Tunables**: `kTextureOpacity`, `kScopeAlphaGamma`, `kExtremeAlphaGamma` (`PluginEditor.cpp`); the scope backdrop gradient and `kExtremeFadeSeconds` (`PluginEditor.h`). `kTextureOpacity` governs all three bands: the editor applies it to the metal bands and hands it to the scope through `setTextureLayers`, so the scope band cannot drift from the rest when it is turned down. It stays declared in `PluginEditor.cpp` — the scope is passed the value rather than owning a second copy.
 
 **Replacing the artwork**: keep the 960x564 canvas and registration; export flattened, since Photoshop blend modes do not survive a PNG (a Screen/Linear-Dodge layer baked into alpha is what produces the low-alpha fill described above). Source art is authored on a 1202x778 canvas and cropped to `y=71..777, x=0..1200` before scaling — both layers share that crop, which is what registers them. Verify a replacement with `DistortionUiSnapshot --extreme` rather than by eye.
 
