@@ -102,7 +102,9 @@ jobs:
       run: |
         choco install innosetup --no-progress -y
         $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-        $ver = if ($env:GITHUB_REF_NAME -like 'v*') { $env:GITHUB_REF_NAME.Substring(1) } else { '2.2.0' }
+        # See the bash jobs: keyed off ref TYPE, so a branch named v* is not
+        # mistaken for a tag.
+        $ver = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME -replace '^v','' } else { '2.2.0' }
         & $iscc "/DMyAppVersion=$ver" installer\Distortion.iss
 
     - name: Sign installer (Azure Trusted Signing)
@@ -158,7 +160,9 @@ jobs:
     - name: Package Windows ZIP
       shell: pwsh
       run: |
-        $ver = if ($env:GITHUB_REF_NAME -like 'v*') { $env:GITHUB_REF_NAME.Substring(1) } else { '2.2.0' }
+        # See the bash jobs: keyed off ref TYPE, so a branch named v* is not
+        # mistaken for a tag.
+        $ver = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME -replace '^v','' } else { '2.2.0' }
         $stage = "zipstage"
         New-Item -ItemType Directory -Force $stage | Out-Null
         Copy-Item -Recurse "artifact\Windows\Sledge Distortion.vst3" $stage
@@ -286,8 +290,10 @@ jobs:
       run: |
         # Version-stamped like every other release asset; SHA256SUMS in the
         # release job replaces the per-file .sha256 sidecar.
-        VER="${GITHUB_REF_NAME#v}"
-        [ "$VER" = "$GITHUB_REF_NAME" ] && VER=2.2.0
+        # Tag builds carry the real version; everything else is a dev build.
+        # Keyed off GITHUB_REF_TYPE, not a "v*" name match: a branch that merely
+        # starts with v (verify-thing) would otherwise be read as tag "erify-thing".
+        if [ "$GITHUB_REF_TYPE" = tag ]; then VER="${GITHUB_REF_NAME#v}"; else VER=2.2.0; fi
         tar -C artifact/Linux -czf "SledgeDistortion-$VER-Linux.tar.gz" "Sledge Distortion.vst3"
 
     - name: Upload Linux tarball
@@ -413,8 +419,10 @@ jobs:
     - name: Build installer (.pkg)
       run: |
         BASE="build/Distortion_artefacts/${{ env.BUILD_TYPE }}"
-        VER="${GITHUB_REF_NAME#v}"
-        case "$GITHUB_REF_NAME" in v*) : ;; *) VER=2.2.0 ;; esac
+        # Tag builds carry the real version; everything else is a dev build.
+        # Keyed off GITHUB_REF_TYPE, not a "v*" name match: a branch that merely
+        # starts with v (verify-thing) would otherwise be read as tag "erify-thing".
+        if [ "$GITHUB_REF_TYPE" = tag ]; then VER="${GITHUB_REF_NAME#v}"; else VER=2.2.0; fi
         installer/macos/build_pkg.sh "$VER" \
           "$BASE/VST3/Sledge Distortion.vst3" \
           "$BASE/AU/Sledge Distortion.component" \
@@ -446,8 +454,10 @@ jobs:
         # Version-stamped to match the .pkg and the Windows zip, so a release
         # page carrying several versions stays unambiguous. The per-file .sha256
         # is gone; SHA256SUMS in the release job is the single list.
-        VER="${GITHUB_REF_NAME#v}"
-        [ "$VER" = "$GITHUB_REF_NAME" ] && VER=2.2.0
+        # Tag builds carry the real version; everything else is a dev build.
+        # Keyed off GITHUB_REF_TYPE, not a "v*" name match: a branch that merely
+        # starts with v (verify-thing) would otherwise be read as tag "erify-thing".
+        if [ "$GITHUB_REF_TYPE" = tag ]; then VER="${GITHUB_REF_NAME#v}"; else VER=2.2.0; fi
         ditto -c -k artifact/macOS "SledgeDistortion-$VER-macOS.zip"
 
     - name: Upload macOS bundles zip
