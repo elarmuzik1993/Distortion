@@ -141,6 +141,70 @@ jobs:
         path: artifact/Windows/Sledge Distortion.vst3
         retention-days: 30
 
+    # Friction-free download: unzip and drop the .vst3 into the VST3 folder.
+    # Copying a bundle does not trip SmartScreen the way running the unsigned
+    # .exe installer does, so this is the low-friction route while the build is
+    # unsigned (USE-49).
+    #
+    # The redistributable ships INSIDE the zip on purpose. The plugin links the
+    # dynamic CRT, so on a clean Windows 10 machine it will not load without the
+    # VC++ 2015-2022 runtime - that is the failure this project already tracked
+    # down once. The installer handles it automatically; a bare .vst3 zip cannot,
+    # so the runtime travels with it and README.txt says when to run it. Shipping
+    # the zip without it would reintroduce the exact bug the installer fixed.
+    #
+    # LICENSE travels too: PolyForm's Notices clause requires the terms to
+    # accompany every copy, which the installer satisfies via LicenseFile.
+    - name: Package Windows ZIP
+      shell: pwsh
+      run: |
+        $ver = if ($env:GITHUB_REF_NAME -like 'v*') { $env:GITHUB_REF_NAME.Substring(1) } else { '2.2.0' }
+        $stage = "zipstage"
+        New-Item -ItemType Directory -Force $stage | Out-Null
+        Copy-Item -Recurse "artifact\Windows\Sledge Distortion.vst3" $stage
+        Copy-Item "installer\redist\vc_redist.x64.exe" $stage
+        Copy-Item "LICENSE" "$stage\LICENSE.txt"
+        @"
+        Sledge Distortion $ver - Windows (VST3)
+
+        1. Copy "Sledge Distortion.vst3" into your VST3 folder:
+             C:\Program Files\Common Files\VST3
+           Windows asks for administrator permission for that folder. To install
+           without it, use your user folder instead and add it to your DAW's
+           plugin search paths:
+             %LOCALAPPDATA%\Programs\Common\VST3
+
+        2. If the plugin does not appear, or your DAW reports it failed to load,
+           run vc_redist.x64.exe (included) and rescan. This installs the
+           Microsoft VC++ 2015-2022 runtime, which the plugin needs and which a
+           clean Windows 10 machine often lacks. It is harmless to run if the
+           runtime is already present.
+
+        3. Rescan plugins in your DAW.
+
+        This build is not code-signed, so Windows may warn about an unknown
+        publisher. Verify your download against SHA256SUMS on the release page.
+
+        Licence terms: LICENSE.txt
+        "@ | Set-Content -Encoding ascii "$stage\README.txt"   # ascii: no BOM, and the text above is ASCII by design
+        # 7z rather than Compress-Archive, to keep the archive spec-conformant
+        # regardless of which PowerShell runs it. Windows PowerShell 5.1 (and
+        # .NET Framework's ZipFile) store backslash path separators, so a
+        # spec-following extractor sees one flat entry named
+        # "Sledge Distortion.vst3\Contents\..." instead of a loadable bundle.
+        # pwsh 7 fixes that, and this step is `shell: pwsh` - but 7z removes the
+        # dependency on that detail entirely, and is what ships on the runners.
+        7z a -tzip "SledgeDistortion-$ver-Windows.zip" ".\$stage\*" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "7z failed with exit code $LASTEXITCODE" }
+        Get-ChildItem "SledgeDistortion-$ver-Windows.zip" | ForEach-Object { "packaged $($_.Name) ($([math]::Round($_.Length/1MB,1))MB)" }
+
+    - name: Upload Windows ZIP
+      uses: actions/upload-artifact@v4
+      with:
+        name: SledgeDistortion-Windows-zip
+        path: SledgeDistortion-*-Windows.zip
+        retention-days: 30
+
   build-linux:
     runs-on: ubuntu-latest
 
@@ -218,18 +282,19 @@ jobs:
         path: artifact/Linux/Sledge Distortion.vst3
         retention-days: 30
 
-    - name: Package Linux tarball + checksum
+    - name: Package Linux tarball
       run: |
-        tar -C artifact/Linux -czf "SledgeDistortion-Linux.tar.gz" "Sledge Distortion.vst3"
-        sha256sum "SledgeDistortion-Linux.tar.gz" > "SledgeDistortion-Linux.tar.gz.sha256"
+        # Version-stamped like every other release asset; SHA256SUMS in the
+        # release job replaces the per-file .sha256 sidecar.
+        VER="${GITHUB_REF_NAME#v}"
+        [ "$VER" = "$GITHUB_REF_NAME" ] && VER=2.2.0
+        tar -C artifact/Linux -czf "SledgeDistortion-$VER-Linux.tar.gz" "Sledge Distortion.vst3"
 
     - name: Upload Linux tarball
       uses: actions/upload-artifact@v4
       with:
         name: SledgeDistortion-Linux-tarball
-        path: |
-          SledgeDistortion-Linux.tar.gz
-          SledgeDistortion-Linux.tar.gz.sha256
+        path: SledgeDistortion-*-Linux.tar.gz
         retention-days: 30
 
   build-macos:
@@ -378,16 +443,18 @@ jobs:
         mkdir -p artifact/macOS
         cp -R "$BASE/VST3/Sledge Distortion.vst3" artifact/macOS/
         cp -R "$BASE/AU/Sledge Distortion.component" artifact/macOS/
-        ditto -c -k artifact/macOS "SledgeDistortion-macOS.zip"
-        shasum -a 256 "SledgeDistortion-macOS.zip" > "SledgeDistortion-macOS.zip.sha256"
+        # Version-stamped to match the .pkg and the Windows zip, so a release
+        # page carrying several versions stays unambiguous. The per-file .sha256
+        # is gone; SHA256SUMS in the release job is the single list.
+        VER="${GITHUB_REF_NAME#v}"
+        [ "$VER" = "$GITHUB_REF_NAME" ] && VER=2.2.0
+        ditto -c -k artifact/macOS "SledgeDistortion-$VER-macOS.zip"
 
     - name: Upload macOS bundles zip
       uses: actions/upload-artifact@v4
       with:
         name: SledgeDistortion-macOS-zip
-        path: |
-          SledgeDistortion-macOS.zip
-          SledgeDistortion-macOS.zip.sha256
+        path: SledgeDistortion-*-macOS.zip
         retention-days: 30
 
   # Create release when a tag is pushed
@@ -403,6 +470,12 @@ jobs:
         name: SledgeDistortion-Installer-Windows
         path: release
 
+    - name: Download Windows ZIP
+      uses: actions/download-artifact@v4
+      with:
+        name: SledgeDistortion-Windows-zip
+        path: release
+
     - name: Download Linux tarball
       uses: actions/download-artifact@v4
       with:
@@ -415,10 +488,22 @@ jobs:
         name: SledgeDistortion-Installer-macOS
         path: release
 
+    # The macOS zip was already being built and uploaded by build-macos, but
+    # nothing ever downloaded it here, so it expired with the run instead of
+    # reaching the release page. Adding *.zip below without this would publish
+    # the Windows zip only and leave macOS users on the highest-friction path.
+    - name: Download macOS ZIP
+      uses: actions/download-artifact@v4
+      with:
+        name: SledgeDistortion-macOS-zip
+        path: release
+
     - name: Generate combined checksums
       run: |
         cd release
-        sha256sum *.exe *.tar.gz *.pkg > SHA256SUMS
+        # One list for every asset. The build jobs no longer emit per-file
+        # .sha256 sidecars, and INSTALL.md points users at this file.
+        sha256sum *.exe *.zip *.tar.gz *.pkg > SHA256SUMS
         cat SHA256SUMS
 
     - name: Create GitHub Release
@@ -426,6 +511,7 @@ jobs:
       with:
         files: |
           release/*.exe
+          release/*.zip
           release/*.tar.gz
           release/*.pkg
           release/SHA256SUMS
