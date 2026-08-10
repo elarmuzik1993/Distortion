@@ -42,6 +42,7 @@ previous version's number on the new release's binary.
 ## 4. Final validation ("the shipping test")
 
 - [x] 🧪 **Soak test** — N instances rendering for an extended run without RSS growth or non-finite output. *(See `DistortionSoak` harness — `Source/Tools/SoakHarness.cpp`.)* **Last run (2026-08-10, Linux):** 12 instances × 300 s → all output finite, RSS 14 MB → 14 MB (0 MB growth), `SOAK PASSED`. Re-run before tagging.
+      ⚠️ **Run this on Linux.** The leak half reads `/proc/self/statm`, so it only works there. On Windows/macOS the harness now reports `SOAK INCOMPLETE` and exits non-zero — it checked finiteness but *not* memory growth. Only a `SOAK PASSED` earns this box.
 - [x] 🧪 **Multi-instance** — 10+ instances, independent state/RNG (spot-checked by `ThreadSafetyTests::testMultiInstanceIndependence`; full count via the soak harness — 12 instances in the run above).
 - [ ] ✍️ **Host compatibility** — ≥3 DAWs per `docs/DAW_QA_matrix.md` (load, automate, save/restore, bypass).
 
