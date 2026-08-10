@@ -10,6 +10,7 @@
 #include "PluginProcessor.h"
 #include "GitVersion.h"
 #include "FactoryPresets.h"
+#include "Diagnostics/AppPaths.h"
 
 //Setup Slider in Constructor Here
 
@@ -1489,12 +1490,13 @@ void PluginEditor::setDataRootOverride(const juce::File& dir)
 }
 #endif
 
-juce::File PluginEditor::getPresetDirectory()
+juce::File PluginEditor::getDataRoot()
 {
-    // Get user's AppData folder
-    auto root = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-        .getChildFile("Monolit Beatz")
-        .getChildFile("Sledge Distortion");
+    // Single source of truth for the product folder: diag::productDir(). The
+    // processor reads consent from diag::settingsFile() inside this same root,
+    // so deriving the literals twice would let the two silently drift apart and
+    // break consent persistence with nothing failing loudly.
+    auto root = diag::productDir();
 
    #if defined (DISTORTION_UI_SNAPSHOT) && DISTORTION_UI_SNAPSHOT
     // Snapshot harness only; never set in a plugin build. getSettingsFile() hangs
@@ -1503,7 +1505,12 @@ juce::File PluginEditor::getPresetDirectory()
         root = dataRootOverride;
    #endif
 
-    auto presetDir = root.getChildFile("Presets");
+    return root;
+}
+
+juce::File PluginEditor::getPresetDirectory()
+{
+    auto presetDir = getDataRoot().getChildFile("Presets");
 
     // Create directory if it doesn't exist
     if (!presetDir.exists())
@@ -1983,10 +1990,17 @@ void PluginEditor::loadSettings()
 
 void PluginEditor::saveSettings()
 {
+    // getSettingsFile() no longer creates anything (it used to inherit a mkdir
+    // from getPresetDirectory()), so the root has to be ensured here — a
+    // FileOutputStream will not create missing parent directories.
+    auto root = getDataRoot();
+    if (! root.isDirectory())
+        root.createDirectory();
+
     settingsState.saveToFile(getSettingsFile());
 }
 
 juce::File PluginEditor::getSettingsFile()
 {
-    return getPresetDirectory().getParentDirectory().getChildFile("settings.xml");
+    return getDataRoot().getChildFile("settings.xml");
 }

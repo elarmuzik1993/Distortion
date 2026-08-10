@@ -4,7 +4,7 @@ Full development history, newest first.
 
 ---
 
-## Unreleased
+## v2.3 — macOS, Graphic EQ & UI Texture
 
 **New**
 - **UI texture**: cracked-glass / diamond-plate artwork behind the whole editor — metal at the title strip and the knob row, red cracked glass across the oscilloscope. Authored 1:1 against the 960x564 layout and stored at that exact size, so every window-scale setting (70/80/90/100%) downsamples and none upscale. The oscilloscope composites the texture **over** its own backdrop (not behind it) so cracks darken the grey they cover instead of merely tinting it; the collapsed strip draws only the two metal bands, still pinned to the title and control rows.
@@ -20,6 +20,9 @@ Full development history, newest first.
 **Platform / packaging**
 - **macOS build**: universal binary (arm64 + x86_64, min macOS 11.0) shipping **VST3 + AU + Standalone** — AU adds Logic Pro / GarageBand support. CMake adds the AU format and universal arch on Apple; a new `build-macos` CI job (`macos-14`) builds, runs the unit suite, and validates the VST3 with `pluginval` strictness 10 plus the AU with `auval`.
 - **macOS installer**: signed/notarizable `.pkg` (`installer/macos/`) installing VST3 → `/Library/Audio/Plug-Ins/VST3`, AU → `/Library/Audio/Plug-Ins/Components`, Standalone → `/Applications`. Developer ID code-signing + notarization are wired but inert until the `APPLE_*` repo secrets are set (mirrors the Windows Azure signing pattern); unsigned `.pkg` builds until then.
+
+**Known limitations**
+- **Both platforms ship unsigned.** Windows code-signing (Azure Trusted Signing) and macOS code-signing + notarization (Developer ID) are fully wired in CI but stay inert until their respective `AZURE_*` / `APPLE_*` repo secrets exist — each needs a paid account. Practical effect for users: Windows SmartScreen shows an "unrecognised app" warning on the installer (More info → Run anyway), and macOS Gatekeeper blocks the `.pkg` on double-click (right-click → **Open** to bypass). Nothing else about the builds changes when signing is switched on. See `RELEASE_CHECKLIST.md` §5 for the activation steps.
 
 ---
 

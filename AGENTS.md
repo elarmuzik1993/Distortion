@@ -81,8 +81,8 @@ python scripts/fix_moduleinfo_json.py build --all
 
 ## Build & Test
 - **Framework**: JUCE UnitTest runner.
-- **Coverage**: 2460+ assertions (100% PASS RATE).
-- **Categories**: DSP, Compression, LFO, ProcessBlock, ThreadSafety, SampleRate (44.1k-192k), GraphicEq (sweeps 22.05k-192k to cover the Nyquist band-drop), State I/O, FactoryPresets.
+- **Coverage**: 2580+ assertions (100% PASS RATE).
+- **Categories**: DSP, Compression, LFO, ProcessBlock, ThreadSafety, SampleRate (44.1k-192k), GraphicEq (sweeps 22.05k-192k to cover the Nyquist band-drop), State I/O, FactoryPresets, Diagnostics, Settings Persistence.
 - **Golden Audio**: Reference file comparison tests included.
 - **Host validation**: CI gates on `pluginval --strictness-level 10` (Windows + Linux; xvfb on Linux).
 - **Soak/stress**: `DistortionSoak` console tool (`Source/Tools/SoakHarness.cpp`) runs N instances faster-than-realtime, failing on non-finite output or RSS growth (DoD 24h/10+-instance gates).
@@ -111,6 +111,7 @@ python scripts/fix_moduleinfo_json.py build --all
 Privacy-light, **opt-out** bug reporting. Lives in `Source/Diagnostics/` (namespace `diag`), owned by `PluginProcessor` so it works headless.
 - **Flow**: an RT-safe non-finite probe at the top of `processBlock` feeds a lock-free `DiagnosticsSink`; reports (auto on anomalies at teardown, or user-initiated via the Settings "Report a Bug" dialog → `submitUserReport`) are written to a durable on-disk queue (`ReportStore`, `…/Monolit Beatz/Sledge Distortion/reports/*.json`) and drained on the **next launch** via a deferred, scan-safe timer → background `ReportSender` → HTTPS POST behind the `ITransport` interface (`CurlTransport` in production).
 - **Consent**: default ON via a `std::atomic<bool>` on the processor, initialised from `settings.xml` (`bugReports` attribute — written by the editor, read by the processor) and flipped live by the Settings toggle; a one-time first-run notice explains it. `user` reports always send; `auto` reports are re-checked at drain and purged on revocation.
+- **Settings path is single-sourced.** `diag::productDir()` is the *only* place the `Monolit Beatz/Sledge Distortion` app-data literals live; `PluginEditor::getDataRoot()` derives from it (applying the snapshot override) and `getSettingsFile()` / `diag::settingsFile()` must resolve to the same file. Deriving them separately is what lets consent silently stop persisting with nothing failing — `SettingsPersistenceTest` asserts the two agree, so keep new path helpers hanging off `getDataRoot()`. Note `getSettingsFile()` creates nothing: `saveSettings()` ensures the root exists before writing.
 - **Multi-instance/process safe**: single-drainer `juce::InterProcessLock` + atomic `*.json`→`*.sending` claim; the queue is bounded (≤50 files / 30 days).
 - **Payload**: minimal/anonymous (version, OS, host, SR/block, anomaly counts, random install-id, optional user text). The free-text message is the only PII vector — see `docs/PRIVACY.md`.
 - **Build**: `JUCE_USE_CURL=1` + `JUCE_LOAD_CURL_SYMBOLS_LAZILY=1` on the **plugin target only**; tests/render/soak stay curl-free and use a `FakeTransport`. `DISTORTION_UNIT_TEST=1` gates appdata I/O + the drain out of unit-test builds. Set `DISTORTION_REPORT_ENDPOINT` (`Source/Diagnostics/ReportEndpoint.h`) before release.

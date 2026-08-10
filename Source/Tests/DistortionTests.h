@@ -5,8 +5,10 @@
 #include <limits>
 #include <JuceHeader.h>
 #include "../PluginProcessor.h"
+#include "../PluginEditor.h"
 #include "../FastMath.h"
 #include "TestUtilities.h"
+#include "../Diagnostics/AppPaths.h"
 #include "../Diagnostics/Report.h"
 #include "../Diagnostics/ReportStore.h"
 #include "../RTAllocationGuard.h"
@@ -812,6 +814,173 @@ public:
             expect (found, "user report body missing");
             dir.deleteRecursively();
         }
+
+        // The sender-level purge is covered by DiagSenderTest; these two pin the
+        // step before it — that an opted-out session never queues an 'auto'
+        // report in the first place (RELEASE_CHECKLIST 6, "Opt-out works").
+        beginTest ("consent OFF queues no auto report at teardown");
+        {
+            auto dir = juce::File::createTempFile ("diagoptout");
+            dir.deleteFile(); dir.createDirectory();
+            FakeTransport tx; tx.succeed = false;   // nothing may leave the queue by 'sending'
+            {
+                PluginProcessor p;
+                p.initDiagnosticsForTesting (dir, tx);
+                p.setBugReportsEnabled (false);
+                p.prepareToPlay (48000.0, 64);
+                juce::AudioBuffer<float> buf (2, 64); juce::MidiBuffer midi; buf.clear();
+                buf.setSample (0, 0, std::numeric_limits<float>::quiet_NaN());
+                p.processBlock (buf, midi);
+                expect (p.diagnosticsSink().hasAnomalies(), "probe did not flag the NaN");
+            }   // ~PluginProcessor: the auto-report flush must be skipped
+            diag::ReportStore store (dir);
+            store.recoverStaleClaims();
+            expectEquals (store.listPending().size(), 0,
+                          "an auto report was queued despite consent being off");
+            expectEquals (tx.calls, 0, "an opted-out session attempted a send");
+            dir.deleteRecursively();
+        }
+
+        beginTest ("consent ON queues the auto report at teardown");
+        {
+            auto dir = juce::File::createTempFile ("diagoptin");
+            dir.deleteFile(); dir.createDirectory();
+            FakeTransport tx; tx.succeed = false;
+            {
+                PluginProcessor p;
+                p.initDiagnosticsForTesting (dir, tx);
+                p.setBugReportsEnabled (true);
+                p.prepareToPlay (48000.0, 64);
+                juce::AudioBuffer<float> buf (2, 64); juce::MidiBuffer midi; buf.clear();
+                buf.setSample (0, 0, std::numeric_limits<float>::quiet_NaN());
+                p.processBlock (buf, midi);
+            }
+            diag::ReportStore store (dir);
+            store.recoverStaleClaims();
+            expect (store.listPending().size() >= 1,
+                    "anomalies with consent ON should queue an auto report");
+            dir.deleteRecursively();
+        }
+    }
+};
+
+// Settings persistence — the on-disk half of the bug-reporting consent contract
+// (RELEASE_CHECKLIST 6). The editor writes settings.xml; the processor reads its
+// `bugReports` attribute back out of the same file to seed consent, so these are
+// cross-component contracts, not editor-local details.
+class SettingsPersistenceTest : public juce::UnitTest
+{
+public:
+    SettingsPersistenceTest() : juce::UnitTest ("Settings Persistence", "StateIO") {}
+    void runTest() override
+    {
+        beginTest ("editor and processor agree on the settings path");
+        // Both sides derive this from diag::productDir(); if that ever forks
+        // again, consent silently stops persisting and nothing else fails.
+        expect (PluginEditor::getDataRoot() == diag::productDir(),
+                "editor data root diverged from diag::productDir()");
+        expect (PluginEditor::getSettingsFile() == diag::settingsFile(),
+                "editor settings.xml path diverged from diag::settingsFile()");
+
+        beginTest ("consent defaults ON (opt-out)");
+        SettingsState fresh;
+        expect (fresh.bugReportsEnabled, "bug reporting must default ON");
+
+        auto file = juce::File::createTempFile ("settings_xml");
+        file.deleteFile();
+
+        beginTest ("all fields round-trip through the file");
+        SettingsState saved;
+        saved.oscilloscopeEnabled = false;
+        saved.oscilloscopeStereo  = false;
+        saved.tooltipsEnabled     = true;
+        saved.windowScalePercent  = 90;
+        saved.oversamplingMode    = 1;
+        saved.scopeLength         = 1024;
+        saved.bugReportsEnabled   = false;
+        saved.scopeOverlayMode    = 2;
+        saved.saveToFile (file);
+
+        SettingsState loaded;
+        loaded.loadFromFile (file);
+        expect (loaded.oscilloscopeEnabled == saved.oscilloscopeEnabled, "oscilloscope lost");
+        expect (loaded.oscilloscopeStereo  == saved.oscilloscopeStereo,  "stereo lost");
+        expect (loaded.tooltipsEnabled     == saved.tooltipsEnabled,     "tooltips lost");
+        expectEquals (loaded.windowScalePercent, saved.windowScalePercent);
+        expectEquals (loaded.oversamplingMode,   saved.oversamplingMode);
+        expectEquals (loaded.scopeLength,        saved.scopeLength);
+        expectEquals (loaded.scopeOverlayMode,   saved.scopeOverlayMode);
+        expect (! loaded.bugReportsEnabled, "revoked consent did not survive a reload");
+
+        beginTest ("processor reads the consent attribute the editor wrote");
+        // Mirrors PluginProcessor's ctor exactly (parseXML + getBoolAttribute),
+        // so a rename on either side fails here instead of in the field.
+        {
+            auto xml = juce::parseXML (file);
+            expect (xml != nullptr, "settings.xml did not parse");
+            expect (! xml->getBoolAttribute ("bugReports", true),
+                    "processor cannot see the consent the editor saved");
+        }
+
+        beginTest ("a missing or corrupt file leaves defaults intact");
+        {
+            auto absent = juce::File::createTempFile ("settings_absent");
+            absent.deleteFile();
+            SettingsState s;
+            s.loadFromFile (absent);
+            expect (s.bugReportsEnabled && s.oscilloscopeEnabled,
+                    "missing file should leave defaults untouched");
+
+            auto junk = juce::File::createTempFile ("settings_junk");
+            junk.replaceWithText ("<<< not xml");
+            SettingsState s2;
+            s2.loadFromFile (junk);
+            expect (s2.bugReportsEnabled && s2.oscilloscopeEnabled,
+                    "corrupt file should leave defaults untouched");
+            junk.deleteFile();
+        }
+
+        beginTest ("legacy xyMorph flag migrates to the overlay mode");
+        {
+            juce::XmlElement legacy ("Settings");
+            legacy.setAttribute ("xyMorph", true);      // pre-selector session
+            legacy.writeTo (file);
+            SettingsState s;
+            s.loadFromFile (file);
+            expectEquals (s.scopeOverlayMode, 1, "xyMorph=true should migrate to XY Morph (1)");
+
+            legacy.setAttribute ("xyMorph", false);
+            legacy.writeTo (file);
+            SettingsState s2;
+            s2.loadFromFile (file);
+            expectEquals (s2.scopeOverlayMode, 0, "xyMorph=false should migrate to Off (0)");
+
+            // An explicit mode always wins over the legacy flag.
+            legacy.setAttribute ("xyMorph", true);
+            legacy.setAttribute ("scopeOverlay", 2);
+            legacy.writeTo (file);
+            SettingsState s3;
+            s3.loadFromFile (file);
+            expectEquals (s3.scopeOverlayMode, 2, "explicit scopeOverlay should beat legacy xyMorph");
+        }
+
+        beginTest ("out-of-range overlay mode is clamped");
+        {
+            juce::XmlElement bad ("Settings");
+            bad.setAttribute ("scopeOverlay", 7);
+            bad.writeTo (file);
+            SettingsState s;
+            s.loadFromFile (file);
+            expectEquals (s.scopeOverlayMode, 2, "overlay mode should clamp to the 0..2 range");
+
+            bad.setAttribute ("scopeOverlay", -3);
+            bad.writeTo (file);
+            SettingsState s2;
+            s2.loadFromFile (file);
+            expectEquals (s2.scopeOverlayMode, 0, "negative overlay mode should clamp to 0");
+        }
+
+        file.deleteFile();
     }
 };
 
@@ -870,6 +1039,7 @@ inline void registerAllTests()
     static DiagSinkComposerTest diagSinkComposerTest;
     static DiagSenderTest diagSenderTest;
     static DiagProcessorTest diagProcessorTest;
+    static SettingsPersistenceTest settingsPersistenceTest;
 }
 
 #endif // JUCE_DEBUG

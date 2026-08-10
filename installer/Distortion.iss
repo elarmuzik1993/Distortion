@@ -2,7 +2,7 @@
 ; Inno Setup script — Sledge Distortion (Monolit Beatz, VST3, Windows x64)
 ;
 ; Build locally or in CI:
-;   iscc /DMyAppVersion=2.2.0 installer\Distortion.iss
+;   iscc /DMyAppVersion=2.3.0 installer\Distortion.iss
 ;
 ; Expects the built VST3 bundle at (relative to this script's parent):
 ;   build\Distortion_artefacts\Release\VST3\Sledge Distortion.vst3
@@ -17,7 +17,7 @@
 ; ============================================================================
 
 #ifndef MyAppVersion
-  #define MyAppVersion "2.2.0"
+  #define MyAppVersion "2.3.0"
 #endif
 
 #define MyAppName "Sledge Distortion"

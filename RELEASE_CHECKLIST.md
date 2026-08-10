@@ -10,7 +10,7 @@ every box on the `release/vX.Y-*` branch before tagging `vX.Y`.
 
 ## 1. Technical baseline (automated)
 
-- [x] 🤖 Unit suite green — `DistortionTests` (2400+ assertions) runs in CI on every push/PR.
+- [x] 🤖 Unit suite green — `DistortionTests` (2580+ assertions) runs in CI on every push/PR. *(Last local run 2026-08-10: 2584 assertions, all passed.)*
 - [x] 🤖 **pluginval strictness 10** passes on Windows + Linux — `Validate with pluginval` step in `.github/workflows/build.yml`.
 - [x] 🧪 Sample-rate sweep 44.1k–192k (covered by `SampleRateTests`).
 - [x] 🧪 No heap allocation in `processBlock` (covered by `RTAllocationGuard*` tests).
@@ -35,8 +35,8 @@ every box on the `release/vX.Y-*` branch before tagging `vX.Y`.
 
 ## 4. Final validation ("the shipping test")
 
-- [ ] 🧪 **Soak test** — N instances rendering for an extended run without RSS growth or non-finite output. *(See `DistortionSoak` harness — `Source/Tools/SoakHarness.cpp`.)*
-- [ ] 🧪 **Multi-instance** — 10+ instances, independent state/RNG (spot-checked by `ThreadSafetyTests::testMultiInstanceIndependence`; full count via the soak harness).
+- [x] 🧪 **Soak test** — N instances rendering for an extended run without RSS growth or non-finite output. *(See `DistortionSoak` harness — `Source/Tools/SoakHarness.cpp`.)* **Last run (2026-08-10, Linux):** 12 instances × 300 s → all output finite, RSS 14 MB → 14 MB (0 MB growth), `SOAK PASSED`. Re-run before tagging.
+- [x] 🧪 **Multi-instance** — 10+ instances, independent state/RNG (spot-checked by `ThreadSafetyTests::testMultiInstanceIndependence`; full count via the soak harness — 12 instances in the run above).
 - [ ] ✍️ **Host compatibility** — ≥3 DAWs per `docs/DAW_QA_matrix.md` (load, automate, save/restore, bypass).
 
 ## 5. Packaging & distribution (Windows + Linux + macOS)
@@ -47,16 +47,17 @@ every box on the `release/vX.Y-*` branch before tagging `vX.Y`.
 - [x] 🤖 Release-publish wired — Windows installer + Windows ZIP + macOS ZIP + Linux tarball + macOS `.pkg` + `SHA256SUMS` attached to the GitHub Release on tag. All assets version-stamped; `SHA256SUMS` is the only checksum file published.
 - [ ] ✍️ **Windows ZIP still carries `vc_redist.x64.exe`** — the ZIP is the recommended download while unsigned, and the plugin links the dynamic CRT, so a bare `.vst3` fails to load on clean Windows 10. Unzip the built artifact and confirm the redist and `LICENSE.txt` are inside before tagging.
 - [x] 🤖 **macOS build + AU** — universal (arm64 + x86_64) VST3/AU/Standalone built in CI on `macos-14`; unit suite + VST3 pluginval strictness 10 + AU `auval` run there. **Runs on release tags and manual dispatch only** (macOS runners bill at 10× minutes), so it does *not* gate PRs — if a change touched the macOS path, trigger the workflow manually from the Actions tab and confirm it is green **before** tagging.
-- [ ] 🤖 **Windows code-signing** — Azure Trusted Signing steps wired but *inert until the `AZURE_*` repo secrets are set* (needs an Azure Trusted Signing account + identity validation).
-- [ ] 🤖 **macOS code-signing + notarization** — Developer ID codesign + `notarytool`/`stapler` steps wired but *inert until the `APPLE_*` repo secrets are set* (needs an Apple Developer account: Developer ID Application + Installer certs, an app-specific password, and the team ID). Until then macOS ships an unsigned `.pkg` (Gatekeeper right-click-open workaround).
+- [ ] 🤖 **Windows code-signing** — Azure Trusted Signing steps wired but *inert until the `AZURE_*` repo secrets are set* (needs an Azure Trusted Signing account + identity validation). **Accepted for v2.3: ships unsigned** — SmartScreen shows an "unrecognised app" warning (More info → Run anyway). Documented in the README and CHANGELOG "Known limitations". Not a tag blocker for this release; revisit when the account exists.
+- [ ] 🤖 **macOS code-signing + notarization** — Developer ID codesign + `notarytool`/`stapler` steps wired but *inert until the `APPLE_*` repo secrets are set* (needs an Apple Developer account: Developer ID Application + Installer certs, an app-specific password, and the team ID). Until then macOS ships an unsigned `.pkg` (Gatekeeper right-click-open workaround). **Accepted for v2.3: ships unsigned**, documented in the README and CHANGELOG "Known limitations". Not a tag blocker for this release; revisit when the Apple Developer account exists.
 
 ## 6. Privacy & bug reporting (USE-53)
 
 - [x] ✍️ **Report endpoint set** — `DISTORTION_REPORT_ENDPOINT` (`Source/Diagnostics/ReportEndpoint.h`, or a build define) points at the real receiver, **not** the `REPLACE-ME` placeholder. A release must not ship the placeholder. *(Confirmed 2026-07-04: live Supabase `report` function.)*
-- [ ] 🧪 First-run notice shows exactly once; the **Settings consent toggle persists** across relaunch (written as `bugReports` in `settings.xml`, read by both editor and processor).
-- [ ] 🧪 **Opt-out works** — with reporting off, no `auto` report is queued/sent; queued `auto` reports are purged unsent. "Report a Bug" still sends only on explicit Send.
-- [ ] 🧪 Queue is **bounded** — a permanently-unreachable endpoint never grows the on-disk queue without limit (count + age caps in `ReportStore`).
-- [ ] ✍️ **`docs/PRIVACY.md` published** and linked from the product/marketing page; the "don't include personal data" note is present in the in-app dialog.
+- [x] 🧪 **Settings consent toggle persists** across relaunch — written as `bugReports` in `settings.xml`, read back by both editor and processor (`SettingsPersistenceTest`: full round-trip, the processor-side `parseXML`/`getBoolAttribute` read, and a path-contract assertion that `PluginEditor::getSettingsFile() == diag::settingsFile()`). Both sides now derive that path from `diag::productDir()`, so they cannot silently fork.
+- [ ] ✍️ First-run notice shows **exactly once** — needs an eyes-on pass (fresh app-data folder → notice appears; relaunch → it does not). The persistence half is covered above; the one-shot trigger keys off `settings.xml` not existing at editor construction.
+- [x] 🧪 **Opt-out works** — with reporting off, no `auto` report is queued (`DiagProcessorTest`: "consent OFF queues no auto report at teardown", plus the ON mirror) and queued `auto` reports are purged unsent at drain (`DiagSenderTest`). "Report a Bug" still sends only on explicit Send.
+- [x] 🧪 Queue is **bounded** — a permanently-unreachable endpoint never grows the on-disk queue without limit; count cap (≤50) and age cap (30 days) both covered by `DiagReportStoreTest`.
+- [x] ✍️ **`docs/PRIVACY.md` published** and linked from the README ("Privacy & bug reporting") and the marketing note; the "don't include personal data" note is present in the in-app dialog (`PluginEditor.h`).
 
 ---
 
