@@ -326,7 +326,12 @@ namespace TestUtilities
         constexpr int SMALL = 256;     // Fast tests
         constexpr int MEDIUM = 512;    // Standard tests
         constexpr int LARGE = 2048;    // Thorough tests
-        constexpr int HUGE = 8192;     // Stress tests
+        // Named STRESS, not HUGE: macOS's <math.h> defines HUGE as a macro
+        // (#define HUGE MAXFLOAT), so `constexpr int HUGE` is rewritten by the
+        // preprocessor into a syntax error before the namespace can protect it.
+        // Windows and Linux do not define it, which is why this only ever broke
+        // the macOS build - and only once build-macos actually ran.
+        constexpr int STRESS = 8192;   // Stress tests
     }
 }
 
