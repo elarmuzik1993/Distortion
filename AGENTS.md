@@ -5,7 +5,7 @@
 - **Projects HUB:** [[03 Projects/Projects HUB]]
 
 ## Project Overview
-**Sledge Distortion** is a professional JUCE audio plugin by Monolit Beatz featuring multi-stage distortion processing, LA2A-style optical compression, and advanced signal processing. The plugin supports VST3 and Standalone on all platforms, plus **AU (Audio Unit)** on macOS.
+**Sledge Distortion** is a professional JUCE audio plugin by Monolit Beatz featuring multi-stage distortion processing, LA2A-style optical compression, and advanced signal processing. It ships as **VST3** on Windows and Linux, and as **VST3 + AU (Audio Unit) + Standalone** on macOS. See "Release & Packaging" below — the Standalone target builds everywhere but is only packaged by the macOS job.
 
 ## Key Specifications
 - **DSP Specs**: See `DSP Architecture` section below.
