@@ -57,7 +57,7 @@ python scripts/fix_moduleinfo_json.py build --all
 
 ## Architecture & Signal Chain
 1. **Input Stage** → Multimode Input Filter (HP/LP/BP, 20-20kHz, Butterworth TPT).
-2. **Oversampling** → 4x Polyphase IIR
+2. **Oversampling** → Polyphase IIR, selectable Off / 2x / 4x (4x default; `oversamplingMode` in `settings.xml`)
 3. **Pre-Distortion Transient Tamer** → Hardcoded (1ms attack, 50ms release, 2.5:1 ratio, -12dB threshold)
 4. **Sub Guard Band-Split** (Optional) → 50-200Hz crossover protecting low band from distortion.
 5. **Distortion Stage** → 7 Professional Clip Types (Brutal Fuzz, Tube, Bit Crusher, Tape, Transformer, Diode, Decimator).
@@ -69,14 +69,17 @@ python scripts/fix_moduleinfo_json.py build --all
 11. **Downsampling** → Return to original sample rate.
 12. **DC Blocking** → One-pole (~3.5Hz cutoff).
 13. **Graphic EQ** (Optional) → 12-band peaking bank at base rate (`processGraphicEq`); whole bank bypasses while the drawn curve is flat. Bands whose centre sits at/above `EQ_MAX_FREQ_RATIO` (0.45) × sample rate are dropped, so the 16 kHz band is inactive at base rates ≤32 kHz.
-14. **Output Limiter** → Safety limiter (-0.5dBFS).
-15. **Output Stage** → Final gain staging (±9dB).
+14. **Output Stage** → Final gain staging (±9dB).
+15. **Global Mix** → dry/wet blend, dry phase-aligned through the matched `dryOversampling` instance (comb-free at every frequency).
+16. **Output Limiter** → Safety limiter (-0.5dBFS), **after** the blend so the ceiling bounds the mixed output, not just the wet path. Always the last gain stage on both the active and bypass paths.
+
+Steps 12–14 live inside `applyAutoGainAndISP`; 15–16 are in `processBlock` proper. `docs/Architecture Contract.md` carries the fully expanded ordering — keep the two in step.
 
 ## Engineering Standards
 - **Memory**: No dynamic allocation in `processBlock`.
-- **Thread Safety**: Use `std::atomic` for parameters and `SpinLock`/`AbstractFifo` for Scope data.
+- **Thread Safety**: Use `std::atomic` for parameters and a lock-free `juce::AbstractFifo` (SPSC) for Scope data. The scope path holds **no lock** — the old `SpinLock` was removed to keep the audio thread contention-free, so do not reintroduce one.
 - **Smoothing**: Always consume `SmoothedValue` in a **sample-first loop** to avoid buffer exhaustion.
-- **Bypass**: True bypass when `distortion < 0.5%` and `compression OFF`. Skips filters and oversampling.
+- **Bypass**: True bypass when `distortion < 0.5%` and `compression OFF`. Skips oversampling and the whole distortion/compression chain. **The multimode input filter still runs** (only when `isInputFilterActive()`), so it works standalone; a filter at its transparent default leaves bypass bit-clean. The oversampler's reported latency is re-imposed via `bypassLatencyDelay` so toggling causes no timing jump. Full ordering in `docs/Architecture Contract.md`.
 - **Namespace**: DSP constants are centralized in the `DSPConstants` namespace in `PluginProcessor.h`.
 
 ## Build & Test

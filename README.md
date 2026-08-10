@@ -32,27 +32,40 @@ A professional JUCE audio plugin featuring multi-stage distortion, LA2A-style co
 - **UI refresh** — layered-arc rotary knobs with value-driven colour, a 5-LED gain-reduction meter, scrollable settings panel, and compact window fold
 - **16 factory presets** (up from 8)
 - **Audio-quality fixes** — Sub Guard crossover phase + click-free slope changes, phase-aligned wet/dry mix, corrected LFO rate in the oversampled path, strict -0.5 dBFS output ceiling, latency-compensated true bypass
-- **Platform** — VST3 + Standalone (VST2 removed) on Windows + Linux; VST3 + AU + Standalone on macOS (universal arm64 + x86_64); validated with pluginval (strictness 10)
+- **Platform** — VST3 + Standalone (VST2 removed) on Windows + Linux; validated with pluginval (strictness 10). *(macOS + AU arrived in v2.3, above.)*
 
 ## Features
 
 ### Distortion Engine
 - **7 Professional Clip Types**: Brutal Fuzz, Tube Overdrive, Bit Crusher, Tape Saturation, Transformer Saturation, Diode Clipper, Decimator
-- **4x Oversampling**: Polyphase IIR anti-aliasing
+- **Oversampling**: Polyphase IIR anti-aliasing — selectable Off / 2x / 4x in Settings (4x default)
 - **Sub Guard**: Variable-slope crossover (50-200Hz) protects sub-bass from distortion
 - **True Bypass**: Zero processing when distortion < 0.5%
 - **Dist Mix**: Parallel distortion blending (0-100%)
+
+### Multimode Input Filter
+- **High-Pass / Low-Pass / Band-Pass** (SVF TPT) ahead of the drive
+- Runs in the true-bypass path too, so it works as a standalone filter with distortion and compression off
+- A filter left at its transparent default keeps bypass bit-clean
+
+### Graphic EQ
+- **Free-draw curve**: draw a magnitude response directly on the oscilloscope; double-click flattens
+- **12 peaking bands**, log-spaced ~30 Hz–16 kHz, ±12 dB, at the output stage
+- **Automatable** and saved with presets; bypasses entirely while flat, so a fresh instance is bit-transparent
+- **One-click bypass** (power button) mutes it click-free while preserving the drawn curve
 
 ### Oscilloscope
 - **Zero-crossing trigger**: Waveform locked to rising edge — no horizontal drift
 - **Anti-alias decimation**: 2-point averaging filter before scope downsampling
 - **Real-time display**: Always shows the most recent audio (FIFO drain on every frame)
 - **Lock-free pipeline**: SpinLock removed — pure `AbstractFifo` SPSC, no audio-thread contention
+- **Overlay selector**: Off / XY Morph / Graphic EQ decides which overlay owns the scope surface
 
 ### LFO Modulation System
 - **5 Waveforms**: Sine, Triangle, Square, Saw, Random S&H
 - **5 Modulation Destinations**: Distortion Amount, Tone Filter, Hi-Pass, Dist Mix, Output Gain
-- **Rate**: 0.1-50Hz
+- **Rate**: 0.1-50Hz free-running, or **BPM Sync** to host tempo (1/1 → 1/32, incl. triplets)
+- **INV**: polarity invert, reflected in both DSP and the arc visualiser
 - **Visual Feedback**: Pulsing cyan glow on modulated knobs
 
 ### LA2A-Style Compression
@@ -66,8 +79,11 @@ A professional JUCE audio plugin featuring multi-stage distortion, LA2A-style co
 - Harmonic density scaling (prevents 2-5kHz harshness)
 - Auto-gain compensation (RMS-based loudness maintenance)
 - ISP protection (soft clipper at -0.3dBFS)
-- Output limiter (-0.5dBFS safety)
 - DC blocking with manual one-pole filter
+- Graphic EQ (post-DC-blocker, pre-output-gain)
+- Output limiter (-0.5dBFS safety, always the last gain stage)
+- Linear Phase Dry option — phase-coherent parallel path, no comb filtering at partial mix
+- Latency reported to the host for PDC, re-imposed on the true-bypass path so toggling causes no timing jump
 
 ## Build Instructions
 
@@ -102,14 +118,18 @@ Add `-DCMAKE_OSX_ARCHITECTURES=arm64` for a faster single-arch dev build.
 ```
 Distortion/
 ├── Source/
-│   ├── PluginProcessor.cpp/h    # Audio processing (2200+ lines)
+│   ├── PluginProcessor.cpp/h    # Audio processing (3400+ lines)
 │   ├── PluginEditor.cpp/h       # GUI implementation
 │   ├── CustomKnob.cpp/h         # Custom rotary controls
-│   └── Tests/                   # Unit test suite (2000+ assertions)
-├── Resources/                   # Images and assets
+│   ├── FactoryPresets.h         # Factory bank (single source of truth)
+│   ├── Diagnostics/             # Anonymous bug reporting (opt-out)
+│   ├── Tools/                   # Headless harnesses (render, soak, UI snapshot)
+│   └── Tests/                   # Unit test suite (2580+ assertions)
+├── Resources/                   # Images, textures and fonts
+├── installer/                   # Inno Setup (Windows) + .pkg (macOS)
 ├── CMakeLists.txt              # Cross-platform build
 ├── Distortion.jucer            # Projucer project
-├── CLAUDE.md                   # Developer documentation
+├── AGENTS.md                   # Developer documentation / source of truth
 └── .github/workflows/          # CI/CD pipeline
 ```
 

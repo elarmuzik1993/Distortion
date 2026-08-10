@@ -2,7 +2,13 @@
 
 Gate for promoting a build from Release Candidate to a published, sellable
 release. Derived from `library/Definition of done for vst plugins.md`. Check
-every box on the `release/vX.Y-*` branch before tagging `vX.Y`.
+every box on the `ship/vX.Y` branch before tagging `vX.Y`.
+
+**Branch name is load-bearing.** `cmake/GitVersion.cmake` matches `^ship/(vX.Y)$`
+exactly, so a release branch on that name advertises `vX.Y-<sha>` in the UI
+before the tag exists. Any other name (`release/v2.3-rc1`, `ship/v2.3-rc1`)
+fails the match and the build falls back to *last tag + commit count* — i.e. the
+previous version's number on the new release's binary.
 
 **Legend:** 🤖 automated in CI · 🧪 automated, run locally · ✍️ manual
 
@@ -29,7 +35,7 @@ every box on the `release/vX.Y-*` branch before tagging `vX.Y`.
 ## 3. Artistic / curation ("the freeze")
 
 - [ ] ✍️ **DSP freeze** — no new algorithms/features on this branch; bugfixes only.
-      *Policy: feature work targets `main`/next minor; `release/vX.Y-*` takes only fixes.*
+      *Policy: feature work targets `main`/next minor; `ship/vX.Y` takes only fixes.*
 - [ ] ✍️ Algorithm validation — every clip type auditioned and signed off as musical.
 - [x] 🧪 Clean Mode order (tone vs waveshaper) verified (`ProcessBlock`/golden tests).
 
@@ -80,7 +86,7 @@ cmake --build build --target DistortionSoak -j && \
 # Windows installer (on Windows, with Inno Setup installed).
 # First place vc_redist.x64.exe (https://aka.ms/vs/17/release/vc_redist.x64.exe)
 # at installer\redist\ or the build skips the VC++ runtime safety net (warning).
-iscc /DMyAppVersion=2.2.0 installer\Distortion.iss   # -> dist\SledgeDistortion-2.2.0-Windows.exe
+iscc /DMyAppVersion=2.3.0 installer\Distortion.iss   # -> dist\SledgeDistortion-2.3.0-Windows.exe
 ```
 
 ## Activating Windows code-signing

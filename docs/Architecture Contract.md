@@ -1,12 +1,12 @@
 ---
-date: 2026-04-26
+date: 2026-08-10
 status: active
 tags: [project, plugin, audio, juce, dsp, contract, reference]
 ---
 
 # Sledge Distortion — Architecture Contract
 
-Updated on `ship/v2.1` after PR-10..PR-14. Use as a reference alongside handoff notes. Changes that break anything here are contract violations.
+Updated for **v2.3** (originally written on `ship/v2.1` after PR-10..PR-14). Use as a reference alongside handoff notes. Changes that break anything here are contract violations.
 
 ## Threading
 - `processBlock` is the only audio-thread entry point. No locks held inside.
@@ -33,7 +33,7 @@ Active path:
 3. Parameter load (+ NaN guard)
 4. LFO: block-level dests update filter coeffs; per-sample dests (0/3/4) advance phase inside sample loops
 5. Dry snapshot (only if global mix < 100% or smoothing)
-6. Pre-HP filter (base rate, pre-upsample)
+6. Multimode input filter (base rate, pre-upsample) — SVF TPT, High-Pass / Low-Pass / Band-Pass per `inputFilterMode`; runs in the bypass path too
 7. Upsample (4x default)
 8. Pre-distortion transient tamer (always on, except Extreme)
 9. Auto-gain input RMS
@@ -45,12 +45,17 @@ Active path:
 15. Sub Guard re-add: low band through `toneFilterLow` (phase-match), then sum
 16. Downsample
 17. Manual DC blocker (R=0.9995, one-pole, max 2 channels)
-18. Output gain (+ per-sample LFO dest 4)
-19. Output limiter (stereo-linked, -0.5 dBFS, always on)
-20. Global mix with fractional dry-delay alignment via `dryDelayState`
-21. Phase correlation + scope push
+18. **Graphic EQ** (`processGraphicEq`, base rate) — 12-band peaking bank, in-place coefficient writes; whole bank bypassed while the curve is flat or `eqEnabled` is off; bands at/above `EQ_MAX_FREQ_RATIO` (0.45) × SR are skipped (unstable at Nyquist)
+19. Output gain (+ per-sample LFO dest 4)
+20. Global mix — dry phase-aligned through the matched `dryOversampling` instance (up-then-down, no processing), so the blend is comb-free at every frequency
+21. Output limiter (stereo-linked, -0.5 dBFS, always on) — **after** the blend, so the ceiling bounds the mixed output rather than just the wet path
+22. Phase correlation + scope push
 
-Bypass path (`distortion < 0.5% && !compEnabled`): output gain → limiter → global mix → scope. Everything else skipped.
+Steps 17–19 live inside `applyAutoGainAndISP`; 20–22 are in `processBlock` proper.
+
+Bypass path (`distortion < 0.5% && !compEnabled`): multimode input filter (only when `isInputFilterActive()`, so a default filter keeps bypass bit-clean) → output gain → global mix → limiter → scope → bypass latency compensation. Everything else — oversampling, transient tamer, Sub Guard, waveshaper, compression, soft clipper, DC blocker, Graphic EQ — is skipped.
+
+Mix sits **before** the limiter on both paths so the safety ceiling applies to the blended output. The bypass branch re-imposes `bypassLatencySamples` (the oversampler's reported latency) through `bypassLatencyDelay`, so crossing the bypass↔active threshold causes no timing jump against host PDC.
 
 ## State ownership
 - All DSP state is audio-thread-owned. Reset points: `prepareToPlay`, `rebuildOversampling` (under callback lock), `resetDSPState` (audio thread via flag).
