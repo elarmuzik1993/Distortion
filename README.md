@@ -6,7 +6,7 @@ A professional JUCE audio plugin featuring multi-stage distortion, LA2A-style co
 
 **Sledge Distortion** - A JUCE audio plugin by Monolit Beatz
 - **Version**: 2.3
-- **Type**: Audio Plugin (VST3, Standalone; + AU on macOS)
+- **Type**: Audio Plugin — VST3 everywhere; + AU and a Standalone app on macOS
 - **Framework**: JUCE 7.0.12
 - **Platforms**: Windows, Linux, macOS (universal arm64 + x86_64)
 - **Build Systems**: CMake (cross-platform), Visual Studio 2022
@@ -32,7 +32,7 @@ A professional JUCE audio plugin featuring multi-stage distortion, LA2A-style co
 - **UI refresh** — layered-arc rotary knobs with value-driven colour, a 5-LED gain-reduction meter, scrollable settings panel, and compact window fold
 - **16 factory presets** (up from 8)
 - **Audio-quality fixes** — Sub Guard crossover phase + click-free slope changes, phase-aligned wet/dry mix, corrected LFO rate in the oversampled path, strict -0.5 dBFS output ceiling, latency-compensated true bypass
-- **Platform** — VST3 + Standalone (VST2 removed) on Windows + Linux; validated with pluginval (strictness 10). *(macOS + AU arrived in v2.3, above.)*
+- **Platform** — VST3 on Windows + Linux (VST2 removed); validated with pluginval (strictness 10). *(macOS + AU arrived in v2.3, above.)*
 
 ## Features
 
@@ -137,7 +137,7 @@ Distortion/
 
 - **VST3**: Primary format (all platforms)
 - **AU (Audio Unit)**: macOS only — Logic Pro / GarageBand
-- **Standalone**: Testing without DAW
+- **Standalone**: **shipped on macOS only** (in the `.pkg`). The `Distortion_Standalone` target builds on every platform for local testing, but only the `build-macos` CI job packages it — Windows and Linux release artifacts contain the VST3 and nothing else.
 
 ## Installation
 
