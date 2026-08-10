@@ -3408,6 +3408,25 @@ void LinearPhaseDryTest::runTest()
 // perform this optimisation, so the attribute is GCC/Clang only.
 //==============================================================================
 
+// The attribute below covers runTest() only - it does NOT reach into lambda
+// bodies, which are separate functions the optimiser still owns. The two thread
+// tests allocate inside a std::thread lambda, so on clang their new/delete pair
+// was elided anyway: "Worker thread counts allocations inside its own scope"
+// failed on macOS, and its sibling (which asserts a count of ZERO) passed
+// vacuously - there was no allocation to miscount. This helper is noinline as
+// well as unoptimised, so the pair survives wherever it is called from. Route
+// every in-lambda allocation through it rather than writing `new` inline.
+#if defined(__clang__)
+[[clang::optnone]] __attribute__((noinline))
+#elif defined(__GNUC__)
+__attribute__((optimize("O0"), noinline))
+#endif
+static void rtGuardForceHeapAllocation()
+{
+    auto* p = new int (42);
+    delete p;
+}
+
 #if defined(__clang__)
 [[clang::optnone]]
 #elif defined(__GNUC__)
@@ -3501,8 +3520,10 @@ void RTAllocationGuardTest::runTest()
 
             // Main has a scope active; this worker has none. This alloc must
             // NOT be counted.
-            auto* p = new int (99);
-            delete p;
+            // Routed through the helper so the allocation genuinely happens -
+            // written inline, clang elided it and this test passed without ever
+            // exercising the thing it claims to check.
+            rtGuardForceHeapAllocation();
 
             workerDone.store (true, std::memory_order_release);
         });
@@ -3528,8 +3549,7 @@ void RTAllocationGuardTest::runTest()
         std::thread worker ([]
         {
             RT_ASSERT_SCOPE();
-            auto* p = new int (100);
-            delete p;
+            rtGuardForceHeapAllocation();
         });
         worker.join();
 
