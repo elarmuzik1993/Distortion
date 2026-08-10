@@ -2122,6 +2122,13 @@ public:
     static void setDataRootOverride(const juce::File& dir);
    #endif
 
+    // Product data root and the settings file inside it. Static and free of
+    // side effects (neither creates a directory), so tests can pin the
+    // editor<->processor consent contract against diag::settingsFile() without
+    // constructing an editor or touching the real app-data folder.
+    static juce::File getDataRoot();
+    static juce::File getSettingsFile();
+
     //==============================================================================
     void paint(juce::Graphics&) override;
     void paintOverChildren(juce::Graphics&) override;
@@ -2295,7 +2302,7 @@ private:
     void loadFactoryPreset(const juce::String& presetName);
     void deletePreset(const juce::String& presetName);
     void refreshPresetList();
-    juce::File getPresetDirectory();
+    static juce::File getPresetDirectory();
 
     // Settings overlay
     std::unique_ptr<SettingsOverlay> settingsOverlay;
@@ -2319,7 +2326,6 @@ private:
     void advanceExtremeFade();
     void loadSettings();
     void saveSettings();
-    juce::File getSettingsFile();
    #if defined (DISTORTION_UI_SNAPSHOT) && DISTORTION_UI_SNAPSHOT
     static juce::File dataRootOverride;
    #endif

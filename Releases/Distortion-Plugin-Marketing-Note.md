@@ -41,5 +41,15 @@ We didn't just build a clipper; we simulated the physics of tone.
 
 ---
 
+## **Formats & Platforms**
+*   **Windows / Linux:** VST3 + Standalone.
+*   **macOS:** VST3 + **AU** + Standalone, universal binary (Apple Silicon + Intel) — fully at home in Logic Pro and GarageBand.
+*   **Free-draw Graphic EQ:** Draw a correction curve straight onto the oscilloscope — 12 automatable bands at the output stage, bypassable in one click, and completely transparent when flat.
+
+## **Privacy**
+Sledge Distortion can send **anonymous** bug reports — version, OS, host, sample rate, and anomaly counts. **No audio, no presets, no file paths, no personal data.** It's on by default, explained by a one-time notice on first launch, and switched off any time in Settings. Full details: **[Privacy & Bug Reporting](../docs/PRIVACY.md)**.
+
+---
+
 ### **Closing Note**
 This is not just another "fuzz" box. It is a surgical tone-shaping tool designed for engineers who need their tracks to sound **heavy, expensive, and clear.**

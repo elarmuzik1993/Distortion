@@ -17,7 +17,7 @@ if(APPLE)
     endif()
 endif()
 
-project(Distortion VERSION 2.2.0 LANGUAGES CXX)
+project(Distortion VERSION 2.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -59,7 +59,7 @@ if(GIT_FOUND)
     )
 else()
     file(WRITE ${CMAKE_SOURCE_DIR}/Source/GitVersion.h
-        "#pragma once\n#define GIT_VERSION_STRING \"v2.2\"\n")
+        "#pragma once\n#define GIT_VERSION_STRING \"v2.3\"\n")
 endif()
 
 # Plugin sources (shared between plugin and tests)
@@ -107,7 +107,7 @@ if(APPLE)
 endif()
 
 juce_add_plugin(Distortion
-    VERSION 2.2.0
+    VERSION 2.3.0
     COMPANY_NAME "Monolit Beatz"
     BUNDLE_ID "com.monolitbeatz.MonolitDistortion"
     IS_SYNTH FALSE

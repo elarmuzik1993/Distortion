@@ -26,7 +26,7 @@ turn it off.
 
 | Field | Example | Why |
 |---|---|---|
-| Plugin version | `v2.2.x-<sha>` | Know which build is affected |
+| Plugin version | `v2.3.x-<sha>` | Know which build is affected |
 | Operating system | `Linux 6.x` / `Windows 11` | Reproduce the environment |
 | DAW host | format (`VST3`/`Standalone`) + name (e.g. `Reaper`) | Host-specific bugs |
 | Audio setup | sample rate + block size | Reproduce the audio config |

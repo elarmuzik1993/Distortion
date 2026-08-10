@@ -26,7 +26,7 @@ which VST3-only hosts don't) — run it against the `.component` from the `.pkg`
 ## Sign-off
 
 - [ ] All rows pass in ≥ 3 DAWs.
-- [ ] DSP-freeze declared on `release/vX.Y-*` (bugfixes only thereafter).
+- [ ] DSP-freeze declared on `ship/vX.Y` (bugfixes only thereafter).
 - [ ] All 7 clip types auditioned and confirmed musical (DoD §3).
 
 Tester: ______________  Date: __________  Build: __________

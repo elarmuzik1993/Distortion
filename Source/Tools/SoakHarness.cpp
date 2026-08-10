@@ -11,6 +11,12 @@
 
     Returns non-zero on failure so it can gate a release.
 
+    PLATFORM NOTE: the leak half needs resident-set reporting, which
+    currentResidentKB() implements for Linux only. Elsewhere the run reports
+    SOAK INCOMPLETE and returns non-zero rather than PASSED — it verified
+    finiteness but not memory growth, and a half-run gate must not look like a
+    clean one. Run the soak on Linux to satisfy the DoD leak gate.
+
     Example:
       DistortionSoak --instances 10 --seconds 120
 
@@ -139,23 +145,40 @@ int main(int argc, char* argv[])
     std::cout << "\n";
 
     const long endRSS   = currentResidentKB();
-    const long growthKB = (warmupRSS > 0) ? (endRSS - warmupRSS) : 0;
+    const bool rssAvailable = (warmupRSS > 0);
+    const long growthKB = rssAvailable ? (endRSS - warmupRSS) : 0;
 
     std::cout << "Output: " << (nonFinite ? "NON-FINITE" : "all finite") << "\n";
-    if (warmupRSS > 0)
+    if (rssAvailable)
         std::cout << "RSS: warmup " << warmupRSS / 1024 << " MB -> end " << endRSS / 1024
                   << " MB (growth " << growthKB / 1024 << " MB)\n";
     else
-        std::cout << "RSS: unavailable on this platform (leak check skipped)\n";
+        std::cout << "RSS: unavailable on this platform - LEAK CHECK DID NOT RUN\n";
 
     // Fail on non-finite output, or resident growth past a generous leak gate.
-    const bool leak = (warmupRSS > 0) && (growthKB > 16 * 1024);  // > 16 MB
+    const bool leak = rssAvailable && (growthKB > 16 * 1024);  // > 16 MB
     if (nonFinite)
         std::cout << "FAILED: non-finite output at block " << badBlock << "\n";
     if (leak)
         std::cout << "FAILED: resident memory grew " << growthKB / 1024 << " MB (possible leak)\n";
 
-    const bool ok = ! nonFinite && ! leak;
-    std::cout << (ok ? "SOAK PASSED\n" : "SOAK FAILED\n");
+    // Without RSS this run verified finiteness only — half the gate. Saying
+    // PASSED here would let the DoD soak box be ticked on evidence that was
+    // never gathered, so it is neither a pass nor a failure: report INCOMPLETE
+    // and return non-zero, because a gate that did not fully run must not
+    // report success to whatever is gating on it.
+    if (! rssAvailable)
+        std::cout << "INCOMPLETE: only the non-finite half ran. The leak half needs\n"
+                     "            resident-memory reporting, implemented for Linux only\n"
+                     "            (/proc/self/statm). Do NOT tick RELEASE_CHECKLIST section 4\n"
+                     "            on this result - re-run the soak on Linux.\n";
+
+    const bool failed = nonFinite || leak;
+    const bool ok     = ! failed && rssAvailable;
+
+    if (ok)              std::cout << "SOAK PASSED\n";
+    else if (failed)     std::cout << "SOAK FAILED\n";
+    else                 std::cout << "SOAK INCOMPLETE\n";
+
     return ok ? 0 : 1;
 }

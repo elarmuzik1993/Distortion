@@ -5,7 +5,7 @@
 - **Projects HUB:** [[03 Projects/Projects HUB]]
 
 ## Project Overview
-**Sledge Distortion** is a professional JUCE audio plugin by Monolit Beatz featuring multi-stage distortion processing, LA2A-style optical compression, and advanced signal processing. The plugin supports VST3 and Standalone on all platforms, plus **AU (Audio Unit)** on macOS.
+**Sledge Distortion** is a professional JUCE audio plugin by Monolit Beatz featuring multi-stage distortion processing, LA2A-style optical compression, and advanced signal processing. It ships as **VST3** on Windows and Linux, and as **VST3 + AU (Audio Unit) + Standalone** on macOS. See "Release & Packaging" below — the Standalone target builds everywhere but is only packaged by the macOS job.
 
 ## Key Specifications
 - **DSP Specs**: See `DSP Architecture` section below.
@@ -57,7 +57,7 @@ python scripts/fix_moduleinfo_json.py build --all
 
 ## Architecture & Signal Chain
 1. **Input Stage** → Multimode Input Filter (HP/LP/BP, 20-20kHz, Butterworth TPT).
-2. **Oversampling** → 4x Polyphase IIR
+2. **Oversampling** → Polyphase IIR, selectable Off / 2x / 4x (4x default; `oversamplingMode` in `settings.xml`)
 3. **Pre-Distortion Transient Tamer** → Hardcoded (1ms attack, 50ms release, 2.5:1 ratio, -12dB threshold)
 4. **Sub Guard Band-Split** (Optional) → 50-200Hz crossover protecting low band from distortion.
 5. **Distortion Stage** → 7 Professional Clip Types (Brutal Fuzz, Tube, Bit Crusher, Tape, Transformer, Diode, Decimator).
@@ -69,20 +69,23 @@ python scripts/fix_moduleinfo_json.py build --all
 11. **Downsampling** → Return to original sample rate.
 12. **DC Blocking** → One-pole (~3.5Hz cutoff).
 13. **Graphic EQ** (Optional) → 12-band peaking bank at base rate (`processGraphicEq`); whole bank bypasses while the drawn curve is flat. Bands whose centre sits at/above `EQ_MAX_FREQ_RATIO` (0.45) × sample rate are dropped, so the 16 kHz band is inactive at base rates ≤32 kHz.
-14. **Output Limiter** → Safety limiter (-0.5dBFS).
-15. **Output Stage** → Final gain staging (±9dB).
+14. **Output Stage** → Final gain staging (±9dB).
+15. **Global Mix** → dry/wet blend, dry phase-aligned through the matched `dryOversampling` instance (comb-free at every frequency).
+16. **Output Limiter** → Safety limiter (-0.5dBFS), **after** the blend so the ceiling bounds the mixed output, not just the wet path. Always the last gain stage on both the active and bypass paths.
+
+Steps 12–14 live inside `applyAutoGainAndISP`; 15–16 are in `processBlock` proper. `docs/Architecture Contract.md` carries the fully expanded ordering — keep the two in step.
 
 ## Engineering Standards
 - **Memory**: No dynamic allocation in `processBlock`.
-- **Thread Safety**: Use `std::atomic` for parameters and `SpinLock`/`AbstractFifo` for Scope data.
+- **Thread Safety**: Use `std::atomic` for parameters and a lock-free `juce::AbstractFifo` (SPSC) for Scope data. The scope path holds **no lock** — the old `SpinLock` was removed to keep the audio thread contention-free, so do not reintroduce one.
 - **Smoothing**: Always consume `SmoothedValue` in a **sample-first loop** to avoid buffer exhaustion.
-- **Bypass**: True bypass when `distortion < 0.5%` and `compression OFF`. Skips filters and oversampling.
+- **Bypass**: True bypass when `distortion < 0.5%` and `compression OFF`. Skips oversampling and the whole distortion/compression chain. **The multimode input filter still runs** (only when `isInputFilterActive()`), so it works standalone; a filter at its transparent default leaves bypass bit-clean. The oversampler's reported latency is re-imposed via `bypassLatencyDelay` so toggling causes no timing jump. Full ordering in `docs/Architecture Contract.md`.
 - **Namespace**: DSP constants are centralized in the `DSPConstants` namespace in `PluginProcessor.h`.
 
 ## Build & Test
 - **Framework**: JUCE UnitTest runner.
-- **Coverage**: 2460+ assertions (100% PASS RATE).
-- **Categories**: DSP, Compression, LFO, ProcessBlock, ThreadSafety, SampleRate (44.1k-192k), GraphicEq (sweeps 22.05k-192k to cover the Nyquist band-drop), State I/O, FactoryPresets.
+- **Coverage**: 2580+ assertions (100% PASS RATE).
+- **Categories**: DSP, Compression, LFO, ProcessBlock, ThreadSafety, SampleRate (44.1k-192k), GraphicEq (sweeps 22.05k-192k to cover the Nyquist band-drop), State I/O, FactoryPresets, Diagnostics, Settings Persistence.
 - **Golden Audio**: Reference file comparison tests included.
 - **Host validation**: CI gates on `pluginval --strictness-level 10` (Windows + Linux; xvfb on Linux).
 - **Soak/stress**: `DistortionSoak` console tool (`Source/Tools/SoakHarness.cpp`) runs N instances faster-than-realtime, failing on non-finite output or RSS growth (DoD 24h/10+-instance gates).
@@ -111,6 +114,7 @@ python scripts/fix_moduleinfo_json.py build --all
 Privacy-light, **opt-out** bug reporting. Lives in `Source/Diagnostics/` (namespace `diag`), owned by `PluginProcessor` so it works headless.
 - **Flow**: an RT-safe non-finite probe at the top of `processBlock` feeds a lock-free `DiagnosticsSink`; reports (auto on anomalies at teardown, or user-initiated via the Settings "Report a Bug" dialog → `submitUserReport`) are written to a durable on-disk queue (`ReportStore`, `…/Monolit Beatz/Sledge Distortion/reports/*.json`) and drained on the **next launch** via a deferred, scan-safe timer → background `ReportSender` → HTTPS POST behind the `ITransport` interface (`CurlTransport` in production).
 - **Consent**: default ON via a `std::atomic<bool>` on the processor, initialised from `settings.xml` (`bugReports` attribute — written by the editor, read by the processor) and flipped live by the Settings toggle; a one-time first-run notice explains it. `user` reports always send; `auto` reports are re-checked at drain and purged on revocation.
+- **Settings path is single-sourced.** `diag::productDir()` is the *only* place the `Monolit Beatz/Sledge Distortion` app-data literals live; `PluginEditor::getDataRoot()` derives from it (applying the snapshot override) and `getSettingsFile()` / `diag::settingsFile()` must resolve to the same file. Deriving them separately is what lets consent silently stop persisting with nothing failing — `SettingsPersistenceTest` asserts the two agree, so keep new path helpers hanging off `getDataRoot()`. Note `getSettingsFile()` creates nothing: `saveSettings()` ensures the root exists before writing.
 - **Multi-instance/process safe**: single-drainer `juce::InterProcessLock` + atomic `*.json`→`*.sending` claim; the queue is bounded (≤50 files / 30 days).
 - **Payload**: minimal/anonymous (version, OS, host, SR/block, anomaly counts, random install-id, optional user text). The free-text message is the only PII vector — see `docs/PRIVACY.md`.
 - **Build**: `JUCE_USE_CURL=1` + `JUCE_LOAD_CURL_SYMBOLS_LAZILY=1` on the **plugin target only**; tests/render/soak stay curl-free and use a `FakeTransport`. `DISTORTION_UNIT_TEST=1` gates appdata I/O + the drain out of unit-test builds. Set `DISTORTION_REPORT_ENDPOINT` (`Source/Diagnostics/ReportEndpoint.h`) before release.

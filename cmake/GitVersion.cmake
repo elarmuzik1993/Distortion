@@ -10,7 +10,10 @@ execute_process(
     RESULT_VARIABLE TAG_RESULT
 )
 if(NOT TAG_RESULT EQUAL 0 OR GIT_TAG STREQUAL "")
-    set(GIT_TAG "v2.1")
+    # No tags reachable (shallow clone, fresh fork). Keep this in step with
+    # project(... VERSION) in CMakeLists.txt or untagged builds advertise a
+    # version the binary isn't.
+    set(GIT_TAG "v2.3")
 endif()
 
 # Count commits since that tag
