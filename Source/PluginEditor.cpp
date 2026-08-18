@@ -940,9 +940,9 @@ void PluginEditor::resized()
     // Vertical centre of the title bar - the anchor everything below the top row
     // (global mix slider, expanded LFO/COMP panels) still hangs off.
     const int presetRowCentreY = titleArea.getY() + (titleHeight - presetHeight) / 2;
-    // Top row (preset selector, randomize, toolbar toggles, LFO/COMP tabs) sits 3px
+    // Top row (preset selector, randomize, toolbar toggles, LFO/COMP tabs) sits 6px
     // (scaled) above that centre so it lines up with the rest of the UI.
-    const int presetY = presetRowCentreY - S(3);
+    const int presetY = presetRowCentreY - S(6);
     const int presetX = titleArea.getX();
 
     // Hide the label (set to zero width)
