@@ -2039,11 +2039,19 @@ public:
 
         // Draw initials text
         g.setColour(box.findColour(juce::ComboBox::textColourId));
-        g.setFont(juce::Font(11.0f, juce::Font::bold));
+        g.setFont(juce::Font(11.0f * uiScale, juce::Font::bold));
 
         auto textBounds = boxBounds.reduced(3, 0);
-        g.drawText(displayText, textBounds, juce::Justification::centred, true);
+        // Squeeze the wide entries ("Distortion", "High Pass", "Compress") rather
+        // than ellipsing them - drawText would clip them to "Dist...", "Compr...".
+        g.drawFittedText(displayText, textBounds, juce::Justification::centred, 1, 0.6f);
     }
+
+    // The editor scales its layout by width / 960, but a LookAndFeel cannot see
+    // that factor, so PluginEditor::resized() pushes it in here. Without it the
+    // text stayed at its 960px size while the boxes shrank with the window,
+    // which is what truncated the wider entries at reduced window scale.
+    void setUiScale(float newScale) { uiScale = juce::jmax(0.1f, newScale); }
 
     juce::String getInitials(juce::ComboBox& box)
     {
@@ -2103,6 +2111,9 @@ public:
     {
         label.setBounds(0, 0, 0, 0);  // Keep label hidden
     }
+
+private:
+    float uiScale = 1.0f;
 };
 
 class PluginEditor : public juce::AudioProcessorEditor, public juce::Timer

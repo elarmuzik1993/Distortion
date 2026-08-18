@@ -928,6 +928,43 @@ void PluginEditor::resized()
 
     const int labelHeight = S(20);
 
+    // ========== TEXT SCALING ==========
+    // Label fonts are otherwise only set in the constructor, against the fixed
+    // 672/960 factor, so they kept that size while the layout scaled with the
+    // window. At reduced scale the text outgrew its slot and JUCE ellipsed it
+    // ("Peak Redu...", "Distortion A..."). Re-apply them here against s - the
+    // same 0.7 factor keeps every font its current size at 100% - and allow a
+    // horizontal squeeze so a slightly wide string compresses instead of losing
+    // its tail.
+    const float fontScale = (672.0f / 960.0f) * s;
+    const juce::Font knobLabelFont(12.0f * fontScale, juce::Font::bold);
+    const juce::Font subLabelFont (10.0f * fontScale, juce::Font::bold);
+
+    for (auto* l : { &subGuardLabel, &inputGainLabel, &highPassFreqLabel, &distMixLabel,
+                     &distortionAmountLabel, &toneLabel, &waveshaperLabel, &outputGainLabel,
+                     &lfoRateLabel, &lfoDepthLabel,
+                     &compPeakReductionLabel, &compMakeupGainLabel })
+    {
+        l->setFont(knobLabelFont);
+        l->setMinimumHorizontalScale(0.6f);
+        // JUCE labels reserve a 5px border each side; under a 45px knob that is a
+        // third of the slot spent on nothing, and it is what still clipped
+        // "Peak Reduction" at reduced scale. The text is centred, so drop it.
+        l->setBorderSize(juce::BorderSize<int>(0));
+    }
+
+    for (auto* l : { &lfoWaveformLabel, &lfoDestinationLabel,
+                     &lfoBpmDivisionLabel, &compRatioLabel })
+    {
+        l->setFont(subLabelFont);
+        l->setMinimumHorizontalScale(0.6f);
+        l->setBorderSize(juce::BorderSize<int>(0));
+    }
+
+    // Combo boxes draw their own text through the look-and-feel, which cannot
+    // see the layout scale on its own.
+    comboBoxLookAndFeel.setUiScale(s);
+
     // Calculate available space for controls (overlaid on oscilloscope)
     auto bounds = getLocalBounds().reduced(margin);
     auto titleArea = bounds.removeFromTop(titleHeight);
