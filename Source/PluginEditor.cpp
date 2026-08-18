@@ -1012,10 +1012,10 @@ void PluginEditor::resized()
     const int expandedSectionHeight = sKnob + S(18); // knob + label
     const int actualWindowHeight = getHeight();
 
-    // Panel contents hang below the tab headers: the original 8px gap plus a 3px
+    // Panel contents hang below the tab headers: the original 8px gap plus a 5px
     // drop that lowers the knobs (and the labels/dropdowns that ride with them)
     // without touching the headers themselves.
-    const int expandedY = presetY + presetHeight + S(8) + S(3);
+    const int expandedY = presetY + presetHeight + S(8) + S(5);
 
     // Calculate section height for oscilloscope positioning
     const bool anyExpanded = isLFOExpanded || isCompressionExpanded;
