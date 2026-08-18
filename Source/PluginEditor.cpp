@@ -937,7 +937,12 @@ void PluginEditor::resized()
     const int presetSpacing = S(5);
     const int presetHeight = S(24);
 
-    const int presetY = titleArea.getY() + (titleHeight - presetHeight) / 2;
+    // Vertical centre of the title bar - the anchor everything below the top row
+    // (global mix slider, expanded LFO/COMP panels) still hangs off.
+    const int presetRowCentreY = titleArea.getY() + (titleHeight - presetHeight) / 2;
+    // Top row (preset selector, randomize, toolbar toggles, LFO/COMP tabs) sits 3px
+    // (scaled) above that centre so it lines up with the rest of the UI.
+    const int presetY = presetRowCentreY - S(3);
     const int presetX = titleArea.getX();
 
     // Hide the label (set to zero width)
@@ -966,7 +971,7 @@ void PluginEditor::resized()
 
     // Global Mix slider - directly below preset selector
     const int mixLabelWidth = S(28);
-    const int mixSliderY = presetY + presetHeight + S(2);
+    const int mixSliderY = presetRowCentreY + presetHeight + S(2);
     const int mixSliderHeight = S(16);
     globalMixLabel.setBounds(presetX, mixSliderY, mixLabelWidth, mixSliderHeight);
     globalMixLabel.setFont(juce::Font(9.0f * s, juce::Font::bold));
@@ -1008,7 +1013,7 @@ void PluginEditor::resized()
     const int expandedSectionHeight = sKnob + S(18); // knob + label
     const int actualWindowHeight = getHeight();
 
-    const int expandedY = presetY + presetHeight + S(8);  // Below the tab headers with gap
+    const int expandedY = presetRowCentreY + presetHeight + S(8);  // Below the tab headers with gap
 
     // Calculate section height for oscilloscope positioning
     const bool anyExpanded = isLFOExpanded || isCompressionExpanded;
