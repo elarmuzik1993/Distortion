@@ -2,7 +2,16 @@
 
 Manual host-compatibility pass for the release. `pluginval` (in CI) covers the
 host *contract*; this covers real-DAW *behaviour* that can't be automated.
-Run on the **signed installer build**, not a dev build. Tick per DAW.
+Run against the **installer artifact produced by CI** (`.exe` on Windows, `.pkg`
+on macOS) rather than a locally-compiled dev build — the point is to exercise
+what a user actually installs. Tick per DAW.
+
+> **These builds are unsigned.** Code signing is not yet wired up (no
+> certificates are configured, so the sign/notarise steps are skipped), which
+> means SmartScreen and Gatekeeper will warn on install. That friction is
+> expected, and evaluating it is part of this pass — not a reason to fail a row.
+> Once signing lands (USE-49 / USE-55), re-run the *scans / loads* row against a
+> signed build, because that is the only row signing can change.
 
 Target ≥ 3 DAWs (DoD §4). Recommended: **Reaper**, **Ableton Live**, **Bitwig**
 (or **FL Studio**). On **macOS** add **Logic Pro** (exercises the **AU** format,
