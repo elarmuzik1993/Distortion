@@ -430,7 +430,6 @@ jobs:
         cp -R "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/AU/Sledge Distortion.component" "$HOME/Library/Audio/Plug-Ins/Components/"
         killall -9 AudioComponentRegistrar || true
         auval -v aufx Dist Mbds
-      continue-on-error: true
 
     - name: Import signing certificate
       if: env.APPLE_CERT_BASE64 != ''
