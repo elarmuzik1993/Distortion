@@ -25,11 +25,30 @@ void CustomKnob::paint(juce::Graphics& g)
     const float cy = getHeight() * 0.5f;
     const float R  = juce::jmin(cx, cy) - 1.0f;
 
-    const float arcR   = R - 4.0f;          // outer value arc
-    const float lfoR   = arcR - 5.0f;       // inner LFO arc (5px gap)
-    const float bodyR  = lfoR - 4.0f;       // knob cap
-    const float tickR1 = bodyR * 0.35f;     // tick inner
-    const float tickR2 = bodyR - 1.0f;      // tick outer
+    // The knob was drawn for the 67px main knobs (R = 32.5). Every ring gap and
+    // stroke below is that drawing expressed as a fraction of R, so a smaller
+    // knob renders as a true miniature. With the old fixed-pixel gaps the 13px
+    // of rim + ring spacing was a flat tax: it left the main knob a cap 60% of
+    // its radius, the S(45) LFO/COMP knobs only 39%, and at reduced window
+    // scale it consumed the cap and pointer outright.
+    const float k = R / 32.5f;              // 1.0 at the main knobs
+
+    // Stroke widths scale too, so the pixel floors below only bind on knobs
+    // small enough that the strokes themselves become the limit.
+    const float mainW = juce::jmax(1.2f, 2.5f * k);   // groove + value arc
+    const float glowW = juce::jmax(2.4f, 5.0f * k);   // wide glow pass
+    const float lfoW  = juce::jmax(1.0f, 2.0f * k);   // LFO ring
+
+    // Gaps: proportional, floored at what the strokes need so neighbouring
+    // rings never bleed into each other.
+    const float arcR   = R    - juce::jmax(glowW * 0.5f, 4.0f * k);  // outer value arc
+    const float lfoR   = arcR - juce::jmax(glowW, 5.0f * k);         // inner LFO arc
+    const float bodyR  = lfoR - juce::jmax(glowW * 0.5f + 0.5f, 4.0f * k);  // knob cap
+
+    const float tickR2 = bodyR - 1.0f * k;  // tick outer
+    // Pointer keeps its 0.35 body ratio until that would leave it under 8px,
+    // the point where it stops reading as a pointer at all on a small knob.
+    const float tickR1 = juce::jmax(1.0f, juce::jmin(bodyR * 0.35f, tickR2 - 8.0f));
 
     const float START = juce::MathConstants<float>::pi * (2.0f / 3.0f); // 120° = 7 o'clock
     const float SWEEP = juce::MathConstants<float>::pi * (5.0f / 3.0f); // 300°
@@ -54,8 +73,8 @@ void CustomKnob::paint(juce::Graphics& g)
         return p;
     };
 
-    const juce::PathStrokeType stroke(2.5f, juce::PathStrokeType::curved,
-                                            juce::PathStrokeType::rounded);
+    const juce::PathStrokeType stroke(mainW, juce::PathStrokeType::curved,
+                                             juce::PathStrokeType::rounded);
 
     // 1. Rim shadow
     g.setColour(juce::Colour(0xff111111));
@@ -81,8 +100,8 @@ void CustomKnob::paint(juce::Graphics& g)
 
         g.setColour(arcColour.withAlpha(juce::jmap(norm, 0.0f, 1.0f, 0.20f, 0.35f)));
         g.strokePath(makeArc(cx, cy, arcR, START, valueAngle),
-                     juce::PathStrokeType(5.0f, juce::PathStrokeType::curved,
-                                                juce::PathStrokeType::rounded));
+                     juce::PathStrokeType(glowW, juce::PathStrokeType::curved,
+                                                 juce::PathStrokeType::rounded));
         g.setColour(arcColour);
         g.strokePath(makeArc(cx, cy, arcR, START, valueAngle), stroke);
     }
@@ -90,7 +109,7 @@ void CustomKnob::paint(juce::Graphics& g)
     // 5-8. Inner LFO ring (rendered only when an LFO targets this knob)
     if (lfoArcActive)
     {
-        const juce::PathStrokeType lfoStroke(2.0f, juce::PathStrokeType::curved,
+        const juce::PathStrokeType lfoStroke(lfoW, juce::PathStrokeType::curved,
                                                    juce::PathStrokeType::rounded);
         const juce::Colour lfoColour(0xff3ecf72);
 
@@ -124,15 +143,15 @@ void CustomKnob::paint(juce::Graphics& g)
             {
                 g.setColour(lfoColour.withAlpha(0.22f));
                 g.strokePath(makeArc(cx, cy, lfoR, fillA, fillB),
-                             juce::PathStrokeType(5.0f, juce::PathStrokeType::curved,
-                                                        juce::PathStrokeType::rounded));
+                             juce::PathStrokeType(glowW, juce::PathStrokeType::curved,
+                                                         juce::PathStrokeType::rounded));
                 g.setColour(lfoColour.withAlpha(0.9f));
                 g.strokePath(makeArc(cx, cy, lfoR, fillA, fillB), lfoStroke);
             }
 
             // Center notch dot marks the base value within the mod range
             const auto dot = ptOnCircle(cx, cy, lfoR, valueAngle);
-            const float dotR = 1.8f;
+            const float dotR = juce::jmax(1.0f, 1.8f * k);
             g.setColour(lfoColour);
             g.fillEllipse(dot.x - dotR, dot.y - dotR, dotR * 2.0f, dotR * 2.0f);
         }
@@ -142,5 +161,5 @@ void CustomKnob::paint(juce::Graphics& g)
     const auto t1 = ptOnCircle(cx, cy, tickR1, valueAngle);
     const auto t2 = ptOnCircle(cx, cy, tickR2, valueAngle);
     g.setColour(juce::Colour(0xffe0e0e0));
-    g.drawLine(t1.x, t1.y, t2.x, t2.y, 2.0f);
+    g.drawLine(t1.x, t1.y, t2.x, t2.y, juce::jmax(1.0f, 2.0f * k));
 }

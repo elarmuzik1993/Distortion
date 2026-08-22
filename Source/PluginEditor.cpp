@@ -928,6 +928,43 @@ void PluginEditor::resized()
 
     const int labelHeight = S(20);
 
+    // ========== TEXT SCALING ==========
+    // Label fonts are otherwise only set in the constructor, against the fixed
+    // 672/960 factor, so they kept that size while the layout scaled with the
+    // window. At reduced scale the text outgrew its slot and JUCE ellipsed it
+    // ("Peak Redu...", "Distortion A..."). Re-apply them here against s - the
+    // same 0.7 factor keeps every font its current size at 100% - and allow a
+    // horizontal squeeze so a slightly wide string compresses instead of losing
+    // its tail.
+    const float fontScale = (672.0f / 960.0f) * s;
+    const juce::Font knobLabelFont(12.0f * fontScale, juce::Font::bold);
+    const juce::Font subLabelFont (10.0f * fontScale, juce::Font::bold);
+
+    for (auto* l : { &subGuardLabel, &inputGainLabel, &highPassFreqLabel, &distMixLabel,
+                     &distortionAmountLabel, &toneLabel, &waveshaperLabel, &outputGainLabel,
+                     &lfoRateLabel, &lfoDepthLabel,
+                     &compPeakReductionLabel, &compMakeupGainLabel })
+    {
+        l->setFont(knobLabelFont);
+        l->setMinimumHorizontalScale(0.6f);
+        // JUCE labels reserve a 5px border each side; under a 45px knob that is a
+        // third of the slot spent on nothing, and it is what still clipped
+        // "Peak Reduction" at reduced scale. The text is centred, so drop it.
+        l->setBorderSize(juce::BorderSize<int>(0));
+    }
+
+    for (auto* l : { &lfoWaveformLabel, &lfoDestinationLabel,
+                     &lfoBpmDivisionLabel, &compRatioLabel })
+    {
+        l->setFont(subLabelFont);
+        l->setMinimumHorizontalScale(0.6f);
+        l->setBorderSize(juce::BorderSize<int>(0));
+    }
+
+    // Combo boxes draw their own text through the look-and-feel, which cannot
+    // see the layout scale on its own.
+    comboBoxLookAndFeel.setUiScale(s);
+
     // Calculate available space for controls (overlaid on oscilloscope)
     auto bounds = getLocalBounds().reduced(margin);
     auto titleArea = bounds.removeFromTop(titleHeight);
@@ -937,7 +974,11 @@ void PluginEditor::resized()
     const int presetSpacing = S(5);
     const int presetHeight = S(24);
 
-    const int presetY = titleArea.getY() + (titleHeight - presetHeight) / 2;
+    // Top row sits on the logo's centre line. logoTitle spans 0..titleHeight of the
+    // *unreduced* editor, while titleArea comes from bounds.reduced(margin) and so
+    // starts margin px lower - centring inside titleArea would drop the whole row
+    // below the logo. Centre against the logo's band instead.
+    const int presetY = (titleHeight - presetHeight) / 2;
     const int presetX = titleArea.getX();
 
     // Hide the label (set to zero width)
@@ -1008,7 +1049,10 @@ void PluginEditor::resized()
     const int expandedSectionHeight = sKnob + S(18); // knob + label
     const int actualWindowHeight = getHeight();
 
-    const int expandedY = presetY + presetHeight + S(8);  // Below the tab headers with gap
+    // Panel contents hang below the tab headers: the original 8px gap plus a 5px
+    // drop that lowers the knobs (and the labels/dropdowns that ride with them)
+    // without touching the headers themselves.
+    const int expandedY = presetY + presetHeight + S(8) + S(5);
 
     // Calculate section height for oscilloscope positioning
     const bool anyExpanded = isLFOExpanded || isCompressionExpanded;
