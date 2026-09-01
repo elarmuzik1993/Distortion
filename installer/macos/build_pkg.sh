@@ -67,12 +67,17 @@ stage_component "$AU_PATH"   au   au   "/Library/Audio/Plug-Ins/Components"
 stage_component "$APP_PATH"  app  app  "/Applications"
 
 # --- Combine into a distribution product ----------------------------------
-# Stage a resources dir so distribution.xml's <license file="LICENSE"/> resolves
-# (the repo LICENSE lives at the root, not next to this script).
+# Stage a resources dir so distribution.xml's <license file="LICENSE"/> and
+# <readme file="THIRD-PARTY-NOTICES.txt"/> resolve (both live at the repo root,
+# not next to this script). The readme pane is how the .pkg reproduces the
+# Orbitron OFL and Steinberg VST3 notices, which the license pane does not cover.
 RES="$WORK/resources"
 mkdir -p "$RES"
 if [[ -f "$SCRIPT_DIR/../../LICENSE" ]]; then
     cp "$SCRIPT_DIR/../../LICENSE" "$RES/LICENSE"
+fi
+if [[ -f "$SCRIPT_DIR/../../THIRD-PARTY-NOTICES.md" ]]; then
+    cp "$SCRIPT_DIR/../../THIRD-PARTY-NOTICES.md" "$RES/THIRD-PARTY-NOTICES.txt"
 fi
 
 OUT_PKG="$OUT_DIR/SledgeDistortion-$VERSION-macOS.pkg"

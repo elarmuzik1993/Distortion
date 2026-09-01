@@ -4,6 +4,18 @@ Full development history, newest first.
 
 ---
 
+## Unreleased — Relicensed to GPL v3
+
+**Licensing**
+- **Sledge Distortion is now free software under the GNU General Public License v3**, replacing PolyForm Noncommercial 1.0.0. JUCE 7 offers either paid tier-leveled terms or the GPL v3, and this project takes the GPL route — which is also why a permissive licence is not an option while the build links the non-ISC JUCE modules. Practical effects: the source may be used, modified and redistributed commercially provided derivatives stay GPL v3 with source available, and JUCE's $50k revenue limit no longer applies.
+- **Distribution model**: pay-what-you-want. The GPL guarantees the freedom to use and share the plugin whether or not anyone pays; what is sold is prebuilt, ready-to-install binaries and continued development.
+- **Resolved a contradiction in the old terms**: the installer presented PolyForm Noncommercial as its EULA while the README directed commercial users to buy a licence, so a paying customer was shown terms forbidding commercial use. One licence now covers source and binary.
+
+**Fixes — third-party notice compliance**
+- **`THIRD-PARTY-NOTICES.md` added and shipped with every artifact.** Three notice obligations were unmet in previous releases, in the proprietary builds too: the Orbitron typeface is SIL OFL 1.1 and is embedded into the binary via `BinaryData`, the bundled Steinberg VST3 SDK is BSD-3-Clause, and four JUCE modules are ISC — all three require their terms to accompany *binary* distributions, and the repository carried only its own `LICENSE`. The notices file now travels in the Windows installer, the Windows ZIP, the Linux tarball, the macOS ZIP, and the macOS `.pkg` (as the installer's Read Me pane). The Linux tarball and macOS ZIP previously shipped no licence file at all.
+
+---
+
 ## v2.3 — macOS, Graphic EQ & UI Texture
 
 **New**

@@ -169,8 +169,10 @@ jobs:
     # so the runtime travels with it and README.txt says when to run it. Shipping
     # the zip without it would reintroduce the exact bug the installer fixed.
     #
-    # LICENSE travels too: PolyForm's Notices clause requires the terms to
-    # accompany every copy, which the installer satisfies via LicenseFile.
+    # LICENSE and THIRD-PARTY-NOTICES.md travel too. The GPL requires the terms
+    # to accompany every copy (the installer satisfies this via LicenseFile), and
+    # the notices carry the Orbitron OFL text and the Steinberg VST3 BSD notice,
+    # both of which oblige us to reproduce them in binary distributions.
     - name: Package Windows ZIP
       shell: pwsh
       run: |
@@ -182,6 +184,7 @@ jobs:
         Copy-Item -Recurse "artifact\Windows\Sledge Distortion.vst3" $stage
         Copy-Item "installer\redist\vc_redist.x64.exe" $stage
         Copy-Item "LICENSE" "$stage\LICENSE.txt"
+        Copy-Item "THIRD-PARTY-NOTICES.md" "$stage\THIRD-PARTY-NOTICES.md"
         @"
         Sledge Distortion $ver - Windows (VST3)
 
@@ -203,7 +206,9 @@ jobs:
         This build is not code-signed, so Windows may warn about an unknown
         publisher. Verify your download against SHA256SUMS on the release page.
 
-        Licence terms: LICENSE.txt
+        Sledge Distortion is free software under the GNU GPL v3 - see LICENSE.txt.
+        Third-party terms (JUCE, VST3 SDK, Orbitron font): THIRD-PARTY-NOTICES.md
+        Source code: https://github.com/elarmuzik1993/Distortion
         "@ | Set-Content -Encoding ascii "$stage\README.txt"   # ascii: no BOM, and the text above is ASCII by design
         # 7z rather than Compress-Archive, to keep the archive spec-conformant
         # regardless of which PowerShell runs it. Windows PowerShell 5.1 (and
@@ -322,7 +327,13 @@ jobs:
         # Keyed off GITHUB_REF_TYPE, not a "v*" name match: a branch that merely
         # starts with v (verify-thing) would otherwise be read as tag "erify-thing".
         if [ "$GITHUB_REF_TYPE" = tag ]; then VER="${GITHUB_REF_NAME#v}"; else VER="$DEV_VERSION"; fi
-        tar -C artifact/Linux -czf "SledgeDistortion-$VER-Linux.tar.gz" "Sledge Distortion.vst3"
+        # The GPL, the Orbitron OFL and the Steinberg VST3 BSD notice all require
+        # their terms to travel with the binary, so the tarball carries them
+        # rather than the .vst3 alone.
+        cp LICENSE artifact/Linux/LICENSE.txt
+        cp THIRD-PARTY-NOTICES.md artifact/Linux/THIRD-PARTY-NOTICES.md
+        tar -C artifact/Linux -czf "SledgeDistortion-$VER-Linux.tar.gz" \
+          "Sledge Distortion.vst3" LICENSE.txt THIRD-PARTY-NOTICES.md
 
     - name: Upload Linux tarball
       uses: actions/upload-artifact@v4
@@ -499,6 +510,9 @@ jobs:
         # Keyed off GITHUB_REF_TYPE, not a "v*" name match: a branch that merely
         # starts with v (verify-thing) would otherwise be read as tag "erify-thing".
         if [ "$GITHUB_REF_TYPE" = tag ]; then VER="${GITHUB_REF_NAME#v}"; else VER="$DEV_VERSION"; fi
+        # Licence terms travel with the binaries here too - see the Linux job.
+        cp LICENSE artifact/macOS/LICENSE.txt
+        cp THIRD-PARTY-NOTICES.md artifact/macOS/THIRD-PARTY-NOTICES.md
         ditto -c -k artifact/macOS "SledgeDistortion-$VER-macOS.zip"
 
     - name: Upload macOS bundles zip

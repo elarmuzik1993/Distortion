@@ -171,8 +171,25 @@ Full details — exactly what is collected, when it's sent, and how to turn it o
 
 ## License
 
-This project is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE). You may view, fork, and modify the source for **non-commercial** purposes (research, personal study, hobby projects, educational use).
+Sledge Distortion is free software, licensed under the
+[GNU General Public License v3.0](LICENSE). You may use, study, modify and
+redistribute it — including commercially — provided that derivative works are
+also released under the GPL v3 and their source is made available.
 
-**Commercial use requires a paid license.** For commercial licensing inquiries, contact **elar.muzik@gmail.com**.
+The plugin is built on [JUCE](https://juce.com), whose GPL v3 option this
+project takes, and it embeds the Orbitron typeface under the SIL Open Font
+License 1.1. Full terms for every third-party component are in
+**[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)**, which ships with every
+binary release.
 
-Copyright © 2026 Boris Miscenco. All rights reserved.
+**Source code** for every released binary is this repository, at the tag
+matching the version shown in the plugin's title bar.
+
+### Pay what you want
+
+Sledge Distortion is offered on a pay-what-you-want basis. The GPL guarantees
+your freedom to use and share it whether you pay or not — what you are paying
+for is prebuilt, ready-to-install binaries, continued development and support.
+If it earns a place in your projects, paying keeps it being built.
+
+Copyright © 2026 Boris Miscenco.
