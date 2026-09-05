@@ -75,6 +75,27 @@ python scripts/fix_moduleinfo_json.py build --all
 
 Steps 12–14 live inside `applyAutoGainAndISP`; 15–16 are in `processBlock` proper. `docs/Architecture Contract.md` carries the fully expanded ordering — keep the two in step.
 
+## Channel Layouts
+- **Supported: mono->mono, stereo->stereo, and mono->stereo.** The mono->stereo case is not
+  optional politeness: a bass or guitar arrives on one interface input, and JUCE's
+  `AudioProcessorPlayer::findMostSuitableLayout` *tries that layout first* whenever the device
+  offers a single input. Refusing it makes JUCE fall back to `{2,2}` with a silent right
+  channel, which is why the plugin used to play a mono instrument out of one speaker.
+- **The mono copy happens before the RT anomaly probe.** Under mono-in/stereo-out the host
+  sizes the buffer to the *output* bus, so channels above the input count hold uninitialised
+  memory. The probe reads one frame per channel; probing unwritten memory can report a
+  non-finite block and raise a false diagnostic report.
+- **Size internal buffers from the wider of input and output**, never
+  `getTotalNumInputChannels()` alone. Under mono-in/stereo-out that is 1 while the buffer
+  actually processed has 2 channels, so the oversampler would be built for one channel and
+  handed two. `prepareToPlay` and `rebuildOversampling` both do this.
+- **`monoInput` never engages itself.** Detection is advisory: it lights the toolbar indicator
+  and nothing more. Silence on one channel is evidence of silence, not of a mono source — a
+  hard-panned part is legitimately one-sided, and collapsing it unasked would change a mix,
+  engage mid-take, and break render reproducibility. Detection is a *relative* comparison
+  (one side ~30 dB below the other); an absolute silence floor only ever fires on synthetic
+  all-zero buffers, never on a real input's noise floor.
+
 ## Engineering Standards
 - **Memory**: No dynamic allocation in `processBlock`.
 - **Thread Safety**: Use `std::atomic` for parameters and a lock-free `juce::AbstractFifo` (SPSC) for Scope data. The scope path holds **no lock** — the old `SpinLock` was removed to keep the audio thread contention-free, so do not reintroduce one.
@@ -97,6 +118,12 @@ Steps 12–14 live inside `applyAutoGainAndISP`; 15–16 are in `processBlock` p
   ./DistortionUiSnapshot --extreme --out shots    # after the EXTREME crack fade settles
   ./DistortionUiSnapshot --signal --out shots     # scope shows a waveform (docs images)
   ```
+  **`--signal` renders are not bit-comparable across builds.** The trace alpha follows the
+  scope's smoothed signal-presence value, and the number of timer ticks fitting the harness's
+  settle window shifts with build timing. Use a **no-signal** render for byte comparisons.
+  Note also that the version stamp is baked into every render, so a hash is only comparable
+  within a single commit.
+
   `--signal` runs a fixed 220 Hz tone through the processor so the scope draws a
   waveform; it exists for documentation images. **Do not use a `--signal` render
   as a layout reference** — layout verification must not depend on DSP output.

@@ -67,6 +67,12 @@ becomes a 12-band peaking EQ (~30 Hz–16 kHz, ±12 dB) at the output stage. Ful
 automatable, saved with presets, bit-transparent while flat, and one power button
 mutes it click-free so you can A/B the curve you drew.
 
+**Mono Input** — a bass or guitar on a single interface input lands on one side of a
+stereo bus and plays out of one speaker. Sledge supports mono-in/stereo-out directly, and
+where a host hands over a stereo bus anyway, the Mono Input switch in Settings centres the
+source. It never engages on its own; when it spots a one-sided signal it just lights the
+indicator in the title bar.
+
 **Multimode input filter** — High-Pass / Low-Pass / Band-Pass (SVF TPT) ahead of
 the drive. It runs in the true-bypass path too, so it doubles as a standalone
 filter with distortion and compression switched off.
