@@ -1641,6 +1641,9 @@ void ProcessBlockTests::runTest()
 
     beginTest("Mono Source Detection");
     testMonoSourceDetection();
+
+    beginTest("Mono Source Detection With Noise Floor");
+    testMonoSourceDetectionWithNoiseFloor();
 }
 
 // Builds a stereo buffer carrying signal on the left and silence on the right -
@@ -1735,6 +1738,32 @@ void ProcessBlockTests::testMonoSourceDetection()
         processor.processBlock(stereo, midi);
     }
     expect(! processor.monoSourceDetected.load(), "signal on both channels should clear the hint");
+}
+
+void ProcessBlockTests::testMonoSourceDetectionWithNoiseFloor()
+{
+    // The real case: an unused interface input is not digital silence, it carries
+    // an analogue noise floor. Detection has to survive that or it never fires on
+    // actual hardware - only in a test feeding perfect zeroes.
+    PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
+    processor.prepareToPlay(44100.0, 512);
+    setParameter(processor.parameters, "monoInput", 0.0f);
+
+    juce::Random rng(1234);
+    juce::MidiBuffer midi;
+
+    for (int b = 0; b < 250; ++b)
+    {
+        auto buffer = generateSineWave(220.0, 44100.0, 512, 0.5f, 2);
+        // Right channel: ~-60 dBFS of noise, a quiet but entirely ordinary input.
+        for (int i = 0; i < 512; ++i)
+            buffer.setSample(1, i, (rng.nextFloat() * 2.0f - 1.0f) * 0.001f);
+        processor.processBlock(buffer, midi);
+    }
+
+    expect(processor.monoSourceDetected.load(),
+           "a noise floor on the unused channel must still read as a mono source");
 }
 
 void ProcessBlockTests::testMonoInStereoOut()

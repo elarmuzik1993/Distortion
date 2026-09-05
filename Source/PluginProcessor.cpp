@@ -1400,10 +1400,22 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         const float peakL = buffer.getMagnitude(0, 0, numSamples);
         const float peakR = buffer.getMagnitude(1, 0, numSamples);
 
-        constexpr float kLiveThreshold   = 0.003f;   // ~-50 dBFS
-        constexpr float kSilentThreshold = 0.0001f;  // ~-80 dBFS
-        const bool oneSided = (peakL > kLiveThreshold && peakR < kSilentThreshold)
-                           || (peakR > kLiveThreshold && peakL < kSilentThreshold);
+        // Relative, not an absolute silence floor. An unused interface input is
+        // not digital silence - it carries an analogue noise floor, typically far
+        // above any "is this zero" threshold, so comparing against one meant the
+        // hint only ever fired on synthetic all-zero buffers. What identifies a
+        // mono source is one side sitting far below the other, whatever the noise.
+        // 30 dB rather than something stricter: a quietly played instrument at
+        // -30 dBFS against a -60 dBFS input noise floor is only 30 dB apart, and
+        // missing that is the failure people actually notice. Erring loose is
+        // cheap here - the worst a false positive does is suggest a switch.
+        constexpr float kLiveThreshold = 0.003f;   // ~-50 dBFS: something is playing
+        constexpr float kSideRatio     = 0.03f;    // the quiet side is ~30 dB down
+
+        const float louder  = juce::jmax(peakL, peakR);
+        const float quieter = juce::jmin(peakL, peakR);
+        const bool playing  = louder > kLiveThreshold;
+        const bool oneSided = playing && quieter < louder * kSideRatio;
 
         if (oneSided)
         {
@@ -1415,10 +1427,11 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             if (monoDetectBlocks >= blocksNeeded)
                 monoSourceDetected.store(true, std::memory_order_relaxed);
         }
-        else if (peakL > kLiveThreshold && peakR > kLiveThreshold)
+        else if (playing)
         {
-            // Both sides live: definitely not a mono source. Silence on both leaves
-            // the state alone, so the hint survives a pause between notes.
+            // Both sides carrying comparable signal: definitely not a mono source.
+            // Nothing playing at all leaves the state alone, so the hint survives a
+            // pause between notes rather than flickering off between phrases.
             monoDetectBlocks = 0;
             monoSourceDetected.store(false, std::memory_order_relaxed);
         }
