@@ -625,10 +625,11 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addAndMakeVisible(eqButton);
     eqButton.onClick = [this]() { toggleGraphicEqOverlay(); };
 
-    // addChildComponent, not addAndMakeVisible: this one stays hidden until a mono
-    // source is detected or the switch is on. Clicking it flips the parameter, so
-    // the fix is one click from where the problem is visible.
-    addChildComponent(monoButton);
+    // Always present, like the other toolbar buttons: dim when it has nothing to
+    // say, pulsing when a mono source is detected, lit when on. A control that
+    // comes and goes is one you cannot find when you want it. Clicking it flips
+    // the parameter, so the fix is one click from where the problem shows.
+    addAndMakeVisible(monoButton);
     monoButton.onClick = [this]()
     {
         if (auto* p = audioProcessor.parameters.getParameter("monoInput"))
@@ -1436,13 +1437,6 @@ void PluginEditor::updateMonoIndicator()
     auto* param = audioProcessor.parameters.getRawParameterValue("monoInput");
     const bool on = param != nullptr && param->load() > 0.5f;
     const bool detected = audioProcessor.monoSourceDetected.load(std::memory_order_relaxed);
-
-    // Shown while there is something to say. Staying visible when it is on matters:
-    // otherwise switching it on would make the control vanish and leave no way back
-    // except the Settings panel.
-    const bool shouldShow = on || detected;
-    if (monoButton.isVisible() != shouldShow)
-        monoButton.setVisible(shouldShow);
 
     const bool wantsAttention = detected && ! on;
     monoButton.setState(on, wantsAttention);
