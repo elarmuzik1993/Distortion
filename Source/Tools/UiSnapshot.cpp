@@ -78,16 +78,11 @@ void feedScope(PluginProcessor& proc)
     // A small offset keeps the two stereo traces distinguishable in the render.
     constexpr double rightPhaseOffset = 0.25;
 
-    // Drive the distortion. Without this the render is a picture of true bypass:
-    // distortionAmount defaults to 0 and compEnabled to false, so processBlock
-    // takes the bypass branch (PluginProcessor.cpp), which still feeds the scope
-    // - producing a clean sine that shows the plugin doing nothing at all.
-    // 65% on the default Brutal Fuzz clip is well past the 0.5% bypass threshold
-    // and gives visible saturation rather than a barely-bent sine.
-    constexpr float driveNormalised = 0.65f;   // range is 0-100, so this is 65%
-    if (auto* p = proc.parameters.getParameter("distortionAmount"))
-        p->setValueNotifyingHost(driveNormalised);
-
+    // NOTE: the parameters are left at their defaults, which means distortionAmount
+    // is 0 and compEnabled false, so processBlock takes the true-bypass branch and
+    // the scope shows a clean sine. That is a deliberate choice for the docs image
+    // - a driven render was tried and the undriven waveform reads better - but it
+    // does mean this render shows the signal path, not the distortion character.
     juce::AudioBuffer<float> buffer(2, blockSize);
     juce::MidiBuffer midi;
 
@@ -130,10 +125,14 @@ bool snapshot(PluginProcessor& proc, int width, int height, const juce::File& ou
         feedScope(proc);
 
         // The scope pulls from the FIFO on its own 30 Hz timer, so the message
-        // loop has to run at least one tick for the samples to reach the
-        // component. fillScopeBuffer early-returns on an empty FIFO without
-        // clearing, so the later ticks in this window leave the trace intact.
-        juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
+        // loop has to run for the samples to reach the component. fillScopeBuffer
+        // early-returns on an empty FIFO without clearing, so the later ticks in
+        // this window leave the trace intact.
+        //
+        // 600ms, not one tick: the centre line's signalPresence fade is smoothed
+        // at 0.15 per tick, so a short window captures it mid-fade. Same reason
+        // the EXTREME crossfade above waits - the harness captures settled state.
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(600);
     }
 
     // Lay out and paint synchronously into an offscreen image.

@@ -14,7 +14,7 @@ oscilloscope instead of hunting through menus and numeric fields.
 
 <img src="docs/images/scale-100-extreme-signal.png" alt="Sledge Distortion plugin interface" width="880">
 
-<sub>Shown with the "EXTREME" mode enabled, Distortion Amount at 65%</sub>
+<sub>Shown with the "EXTREME" mode enabled</sub>
 
 </div>
 

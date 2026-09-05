@@ -117,15 +117,27 @@ public:
             g.drawLine(x, 0, x, bounds.getHeight(), 1.0f);
         }
 
-        // Horizontal grid lines
+        // Horizontal grid lines. The i == 2 line lands exactly on the centre,
+        // directly under the emphasized zero reference below, so it has to fade
+        // with it - otherwise easing off the centre line just leaves a fainter
+        // line in the same place, still cutting across the waveform.
         for (int i = 1; i < 4; ++i)
         {
+            const float alpha = (i == 2) ? juce::jmap(signalPresence, 0.15f, 0.0f)
+                                         : 0.15f;
+            if (alpha <= 0.0f)
+                continue;
+
+            g.setColour(juce::Colours::grey.withAlpha(alpha));
             float y = bounds.getHeight() * i / 4.0f;
             g.drawLine(0, y, bounds.getWidth(), y, 1.0f);
         }
 
-        // Emphasized center line
-        g.setColour(juce::Colours::grey.withAlpha(0.4f));
+        // Emphasized center line - the zero-amplitude reference. It eases back
+        // under signal so it stops competing with the trace, but never all the
+        // way out: it is what makes DC offset and asymmetric clipping (Tube
+        // Overdrive is asymmetric by design) readable against zero.
+        g.setColour(juce::Colours::grey.withAlpha(juce::jmap(signalPresence, 0.4f, 0.1f)));
         g.drawLine(0, bounds.getHeight() / 2, bounds.getWidth(), bounds.getHeight() / 2, 1.5f);
 
         // Draw waveforms with neon red glow effect
@@ -153,6 +165,15 @@ public:
         if (getWidth() > 0 && getHeight() > 0)
         {
             processor.fillScopeBuffer(cachedBuffer);
+
+            // Is there actually a waveform on screen? Smoothed towards the
+            // target so the centre line eases in and out instead of strobing at
+            // the 30 Hz refresh whenever the signal hovers around the threshold.
+            {
+                const float peak = cachedBuffer.getMagnitude(0, cachedBuffer.getNumSamples());
+                const float target = peak > 0.002f ? 1.0f : 0.0f;   // ~-54 dBFS
+                signalPresence += (target - signalPresence) * 0.15f;
+            }
 
             // Rising zero-crossing trigger on left channel
             triggerOffset = 0;
@@ -182,6 +203,9 @@ private:
     juce::AudioBuffer<float> cachedBuffer;   // Use this for drawing
     bool stereoMode = true;
     int triggerOffset = 0;
+    // 0 = scope is idle, 1 = a waveform is on screen. Smoothed in timerCallback
+    // so the centre line fades rather than blinking between frames.
+    float signalPresence = 0.0f;
 
     // Crack layers, scaled to the full editor size by the editor; this component
     // samples the slice under its own bounds. extremeMix is the eased crossfade
