@@ -14,6 +14,7 @@
     Examples:
       DistortionUiSnapshot --out shots
       DistortionUiSnapshot --scale 70 --out shots
+      DistortionUiSnapshot --signal --out shots   # scope shows a waveform
 
   ==============================================================================
 */
@@ -55,8 +56,51 @@ juce::File writeScratchSettings(const juce::File& root, bool collapsed, int scal
     return settings;
 }
 
+// Runs a fixed tone through the processor so the oscilloscope has something to
+// draw. Opt-in (--signal): with no signal the harness stays a pure layout gate
+// whose renders do not depend on DSP behaviour, which is what makes it usable
+// for spotting layout regressions.
+//
+// The tone is deliberately above the Sub Guard crossover (50-200 Hz). Below it
+// the low band is routed around the distortion, so a bass tone would render as
+// a clean sine and advertise a character the plugin did not apply.
+void feedScope(PluginProcessor& proc)
+{
+    constexpr double sampleRate = 44100.0;
+    constexpr int    blockSize  = 512;
+    // The scope FIFO holds 2048 samples and is fed one per SCOPE_UPDATE_DECIMATION
+    // (2) input samples, so 8 blocks fill it. 32 blocks is ~0.37 s: well past the
+    // parameter smoothing ramps and the compressor's attack, so what lands in the
+    // FIFO is steady state rather than the onset transient.
+    constexpr int    numBlocks  = 32;
+    constexpr double freqHz     = 220.0;
+    constexpr float  amplitude  = 0.7f;
+    // A small offset keeps the two stereo traces distinguishable in the render.
+    constexpr double rightPhaseOffset = 0.25;
+
+    juce::AudioBuffer<float> buffer(2, blockSize);
+    juce::MidiBuffer midi;
+
+    const double phaseStep = juce::MathConstants<double>::twoPi * freqHz / sampleRate;
+    double phase = 0.0;
+
+    for (int b = 0; b < numBlocks; ++b)
+    {
+        for (int i = 0; i < blockSize; ++i)
+        {
+            buffer.setSample(0, i, amplitude * (float) std::sin(phase));
+            buffer.setSample(1, i, amplitude * (float) std::sin(phase + rightPhaseOffset));
+            phase += phaseStep;
+        }
+
+        // processBlock writes its output over the input, which is fine: the next
+        // block is regenerated from the running phase, not read back.
+        proc.processBlock(buffer, midi);
+    }
+}
+
 bool snapshot(PluginProcessor& proc, int width, int height, const juce::File& out,
-              bool extreme = false)
+              bool extreme = false, bool withSignal = false)
 {
     PluginEditor editor(proc);
     editor.setSize(width, height);
@@ -69,6 +113,17 @@ bool snapshot(PluginProcessor& proc, int width, int height, const juce::File& ou
         // The crack crossfade is driven by the scope's timer, so let the message
         // loop run past the fade duration before capturing the settled frame.
         juce::MessageManager::getInstance()->runDispatchLoopUntil(600);
+    }
+
+    if (withSignal)
+    {
+        feedScope(proc);
+
+        // The scope pulls from the FIFO on its own 30 Hz timer, so the message
+        // loop has to run at least one tick for the samples to reach the
+        // component. fillScopeBuffer early-returns on an empty FIFO without
+        // clearing, so the later ticks in this window leave the trace intact.
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
     }
 
     // Lay out and paint synchronously into an offscreen image.
@@ -100,6 +155,7 @@ int main(int argc, char* argv[])
     int onlyScale = 0;
     bool collapsed = false;
     bool extreme = false;
+    bool signal = false;
     for (int i = 1; i < argc; ++i)
     {
         const juce::String t(argv[i]);
@@ -107,6 +163,7 @@ int main(int argc, char* argv[])
         else if (t == "--scale" && i + 1 < argc) onlyScale = juce::String(argv[++i]).getIntValue();
         else if (t == "--collapsed")             collapsed = true;
         else if (t == "--extreme")               extreme   = true;
+        else if (t == "--signal")                signal    = true;
     }
 
     // Collapsed (scope folded away) is the other fold state. The harness drives it
@@ -145,7 +202,9 @@ int main(int argc, char* argv[])
         juce::String name = juce::String(collapsed ? "collapsed-" : "scale-") + juce::String(pct);
         if (extreme)
             name += "-extreme";
-        allOk &= snapshot(proc, w, h, dir.getChildFile(name + ".png"), extreme);
+        if (signal)
+            name += "-signal";
+        allOk &= snapshot(proc, w, h, dir.getChildFile(name + ".png"), extreme, signal);
     }
 
     scratchRoot.deleteRecursively();

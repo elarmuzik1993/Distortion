@@ -12,7 +12,7 @@ oscilloscope instead of hunting through menus and numeric fields.
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-343a40)
 ![Formats](https://img.shields.io/badge/formats-VST3%20%7C%20AU%20%7C%20Standalone-343a40)
 
-<img src="docs/images/scale-100-extreme.png" alt="Sledge Distortion plugin interface" width="880">
+<img src="docs/images/scale-100-extreme-signal.png" alt="Sledge Distortion plugin interface" width="880">
 
 <sub>Shown with the "EXTREME" mode enabled</sub>
 

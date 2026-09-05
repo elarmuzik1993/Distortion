@@ -95,7 +95,13 @@ Steps 12–14 live inside `applyAutoGainAndISP`; 15–16 are in `processBlock` p
   ./DistortionUiSnapshot --out shots              # all four window scales
   ./DistortionUiSnapshot --collapsed --out shots  # scope folded away
   ./DistortionUiSnapshot --extreme --out shots    # after the EXTREME crack fade settles
+  ./DistortionUiSnapshot --signal --out shots     # scope shows a waveform (docs images)
   ```
+  `--signal` runs a fixed 220 Hz tone through the processor so the scope draws a
+  waveform; it exists for documentation images. **Do not use a `--signal` render
+  as a layout reference** — layout verification must not depend on DSP output.
+  Without the flag the renders are byte-identical run to run.
+
   It is the only target built with `JUCE_MODAL_LOOPS_PERMITTED=1`, so it can pump the message loop and capture timer-driven animation in its settled state.
 
   **The harness owns the state it renders from.** It is also the only target built with `DISTORTION_UI_SNAPSHOT=1`, which exposes `PluginEditor::setDataRootOverride`; the tool points the settings/preset root at a scratch dir under TEMP and writes the fold state and window scale it wants. Your real `settings.xml` is neither read nor written. This is load-bearing, not tidiness: the editor takes its fold state from settings (`paint()` keys off `settingsState.oscilloscopeEnabled`, deliberately not the measured height), so when the tool merely resized the window, `--collapsed` on a machine saved as *expanded* laid out expanded and squeezed it into a 180px window — every panel overlapping the knob row, which reads as a severe layout regression that is not there. A verification gate must not depend on ambient machine state.
