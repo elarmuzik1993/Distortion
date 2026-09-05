@@ -4,6 +4,20 @@ Full development history, newest first.
 
 ---
 
+## Unreleased — Relicensed to GPL v3
+
+**Licensing**
+- **Sledge Distortion is now free software under the GNU General Public License v3**, replacing PolyForm Noncommercial 1.0.0. JUCE 7 offers either paid tier-leveled terms or the GPL v3, and this project takes the GPL route — which is also why a permissive licence is not an option while the build links the non-ISC JUCE modules. Practical effects: the source may be used, modified and redistributed commercially provided derivatives stay GPL v3 with source available, and JUCE's $50k revenue limit no longer applies.
+- **Distribution model**: pay-what-you-want. The GPL guarantees the freedom to use and share the plugin whether or not anyone pays; what is sold is prebuilt, ready-to-install binaries and continued development.
+- **Resolved a contradiction in the old terms**: the installer presented PolyForm Noncommercial as its EULA while the README directed commercial users to buy a licence, so a paying customer was shown terms forbidding commercial use. One licence now covers source and binary.
+
+**Fixes — third-party notice compliance**
+- **`THIRD-PARTY-NOTICES.md` added, and embedded in the plugin bundle itself.** Every previous release, the proprietary ones included, shipped binaries whose notice obligations were unmet — the repository carried only its own `LICENSE`. The notices now cover everything the build actually compiles in: the Orbitron typeface (SIL OFL 1.1, embedded via `BinaryData`), the Steinberg VST3 SDK (used under its GPL v3 option, with a BSD-3-Clause subset), FLAC and Ogg Vorbis via `juce_audio_formats`, libpng, IJG libjpeg and zlib via `juce_graphics`/`juce_core`, the AudioUnit SDK (Apache 2.0, macOS AU only), the four ISC JUCE modules — now with the copyright line the ISC terms require — and the Microsoft VC++ redistributable shipped on the Windows channels.
+- **The terms survive installation.** A CMake post-build step copies `LICENSE` + `THIRD-PARTY-NOTICES.md` into each bundle's `Contents/Resources`, so a plugin copied out of an archive still carries its own notices. Every channel inherits this: the Windows installer, the Windows ZIP, the Linux tarball, the macOS ZIP and the macOS `.pkg`. Each packaging step now fails the build if the files are missing.
+- **Archives extract into a single versioned directory.** The Linux tarball and macOS ZIP previously unpacked several entries into the current directory; both now contain one `SledgeDistortion-<version>-<platform>/` root.
+
+---
+
 ## v2.3 — macOS, Graphic EQ & UI Texture
 
 **New**

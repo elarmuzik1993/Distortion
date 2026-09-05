@@ -12,6 +12,7 @@
     <title>Sledge Distortion</title>
     <organization>com.monolitbeatz</organization>
     <license file="LICENSE"/>
+    <readme file="THIRD-PARTY-NOTICES.txt"/>
     <options customize="allow" require-scripts="false" hostArchitectures="arm64,x86_64"/>
 
     <choices-outline>

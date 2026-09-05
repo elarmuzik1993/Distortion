@@ -52,11 +52,29 @@ previous version's number on the new release's binary.
 - [x] 🤖 Installers wired — Inno (`installer/Distortion.iss`, Win) + tarball + `SHA256SUMS` (Linux) + `.pkg` (`installer/macos/build_pkg.sh`, macOS); built in CI on every run.
 - [x] 🤖 **VC++ runtime bundled** — installer detects a missing/outdated/broken VC++ 2015-2022 x64 runtime and installs the bundled `vc_redist.x64.exe` (Authenticode-verified in CI); redist exit code checked, failure surfaces an error. Upgrade flow waits for the previous uninstall to complete and purges legacy `Monolit Distortion.vst3` bundles.
 - [x] 🤖 Release-publish wired — Windows installer + Windows ZIP + macOS ZIP + Linux tarball + macOS `.pkg` + `SHA256SUMS` attached to the GitHub Release on tag. All assets version-stamped; `SHA256SUMS` is the only checksum file published.
-- [x] ✍️ **Windows ZIP still carries `vc_redist.x64.exe`** — the ZIP is the recommended download while unsigned, and the plugin links the dynamic CRT, so a bare `.vst3` fails to load on clean Windows 10. Unzip the built artifact and confirm the redist and `LICENSE.txt` are inside before tagging.
-      **Verified 2026-08-10** against the CI artifact from run [`31417710123`](https://github.com/elarmuzik1993/Distortion/actions/runs/31417710123) (`main` @ `331bc24`): `SledgeDistortion-2.3.0-Windows.zip`, 29.4 MB — VST3 bundle 7.2 MB, `vc_redist.x64.exe` 24.4 MB, `LICENSE.txt`, `README.txt` (BOM-free). Archive paths use forward slashes (0 backslash entries), so the bundle extracts as a bundle. **Re-verify if anything in the packaging step changes before the tag** — this attests to one specific artifact, not to the step in perpetuity.
+- [ ] ✍️ **Windows ZIP still carries `vc_redist.x64.exe`** — the ZIP is the recommended download while unsigned, and the plugin links the dynamic CRT, so a bare `.vst3` fails to load on clean Windows 10. Unzip the built artifact and confirm the redist, `LICENSE.txt` and `THIRD-PARTY-NOTICES.md` are inside before tagging.
+      ⚠️ **Unticked 2026-09-01: the packaging step changed.** The relicense to GPL v3
+      added `THIRD-PARTY-NOTICES.md` to the Windows ZIP, the Linux tarball and the
+      macOS ZIP, and rewrote the ZIP's `README.txt` footer. The verification below
+      attests to an artifact built before that change, so it no longer covers what
+      CI now produces. Re-verify against a fresh artifact.
+      **Previously verified 2026-08-10** against the CI artifact from run [`31417710123`](https://github.com/elarmuzik1993/Distortion/actions/runs/31417710123) (`main` @ `331bc24`): `SledgeDistortion-2.3.0-Windows.zip`, 29.4 MB — VST3 bundle 7.2 MB, `vc_redist.x64.exe` 24.4 MB, `LICENSE.txt`, `README.txt` (BOM-free). Archive paths use forward slashes (0 backslash entries), so the bundle extracts as a bundle. **Re-verify if anything in the packaging step changes before the tag** — this attests to one specific artifact, not to the step in perpetuity.
 - [x] 🤖 **macOS build + AU** — universal (arm64 + x86_64) VST3/AU/Standalone built in CI on `macos-14`; unit suite + VST3 pluginval strictness 10 + AU `auval` run there. **Runs on release tags and manual dispatch only** (macOS runners bill at 10× minutes), so it does *not* gate PRs — if a change touched the macOS path, trigger the workflow manually from the Actions tab and confirm it is green **before** tagging.
 - [ ] 🤖 **Windows code-signing** — Azure Trusted Signing steps wired but *inert until the `AZURE_*` repo secrets are set* (needs an Azure Trusted Signing account + identity validation). **Accepted for v2.3: ships unsigned** — SmartScreen shows an "unrecognised app" warning (More info → Run anyway). Documented in the README and CHANGELOG "Known limitations". Not a tag blocker for this release; revisit when the account exists.
 - [ ] 🤖 **macOS code-signing + notarization** — Developer ID codesign + `notarytool`/`stapler` steps wired but *inert until the `APPLE_*` repo secrets are set* (needs an Apple Developer account: Developer ID Application + Installer certs, an app-specific password, and the team ID). Until then macOS ships an unsigned `.pkg` (Gatekeeper right-click-open workaround). **Accepted for v2.3: ships unsigned**, documented in the README and CHANGELOG "Known limitations". Not a tag blocker for this release; revisit when the Apple Developer account exists.
+
+- [ ] ✍️ **Licence terms reach the user on every channel** — Sledge Distortion is
+      GPL v3, and Orbitron (SIL OFL 1.1), the Steinberg VST3 SDK, FLAC, Ogg Vorbis,
+      libpng, IJG libjpeg, zlib and the AudioUnit SDK all oblige us to reproduce
+      their terms in *binary* distributions, which the GPL `LicenseFile` alone does
+      not do. A CMake post-build step embeds `LICENSE` + `THIRD-PARTY-NOTICES.md`
+      in each bundle's `Contents/Resources`, so every channel inherits them; the
+      archives also carry top-level copies. Each packaging step asserts this and
+      fails the build if a file is missing.
+      **Still needs a human:** open one built artifact per channel and confirm the
+      files are present and readable. The CI assertions cover presence, not
+      legibility, and the macOS path has not run since these changes — dispatch
+      the workflow before ticking this.
 
 ## 6. Privacy & bug reporting (USE-53)
 

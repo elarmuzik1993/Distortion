@@ -189,6 +189,46 @@ if(Python3_FOUND)
 endif()
 
 # ============================================================================
+# Post-build: embed LICENSE + THIRD-PARTY-NOTICES.md inside each bundle
+# ============================================================================
+# The GPL, the Orbitron OFL and the Steinberg VST3 BSD notice all bind *binary*
+# distributions, so the terms must survive installation rather than only sitting
+# beside the bundle inside an archive. Contents/Resources is where JUCE already
+# writes moduleinfo.json, and putting them there means every channel inherits
+# them for free: the Windows installer copies the bundle recursively, the macOS
+# .pkg stages built bundles as its payload, and all three archives contain the
+# bundle. Adding a distribution channel therefore needs no extra licence wiring.
+set(DISTORTION_LICENCE_FILES
+    "${CMAKE_SOURCE_DIR}/LICENSE"
+    "${CMAKE_SOURCE_DIR}/THIRD-PARTY-NOTICES.md"
+)
+
+function(distortion_embed_licences target bundle_dir)
+    if(NOT TARGET ${target})
+        return()
+    endif()
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${bundle_dir}/Contents/Resources"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${DISTORTION_LICENCE_FILES}
+                "${bundle_dir}/Contents/Resources"
+        COMMENT "Embedding LICENSE + THIRD-PARTY-NOTICES.md into ${target}"
+        VERBATIM
+    )
+endfunction()
+
+set(DISTORTION_ARTEFACTS "${CMAKE_BINARY_DIR}/Distortion_artefacts/$<CONFIG>")
+distortion_embed_licences(Distortion_VST3
+    "${DISTORTION_ARTEFACTS}/VST3/Sledge Distortion.vst3")
+if(APPLE)
+    # AU and Standalone are real bundles only on Apple; on Windows and Linux the
+    # standalone is a bare executable and is not shipped to users anyway.
+    distortion_embed_licences(Distortion_AU
+        "${DISTORTION_ARTEFACTS}/AU/Sledge Distortion.component")
+    distortion_embed_licences(Distortion_Standalone
+        "${DISTORTION_ARTEFACTS}/Standalone/Sledge Distortion.app")
+endif()
+
+# ============================================================================
 # Test Runner Target (Console Application)
 # ============================================================================
 juce_add_console_app(DistortionTests
