@@ -11,7 +11,7 @@ Full development history, newest first.
 - **Mono-in / stereo-out is now supported.** A bass or guitar arrives on a single interface input, but the plugin previously required the input and output channel counts to match, so a mono source on a stereo track was processed on the left channel only and played back through one speaker. The mono input is now copied across the output channels before any processing, so a single-input instrument is centred.
 
 **UI**
-- **EXTREME reads less saturated.** The whole texture surface — base artwork and crack layer together — eases back by 20% as EXTREME comes in, rather than the intensified layer stacking on top of a base still at full strength. Roughly 15% less red across the panel; the resting state is unchanged.
+- **EXTREME reads less saturated.** The whole texture surface — base artwork and crack layer together — eases back by 26% as EXTREME comes in, rather than the intensified layer stacking on top of a base still at full strength. Roughly 18% less red across the panel; the resting state is unchanged.
 - **Nothing is drawn across the middle of the oscilloscope any more.** Silence is a flat buffer, so with no audio the trace drew as a hard line through the centre, and the zero-reference graticule sat under it — together they read as a divider rather than a scope. Signal presence is now tracked per channel: an idle scope draws no trace, a mono source no longer leaves a flat line beside its live channel, and the only thing crossing the centre is the waveform.
 
 **Licensing**

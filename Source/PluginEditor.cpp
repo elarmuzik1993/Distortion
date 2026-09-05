@@ -740,7 +740,7 @@ static constexpr float kTextureOpacity = 1.00f;
 // to the base artwork and the crack layer together. Stacking a second full-opacity
 // layer on top of the base is what made the intensified state read as saturated;
 // pulling the surface back keeps it busier without getting brighter.
-static constexpr float kExtremeSurfaceDim = 0.20f;
+static constexpr float kExtremeSurfaceDim = 0.26f;
 
 // Alpha contrast applied to the copy the oscilloscope composites over its own
 // backdrop. The artwork's red *fill* is low-alpha but vivid (a≈25, RGB≈163,0,0)
