@@ -117,34 +117,23 @@ public:
             g.drawLine(x, 0, x, bounds.getHeight(), 1.0f);
         }
 
-        // Horizontal grid lines. The i == 2 line lands exactly on the centre,
-        // directly under the emphasized zero reference below, so it has to fade
-        // with it - otherwise easing off the centre line just leaves a fainter
-        // line in the same place, still cutting across the waveform.
+        // Horizontal grid lines at 25% and 75% only. i == 2 would land exactly on
+        // the centre, and nothing is drawn across the middle of the scope any
+        // more - see the zero reference note below.
         for (int i = 1; i < 4; ++i)
         {
-            const float alpha = (i == 2) ? juce::jmap(signalPresence, 0.15f, 0.0f)
-                                         : 0.15f;
-            if (alpha <= 0.0f)
+            if (i == 2)
                 continue;
 
-            g.setColour(juce::Colours::grey.withAlpha(alpha));
             float y = bounds.getHeight() * i / 4.0f;
             g.drawLine(0, y, bounds.getWidth(), y, 1.0f);
         }
 
-        // Emphasized center line - the zero-amplitude reference. It gives the
-        // idle scope its horizon, but once a waveform is up it reads as a divider
-        // cutting the trace in half, so it eases all the way out. A faint
-        // remainder was tried and is still plainly visible against the trace.
-        {
-            const float alpha = juce::jmap(signalPresence, 0.4f, 0.0f);
-            if (alpha > 0.0f)
-            {
-                g.setColour(juce::Colours::grey.withAlpha(alpha));
-                g.drawLine(0, bounds.getHeight() / 2, bounds.getWidth(), bounds.getHeight() / 2, 1.5f);
-            }
-        }
+        // No zero reference is drawn. It used to sit here at grey 0.4, and with
+        // the flat idle trace on top of it the middle of the scope was always a
+        // line - which read as a divider rather than a graticule. Nothing is
+        // drawn across the centre now: idle shows an empty grid, and once audio
+        // arrives the only thing crossing the middle is the waveform itself.
 
         // Draw waveforms with neon red glow effect
         if (stereoMode)
@@ -280,9 +269,16 @@ private:
     void strokeWithGlow(juce::Graphics& g, const juce::Path& path, juce::Colour colour, float mainAlpha)
     {
         if (path.isEmpty()) return;
-        g.setColour(colour.withAlpha(0.25f));
+
+        // Silence is a flat buffer, which draws as a hard neon line straight
+        // across the middle of the scope - indistinguishable from a divider and
+        // the thing people actually see when nothing is playing. Fade the trace
+        // out with the signal so an idle scope draws no waveform at all.
+        if (signalPresence <= 0.001f) return;
+
+        g.setColour(colour.withAlpha(0.25f * signalPresence));
         g.strokePath(path, juce::PathStrokeType(3.0f));
-        g.setColour(colour.withAlpha(mainAlpha));
+        g.setColour(colour.withAlpha(mainAlpha * signalPresence));
         g.strokePath(path, juce::PathStrokeType(1.0f));
     }
 
