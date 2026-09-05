@@ -51,6 +51,11 @@ public:
     // — this component already repaints on its own tick.
     void setExtremeMix(float mix) { extremeMix = mix; }
 
+    // How far the whole texture surface is pulled back while EXTREME is in. The
+    // editor owns the amount and the ramp and pushes the result, so the scope band
+    // and the metal bands dim together rather than each deriving it.
+    void setTextureSurface(float surface) { textureSurface = surface; }
+
     void setStereoMode(bool isStereo)
     {
         stereoMode = isStereo;
@@ -94,12 +99,15 @@ public:
         if (textureBase.isValid())
         {
             const int sx = getX(), sy = getY(), w = getWidth(), h = getHeight();
-            g.setOpacity(textureOpacity);
+            // textureSurface applies to BOTH layers: EXTREME should read as busier,
+            // not brighter, so the base artwork eases back as the cracks come in
+            // instead of the two stacking up.
+            g.setOpacity(textureOpacity * textureSurface);
             g.drawImage(textureBase, 0, 0, w, h, sx, sy, w, h);
 
             if (extremeMix > 0.001f && textureExtreme.isValid())
             {
-                g.setOpacity(textureOpacity * extremeMix);
+                g.setOpacity(textureOpacity * textureSurface * extremeMix);
                 g.drawImage(textureExtreme, 0, 0, w, h, sx, sy, w, h);
             }
 
@@ -220,6 +228,7 @@ private:
     juce::Image textureBase, textureExtreme;
     float extremeMix = 0.0f;
     float textureOpacity = 1.0f;   // kTextureOpacity, pushed in with the layers
+    float textureSurface = 1.0f;   // 1 at rest, pulled back while EXTREME is in
     // Window of samples spanned by the display. Unlike SCOPE_DISPLAY_POINTS
     // (path resolution cap), this is what the scope-length slider controls.
     int displayLength = DSPConstants::SCOPE_DISPLAY_POINTS;
@@ -2447,6 +2456,7 @@ private:
     std::atomic<float>* extremeParam = nullptr;
     float extremePhase = 0.0f;   // linear ramp
     float extremeMix   = 0.0f;   // eased value used as the layer's opacity
+    float extremeSurface = 1.0f; // whole-surface opacity, eased down while EXTREME is in
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoRateAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoDepthAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lfoWaveformAttachment;

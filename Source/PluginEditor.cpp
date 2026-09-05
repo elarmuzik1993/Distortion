@@ -736,6 +736,12 @@ void PluginEditor::setupSlider(CustomKnob& slider,
 // for how present it reads. 1.0f draws it exactly as authored.
 static constexpr float kTextureOpacity = 1.00f;
 
+// How far the whole texture surface eases back once EXTREME is fully in, applied
+// to the base artwork and the crack layer together. Stacking a second full-opacity
+// layer on top of the base is what made the intensified state read as saturated;
+// pulling the surface back keeps it busier without getting brighter.
+static constexpr float kExtremeSurfaceDim = 0.10f;
+
 // Alpha contrast applied to the copy the oscilloscope composites over its own
 // backdrop. The artwork's red *fill* is low-alpha but vivid (a≈25, RGB≈163,0,0)
 // while the cracks are high-alpha but dark (a≈221, RGB≈33,0,0). Drawn as-authored
@@ -832,7 +838,10 @@ void PluginEditor::advanceExtremeFade()
     const float t = extremePhase;
     extremeMix = t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
 
+    extremeSurface = 1.0f - kExtremeSurfaceDim * extremeMix;
+
     oscilloscope.setExtremeMix(extremeMix);
+    oscilloscope.setTextureSurface(extremeSurface);
     repaint();   // only while the fade is in flight; settled states cost nothing
 }
 
@@ -855,12 +864,12 @@ void PluginEditor::paint(juce::Graphics& g)
         auto drawLayers = [&] (int dx, int dy, int dw, int dh,
                                int sx, int sy, int sw, int sh)
         {
-            g.setOpacity(kTextureOpacity);
+            g.setOpacity(kTextureOpacity * extremeSurface);
             g.drawImage(scaledTexture, dx, dy, dw, dh, sx, sy, sw, sh);
 
             if (extremeMix > 0.001f && scaledExtremeTexture.isValid())
             {
-                g.setOpacity(kTextureOpacity * extremeMix);
+                g.setOpacity(kTextureOpacity * extremeSurface * extremeMix);
                 g.drawImage(scaledExtremeTexture, dx, dy, dw, dh, sx, sy, sw, sh);
             }
 
