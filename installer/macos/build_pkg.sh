@@ -73,12 +73,17 @@ stage_component "$APP_PATH"  app  app  "/Applications"
 # Orbitron OFL and Steinberg VST3 notices, which the license pane does not cover.
 RES="$WORK/resources"
 mkdir -p "$RES"
-if [[ -f "$SCRIPT_DIR/../../LICENSE" ]]; then
-    cp "$SCRIPT_DIR/../../LICENSE" "$RES/LICENSE"
-fi
-if [[ -f "$SCRIPT_DIR/../../THIRD-PARTY-NOTICES.md" ]]; then
-    cp "$SCRIPT_DIR/../../THIRD-PARTY-NOTICES.md" "$RES/THIRD-PARTY-NOTICES.txt"
-fi
+# Hard-fail rather than skipping: distribution.xml declares both panes, and
+# productbuild does not error on a declared-but-missing resource, so a silent
+# skip would ship a .pkg with an empty Read Me and a green CI run.
+for src in LICENSE THIRD-PARTY-NOTICES.md; do
+    [[ -f "$SCRIPT_DIR/../../$src" ]] || {
+        echo "error: $src not found at repo root - cannot build a compliant .pkg" >&2
+        exit 1
+    }
+done
+cp "$SCRIPT_DIR/../../LICENSE" "$RES/LICENSE"
+cp "$SCRIPT_DIR/../../THIRD-PARTY-NOTICES.md" "$RES/THIRD-PARTY-NOTICES.txt"
 
 OUT_PKG="$OUT_DIR/SledgeDistortion-$VERSION-macOS.pkg"
 PRODUCT_ARGS=(

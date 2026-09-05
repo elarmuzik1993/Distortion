@@ -63,14 +63,18 @@ previous version's number on the new release's binary.
 - [ ] 🤖 **Windows code-signing** — Azure Trusted Signing steps wired but *inert until the `AZURE_*` repo secrets are set* (needs an Azure Trusted Signing account + identity validation). **Accepted for v2.3: ships unsigned** — SmartScreen shows an "unrecognised app" warning (More info → Run anyway). Documented in the README and CHANGELOG "Known limitations". Not a tag blocker for this release; revisit when the account exists.
 - [ ] 🤖 **macOS code-signing + notarization** — Developer ID codesign + `notarytool`/`stapler` steps wired but *inert until the `APPLE_*` repo secrets are set* (needs an Apple Developer account: Developer ID Application + Installer certs, an app-specific password, and the team ID). Until then macOS ships an unsigned `.pkg` (Gatekeeper right-click-open workaround). **Accepted for v2.3: ships unsigned**, documented in the README and CHANGELOG "Known limitations". Not a tag blocker for this release; revisit when the Apple Developer account exists.
 
-- [x] 🧪 **Licence terms reach the user on every channel** — Sledge Distortion is
-      GPL v3; the Orbitron font (SIL OFL 1.1) and the bundled Steinberg VST3 SDK
-      (BSD-3-Clause) both oblige us to reproduce their terms in *binary*
-      distributions, which the GPL `LicenseFile` alone does not do. `LICENSE` +
-      `THIRD-PARTY-NOTICES.md` now ship in: the Windows installer (`{app}`), the
-      Windows ZIP, the Linux tarball, the macOS ZIP, and the macOS `.pkg` (licence
-      pane + Read Me pane). **If you add a distribution channel, it must carry both
-      files.**
+- [ ] ✍️ **Licence terms reach the user on every channel** — Sledge Distortion is
+      GPL v3, and Orbitron (SIL OFL 1.1), the Steinberg VST3 SDK, FLAC, Ogg Vorbis,
+      libpng, IJG libjpeg, zlib and the AudioUnit SDK all oblige us to reproduce
+      their terms in *binary* distributions, which the GPL `LicenseFile` alone does
+      not do. A CMake post-build step embeds `LICENSE` + `THIRD-PARTY-NOTICES.md`
+      in each bundle's `Contents/Resources`, so every channel inherits them; the
+      archives also carry top-level copies. Each packaging step asserts this and
+      fails the build if a file is missing.
+      **Still needs a human:** open one built artifact per channel and confirm the
+      files are present and readable. The CI assertions cover presence, not
+      legibility, and the macOS path has not run since these changes — dispatch
+      the workflow before ticking this.
 
 ## 6. Privacy & bug reporting (USE-53)
 

@@ -108,13 +108,25 @@ Steps 12–14 live inside `applyAutoGainAndISP`; 15–16 are in `processBlock` p
 - Taking the GPL route also removes JUCE's $50k revenue limit, and permits
   setting `JUCE_DISPLAY_SPLASH_SCREEN=0` (currently unset, so the badge shows).
 - **Third-party notice obligations are binary-distribution obligations**, not just
-  source ones: Orbitron (SIL OFL 1.1, embedded via `BinaryData`) and the bundled
-  Steinberg VST3 SDK (BSD-3-Clause) each require their terms to accompany every
-  built artifact. `THIRD-PARTY-NOTICES.md` is that vehicle and ships with every
-  release asset and both installers. Adding a distribution channel means carrying
-  `LICENSE` and `THIRD-PARTY-NOTICES.md` on it too.
+  source ones: Orbitron (SIL OFL 1.1, embedded via `BinaryData`), the bundled
+  Steinberg VST3 SDK, FLAC and Ogg Vorbis (via `juce_audio_formats`), libpng,
+  IJG libjpeg and zlib (via `juce_graphics`/`juce_core`), and the AudioUnit SDK
+  (macOS AU only) each require their terms to accompany every built artifact.
+  `THIRD-PARTY-NOTICES.md` is that vehicle.
+- **The bundle carries its own notices.** A CMake post-build step copies
+  `LICENSE` + `THIRD-PARTY-NOTICES.md` into each format's `Contents/Resources`,
+  so the terms survive installation instead of only sitting beside the bundle in
+  an archive. Every channel inherits this for free — the Inno installer copies
+  the bundle recursively, the `.pkg` stages built bundles as its payload, and all
+  three archives contain the bundle. **A new distribution channel needs no extra
+  licence wiring**, and the archives additionally carry top-level copies purely
+  so nobody has to open a bundle to read the terms.
+- **The packaging steps assert this.** Each of the Windows ZIP, Linux tarball,
+  macOS ZIP and `.pkg` steps fails the build if the licence files are missing
+  from the artifact. Do not weaken those checks to make a build pass.
 - Adding a dependency means adding its notice to `THIRD-PARTY-NOTICES.md` and
-  checking it is GPL v3-compatible.
+  checking it is GPL v3-compatible. Scope the notices to what the build actually
+  *compiles*: `JUCE_USE_FLAC`/`JUCE_USE_OGGVORBIS` are on, MP3 and LAME are off.
 
 ## Release & Packaging
 - **Formats shipped**: **VST3 only on Windows + Linux**; VST3 + AU + Standalone on macOS (universal arm64 + x86_64). The Standalone target is built on macOS alone (`build-macos` is the only job passing `Distortion_Standalone`) and reaches users solely through the `.pkg`. Windows/Linux release artifacts carry the VST3 bundle and nothing else — do not advertise a Standalone on those platforms without wiring the target into those jobs first.
@@ -122,7 +134,9 @@ Steps 12–14 live inside `applyAutoGainAndISP`; 15–16 are in `processBlock` p
 - **Windows installer**: Inno Setup (`installer/Distortion.iss`) → CommonFiles\VST3; built in CI. Bundles the VC++ 2015-2022 x64 runtime (CI downloads + Authenticode-verifies `vc_redist.x64.exe` into `installer/redist/`, gitignored) and installs it when the target machine's runtime is missing, older than 14.30, or has deleted DLLs; the plugin links the dynamic CRT so this is load-bearing on clean Windows 10 machines. Code-signing (Azure Trusted Signing) is wired but **inert until the `AZURE_*` repo secrets are set** — unsigned installer builds fine without them.
 - **macOS installer**: `.pkg` (`installer/macos/build_pkg.sh` + `distribution.xml`) installing VST3 → `/Library/Audio/Plug-Ins/VST3`, AU → `/Library/Audio/Plug-Ins/Components`, Standalone → `/Applications`; built in CI. Developer ID code-signing + notarization (`installer/macos/entitlements.plist`) is wired but **inert until the `APPLE_*` repo secrets are set** — an unsigned `.pkg` builds fine without them (Gatekeeper warns until signed).
 - **Linux**: tarball + `SHA256SUMS`.
-- **Plain ZIPs (no installer)**: Windows ships `SledgeDistortion-<version>-Windows.zip` (VST3 bundle + `vc_redist.x64.exe` + `LICENSE.txt` + `THIRD-PARTY-NOTICES.md` + `README.txt`) and macOS ships `SledgeDistortion-<version>-macOS.zip` (VST3 + AU + `LICENSE.txt` + `THIRD-PARTY-NOTICES.md`); the Linux tarball carries the same two licence files alongside the bundle. Extracting and copying a bundle does not trip SmartScreen the way running the unsigned installer does, so these are the low-friction route until signing lands (USE-49/USE-55). **The Windows ZIP must keep carrying the redist** — the plugin links the dynamic CRT, so a bare `.vst3` silently fails to load on clean Windows 10, which is the failure the installer's redist bundling was added to fix. Every release asset is version-stamped.
+- **Plain ZIPs (no installer)**: Windows ships `SledgeDistortion-<version>-Windows.zip` (VST3 bundle + `vc_redist.x64.exe` + `LICENSE.txt` + `THIRD-PARTY-NOTICES.md` + `README.txt`) and macOS ships `SledgeDistortion-<version>-macOS.zip` (VST3 + AU + `LICENSE.txt` + `THIRD-PARTY-NOTICES.md`); the Linux tarball carries the same two files alongside the bundle, each archive
+  under a single versioned top-level directory so extracting cannot scatter loose
+  files into the user's working directory. Extracting and copying a bundle does not trip SmartScreen the way running the unsigned installer does, so these are the low-friction route until signing lands (USE-49/USE-55). **The Windows ZIP must keep carrying the redist** — the plugin links the dynamic CRT, so a bare `.vst3` silently fails to load on clean Windows 10, which is the failure the installer's redist bundling was added to fix. Every release asset is version-stamped.
 - **Release gate**: `RELEASE_CHECKLIST.md` (DoD gates, automated/manual). Manual host pass: `docs/DAW_QA_matrix.md`.
 - **Publish**: tag `v*` → CI attaches the Windows installer, the Windows + macOS ZIPs, the Linux tarball, the macOS `.pkg`, and `SHA256SUMS` to the GitHub Release. `SHA256SUMS` is the single checksum list; per-file `.sha256` sidecars are deliberately not published.
 

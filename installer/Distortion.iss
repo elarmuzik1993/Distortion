@@ -72,9 +72,12 @@ Type: filesandordirs; Name: "{commoncf}\VST3\Monolit Distortion.vst3"
 ; VST3 is a folder bundle — install it recursively into the shared VST3 dir.
 Source: "{#Vst3Source}\*"; DestDir: "{app}\Sledge Distortion.vst3"; \
     Flags: recursesubdirs createallsubdirs ignoreversion
-; The Orbitron OFL and the Steinberg VST3 BSD notice both require their terms to
-; be reproduced in binary distributions; LicenseFile only covers the GPL itself.
-Source: "..\THIRD-PARTY-NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
+; NOTE: the licence and notices are NOT installed as loose files here. {app} is
+; the shared {commoncf}\VST3 folder that every plugin vendor writes into, so a
+; generically-named file there collides across vendors and an [UninstallDelete]
+; entry would delete by path rather than by ownership. The bundle carries its own
+; copies in Contents\Resources (see CMakeLists.txt) and is installed recursively
+; by the entry above, which satisfies the same obligation without the collision.
 #ifdef BundleRedist
 ; Run from [Code] (CurStepChanged) rather than [Run] so the exit code is
 ; checked — [Run] would silently swallow a failed runtime install.
@@ -83,7 +86,6 @@ Source: "redist\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\Sledge Distortion.vst3"
-Type: files; Name: "{app}\THIRD-PARTY-NOTICES.md"
 
 [Code]
 const

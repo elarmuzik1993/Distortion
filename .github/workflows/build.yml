@@ -219,6 +219,18 @@ jobs:
         # dependency on that detail entirely, and is what ships on the runners.
         7z a -tzip "SledgeDistortion-$ver-Windows.zip" ".\$stage\*" | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "7z failed with exit code $LASTEXITCODE" }
+        # The notices obligation is enforced here rather than by a human reading
+        # a checklist: if a packaging change ever drops these, the build fails.
+        $listing = (& 7z l "SledgeDistortion-$ver-Windows.zip" | Out-String) -replace '\\','/'
+        foreach ($f in @(
+            'LICENSE.txt',
+            'THIRD-PARTY-NOTICES.md',
+            'Sledge Distortion.vst3/Contents/Resources/LICENSE',
+            'Sledge Distortion.vst3/Contents/Resources/THIRD-PARTY-NOTICES.md')) {
+          if ($listing -notmatch [regex]::Escape($f)) {
+            throw "missing from Windows ZIP: $f"
+          }
+        }
         Get-ChildItem "SledgeDistortion-$ver-Windows.zip" | ForEach-Object { "packaged $($_.Name) ($([math]::Round($_.Length/1MB,1))MB)" }
 
     - name: Upload Windows ZIP
@@ -327,13 +339,29 @@ jobs:
         # Keyed off GITHUB_REF_TYPE, not a "v*" name match: a branch that merely
         # starts with v (verify-thing) would otherwise be read as tag "erify-thing".
         if [ "$GITHUB_REF_TYPE" = tag ]; then VER="${GITHUB_REF_NAME#v}"; else VER="$DEV_VERSION"; fi
-        # The GPL, the Orbitron OFL and the Steinberg VST3 BSD notice all require
-        # their terms to travel with the binary, so the tarball carries them
-        # rather than the .vst3 alone.
-        cp LICENSE artifact/Linux/LICENSE.txt
-        cp THIRD-PARTY-NOTICES.md artifact/Linux/THIRD-PARTY-NOTICES.md
-        tar -C artifact/Linux -czf "SledgeDistortion-$VER-Linux.tar.gz" \
-          "Sledge Distortion.vst3" LICENSE.txt THIRD-PARTY-NOTICES.md
+        # The bundle already carries LICENSE + THIRD-PARTY-NOTICES.md inside
+        # Contents/Resources (see CMakeLists.txt), so the terms survive being
+        # copied into a VST3 folder. These top-level copies are for
+        # discoverability, so nobody has to open a bundle to read them.
+        #
+        # Everything is staged under ONE versioned directory: a tarball with
+        # three top-level entries scatters loose licence files into whatever
+        # directory the user happens to extract from, and can clobber a
+        # same-named file from another project.
+        root="SledgeDistortion-$VER-Linux"
+        mkdir -p "artifact/Linux/$root"
+        cp -R "artifact/Linux/Sledge Distortion.vst3" "artifact/Linux/$root/"
+        cp LICENSE "artifact/Linux/$root/LICENSE.txt"
+        cp THIRD-PARTY-NOTICES.md "artifact/Linux/$root/THIRD-PARTY-NOTICES.md"
+        tar -C artifact/Linux -czf "SledgeDistortion-$VER-Linux.tar.gz" "$root"
+        # Enforced in CI, not on a checklist - see the Windows ZIP step.
+        tar tzf "SledgeDistortion-$VER-Linux.tar.gz" > tarlist.txt
+        for f in "$root/LICENSE.txt" \
+                 "$root/THIRD-PARTY-NOTICES.md" \
+                 "$root/Sledge Distortion.vst3/Contents/Resources/LICENSE" \
+                 "$root/Sledge Distortion.vst3/Contents/Resources/THIRD-PARTY-NOTICES.md"; do
+          grep -qF -- "$f" tarlist.txt || { echo "::error::missing from Linux tarball: $f"; exit 1; }
+        done
 
     - name: Upload Linux tarball
       uses: actions/upload-artifact@v4
@@ -481,6 +509,25 @@ jobs:
           "$BASE/Standalone/Sledge Distortion.app" \
           dist
 
+    - name: Verify licence files are in the .pkg payload
+      run: |
+        # The licence and Read Me panes are transient installer UI - they leave
+        # nothing on disk. What makes the .pkg compliant is the copy embedded in
+        # each bundle, so that is what gets checked.
+        PKG=$(ls dist/*.pkg | head -n1)
+        # --expand-full unpacks the payloads too, so this is a plain find over
+        # the real installed tree rather than a hand-rolled cpio pipeline.
+        rm -rf pkgcheck
+        pkgutil --expand-full "$PKG" pkgcheck
+        # Guard the guard: an empty expansion must not read as "nothing missing".
+        find pkgcheck -name "Sledge Distortion.vst3" -maxdepth 6 | grep -q . \
+          || { echo "::error::pkg expansion produced no VST3 bundle - check failed to run"; exit 1; }
+        for f in LICENSE THIRD-PARTY-NOTICES.md; do
+          find pkgcheck -path "*/Contents/Resources/$f" | grep -q . \
+            || { echo "::error::missing from .pkg payload: Contents/Resources/$f"; exit 1; }
+        done
+        echo "pkg payload carries LICENSE + THIRD-PARTY-NOTICES.md"
+
     - name: Notarize + staple installer
       if: env.APPLE_ID != '' && env.APPLE_APP_PASSWORD != '' && env.APPLE_TEAM_ID != ''
       run: |
@@ -510,10 +557,24 @@ jobs:
         # Keyed off GITHUB_REF_TYPE, not a "v*" name match: a branch that merely
         # starts with v (verify-thing) would otherwise be read as tag "erify-thing".
         if [ "$GITHUB_REF_TYPE" = tag ]; then VER="${GITHUB_REF_NAME#v}"; else VER="$DEV_VERSION"; fi
-        # Licence terms travel with the binaries here too - see the Linux job.
-        cp LICENSE artifact/macOS/LICENSE.txt
-        cp THIRD-PARTY-NOTICES.md artifact/macOS/THIRD-PARTY-NOTICES.md
-        ditto -c -k artifact/macOS "SledgeDistortion-$VER-macOS.zip"
+        # Single versioned root and top-level licence copies - see the Linux
+        # job for why. --keepParent is what puts the root directory inside the
+        # archive; without it ditto stores the directory's contents.
+        root="SledgeDistortion-$VER-macOS"
+        mkdir -p "artifact/macOS/$root"
+        mv "artifact/macOS/Sledge Distortion.vst3" \
+           "artifact/macOS/Sledge Distortion.component" "artifact/macOS/$root/"
+        cp LICENSE "artifact/macOS/$root/LICENSE.txt"
+        cp THIRD-PARTY-NOTICES.md "artifact/macOS/$root/THIRD-PARTY-NOTICES.md"
+        ditto -c -k --keepParent "artifact/macOS/$root" "SledgeDistortion-$VER-macOS.zip"
+        # Enforced in CI, not on a checklist - see the Windows ZIP step.
+        unzip -Z1 "SledgeDistortion-$VER-macOS.zip" > ziplist.txt
+        for f in "$root/LICENSE.txt" \
+                 "$root/THIRD-PARTY-NOTICES.md" \
+                 "$root/Sledge Distortion.vst3/Contents/Resources/THIRD-PARTY-NOTICES.md" \
+                 "$root/Sledge Distortion.component/Contents/Resources/THIRD-PARTY-NOTICES.md"; do
+          grep -qF -- "$f" ziplist.txt || { echo "::error::missing from macOS ZIP: $f"; exit 1; }
+        done
 
     - name: Upload macOS bundles zip
       uses: actions/upload-artifact@v4
