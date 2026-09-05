@@ -1,162 +1,143 @@
-# Sledge Distortion v2.3 - Audio Plugin
+<div align="center">
 
-A professional JUCE audio plugin featuring multi-stage distortion, LA2A-style compression, LFO modulation routing, and advanced signal processing.
+<img src="Resources/Logo%20Title.png" alt="Monolit Beatz" width="380">
 
-## Project Overview
+# Sledge Distortion
 
-**Sledge Distortion** - A JUCE audio plugin by Monolit Beatz
-- **Version**: 2.3
-- **Type**: Audio Plugin — VST3 everywhere; + AU and a Standalone app on macOS
-- **Framework**: JUCE 7.0.12
-- **Platforms**: Windows, Linux, macOS (universal arm64 + x86_64)
-- **Build Systems**: CMake (cross-platform), Visual Studio 2022
+**A distortion you shape by hand.** Draw the EQ curve straight onto the
+oscilloscope instead of hunting through menus and numeric fields.
 
-## What's New in v2.3
+[![Build](https://github.com/elarmuzik1993/Distortion/actions/workflows/build.yml/badge.svg)](https://github.com/elarmuzik1993/Distortion/actions/workflows/build.yml)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-c9184a.svg)](LICENSE)
+![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-343a40)
+![Formats](https://img.shields.io/badge/formats-VST3%20%7C%20AU%20%7C%20Standalone-343a40)
 
-- **macOS support** — universal (arm64 + x86_64) **VST3 + AU + Standalone**, so Logic Pro and GarageBand are now covered; ships as a `.pkg` installer
-- **Free-draw Graphic EQ** — draw a curve straight onto the oscilloscope to shape a 12-band peaking EQ (~30 Hz–16 kHz, ±12 dB) at the output stage; automatable, saved with presets, and bit-transparent while flat
-- **One-click EQ bypass** — a power button on the overlay mutes the EQ click-free while keeping the drawn curve, for a true A/B
-- **Scope overlay selector** — one Settings dropdown (Off / XY Morph / Graphic EQ) plus matching title-bar toggles decides which overlay owns the scope
-- **UI texture** — cracked-glass and diamond-plate artwork across the editor, with an EXTREME mode that spreads the shatter over the whole canvas
+<img src="docs/images/scale-100-extreme.png" alt="Sledge Distortion plugin interface" width="880">
 
-> Both platforms currently ship **unsigned** — see [Installation](#installation) for the one-time Windows SmartScreen / macOS Gatekeeper steps.
+<sub>Shown with the EXTREME texture mode enabled</sub>
 
-## What's New in v2.2
+</div>
 
-- **Multimode input filter** — switchable High-Pass / Low-Pass / Band-Pass ahead of the drive
-- **LFO upgrades** — tempo **BPM Sync** (SYNC + note-division) and an **INV** polarity invert
-- **Linear Phase Dry** — phase-coherent parallel path, no comb filtering at partial mix
-- **Clean boost pre-emphasis** toggle in front of the distortion stage
-- **XY Morph pad on/off toggle**
-- **Anonymous bug reporting (opt-out)** — first-run notice, consent switch, and a "Report a Bug" button in Settings; nothing personal, off anytime
-- **UI refresh** — layered-arc rotary knobs with value-driven colour, a 5-LED gain-reduction meter, scrollable settings panel, and compact window fold
-- **16 factory presets** (up from 8)
-- **Audio-quality fixes** — Sub Guard crossover phase + click-free slope changes, phase-aligned wet/dry mix, corrected LFO rate in the oversampled path, strict -0.5 dBFS output ceiling, latency-compensated true bypass
-- **Platform** — VST3 on Windows + Linux (VST2 removed); validated with pluginval (strictness 10). *(macOS + AU arrived in v2.3, above.)*
+---
+
+Sledge is a free, GPL-licensed distortion plugin built on [JUCE](https://juce.com).
+Seven clip characters from tube warmth to outright destruction, an LA2A-style
+optical compressor, tempo-syncable LFO routing, and a 12-band graphic EQ you
+*draw* with the mouse — all in front of an oscilloscope that shows you what you
+just did to the waveform.
+
+It runs as **VST3** on Windows, macOS and Linux, plus **AU** and a **standalone
+app** on macOS.
+
+## Install
+
+Grab the build for your platform from the
+[latest release](https://github.com/elarmuzik1993/Distortion/releases).
+
+| Platform | What to run | Where it lands |
+|---|---|---|
+| **Windows** | `SledgeDistortion-<version>-Windows.exe` | `%CommonProgramFiles%\VST3\` |
+| **macOS** | `SledgeDistortion-<version>-macOS.pkg` | VST3, AU → `/Library/Audio/Plug-Ins/`, app → `/Applications` |
+| **Linux** | unpack the `.tar.gz` | `~/.vst3/` |
+
+The Windows installer replaces any previous version cleanly and installs the
+Microsoft VC++ runtime if the machine is missing it — required on clean
+Windows 10 installs. If you use the plain ZIP instead, install
+[the runtime](https://aka.ms/vs/17/release/vc_redist.x64.exe) yourself.
+
+> **Builds are currently unsigned.** On Windows, SmartScreen shows an
+> "unrecognised app" warning — **More info → Run anyway**. On macOS, right-click
+> the `.pkg` → **Open** to get past Gatekeeper. Code-signing is wired into CI and
+> switches on when the certificates exist.
+
+Requires 64-bit Windows 10+, macOS 11+, or a Linux distro with ALSA. ARM64
+Windows works through x64 emulation; macOS builds are universal (arm64 +
+x86_64).
 
 ## Features
 
-### Distortion Engine
-- **7 Professional Clip Types**: Brutal Fuzz, Tube Overdrive, Bit Crusher, Tape Saturation, Transformer Saturation, Diode Clipper, Decimator
-- **Oversampling**: Polyphase IIR anti-aliasing — selectable Off / 2x / 4x in Settings (4x default)
-- **Sub Guard**: Variable-slope crossover (50-200Hz) protects sub-bass from distortion
-- **True Bypass**: Zero processing when distortion < 0.5%
-- **Dist Mix**: Parallel distortion blending (0-100%)
+**Distortion engine** — 7 clip types (Brutal Fuzz, Tube Overdrive, Bit Crusher,
+Tape Saturation, Transformer Saturation, Diode Clipper, Decimator), polyphase IIR
+oversampling at Off/2×/4×, a variable-slope Sub Guard crossover (50–200 Hz) that
+keeps your low end out of the distortion, parallel Dist Mix, and true bypass
+below 0.5% drive.
 
-### Multimode Input Filter
-- **High-Pass / Low-Pass / Band-Pass** (SVF TPT) ahead of the drive
-- Runs in the true-bypass path too, so it works as a standalone filter with distortion and compression off
-- A filter left at its transparent default keeps bypass bit-clean
+**Free-draw graphic EQ** — draw a magnitude response directly on the scope and it
+becomes a 12-band peaking EQ (~30 Hz–16 kHz, ±12 dB) at the output stage. Fully
+automatable, saved with presets, bit-transparent while flat, and one power button
+mutes it click-free so you can A/B the curve you drew.
 
-### Graphic EQ
-- **Free-draw curve**: draw a magnitude response directly on the oscilloscope; double-click flattens
-- **12 peaking bands**, log-spaced ~30 Hz–16 kHz, ±12 dB, at the output stage
-- **Automatable** and saved with presets; bypasses entirely while flat, so a fresh instance is bit-transparent
-- **One-click bypass** (power button) mutes it click-free while preserving the drawn curve
+**Multimode input filter** — High-Pass / Low-Pass / Band-Pass (SVF TPT) ahead of
+the drive. It runs in the true-bypass path too, so it doubles as a standalone
+filter with distortion and compression switched off.
 
-### Oscilloscope
-- **Zero-crossing trigger**: Waveform locked to rising edge — no horizontal drift
-- **Anti-alias decimation**: 2-point averaging filter before scope downsampling
-- **Real-time display**: Always shows the most recent audio (FIFO drain on every frame)
-- **Lock-free pipeline**: SpinLock removed — pure `AbstractFifo` SPSC, no audio-thread contention
-- **Overlay selector**: Off / XY Morph / Graphic EQ decides which overlay owns the scope surface
+**Oscilloscope** — zero-crossing triggered so the waveform doesn't drift,
+anti-alias decimated, and fed by a lock-free SPSC queue that never touches the
+audio thread. One selector decides which overlay owns the surface: Off, XY Morph,
+or the graphic EQ.
 
-### LFO Modulation System
-- **5 Waveforms**: Sine, Triangle, Square, Saw, Random S&H
-- **5 Modulation Destinations**: Distortion Amount, Tone Filter, Hi-Pass, Dist Mix, Output Gain
-- **Rate**: 0.1-50Hz free-running, or **BPM Sync** to host tempo (1/1 → 1/32, incl. triplets)
-- **INV**: polarity invert, reflected in both DSP and the arc visualiser
-- **Visual Feedback**: Pulsing cyan glow on modulated knobs
+**LFO modulation** — 5 waveforms (sine, triangle, square, saw, random S&H) into 5
+destinations (distortion amount, tone filter, hi-pass, dist mix, output gain),
+free-running 0.1–50 Hz or BPM-synced to the host from 1/1 to 1/32 including
+triplets, with polarity invert. Modulated knobs pulse so you can see the routing.
 
-### LA2A-Style Compression
-- Optical cell envelope simulation
-- Program-dependent behavior with RMS tracking
-- 3:1 or 12:1 ratio modes
-- 15% tube harmonics for analog warmth
+**LA2A-style compression** — optical cell envelope simulation with
+program-dependent RMS tracking, 3:1 and 12:1 ratios, and 15% tube harmonics.
 
-### Signal Processing
-- Pre-distortion transient tamer (hardcoded compression)
-- Harmonic density scaling (prevents 2-5kHz harshness)
-- Auto-gain compensation (RMS-based loudness maintenance)
-- ISP protection (soft clipper at -0.3dBFS)
-- DC blocking with manual one-pole filter
-- Graphic EQ (post-DC-blocker, pre-output-gain)
-- Output limiter (-0.5dBFS safety, always the last gain stage)
-- Linear Phase Dry option — phase-coherent parallel path, no comb filtering at partial mix
-- Latency reported to the host for PDC, re-imposed on the true-bypass path so toggling causes no timing jump
+**Signal integrity** — auto-gain compensation, harmonic density scaling to keep
+2–5 kHz from turning harsh, DC blocking, ISP soft clipping at −0.3 dBFS, a −0.5
+dBFS output ceiling as the last gain stage, a phase-coherent Linear Phase Dry
+path with no comb filtering at partial mix, and latency reported to the host for
+PDC — re-imposed on the bypass path so toggling causes no timing jump.
 
-## Build Instructions
+16 factory presets. Validated with `pluginval` at strictness 10.
 
-### CMake (Recommended)
-```bash
-mkdir -p build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build . -j$(nproc)
-```
+See [`CHANGELOG.md`](CHANGELOG.md) for what changed in each release.
 
-### Run Tests
-```bash
-./DistortionTests_artefacts/Debug/DistortionTests
-```
+## Build from source
 
-### Visual Studio 2022 (Windows)
-```bash
-cd Builds/VisualStudio2022
-MSBuild Distortion.sln -p:Configuration=Release -p:Platform=x64
-```
+You need CMake 3.22+ and a C++17 compiler. **JUCE 7.0.12 is fetched
+automatically** at a pinned tag — you don't install it yourself.
 
-### macOS (CMake)
-Builds a universal binary (arm64 + x86_64) with VST3, AU, and Standalone:
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --target Distortion_VST3 Distortion_AU Distortion_Standalone -j
-```
-Add `-DCMAKE_OSX_ARCHITECTURES=arm64` for a faster single-arch dev build.
-
-## Project Structure
-
-```
-Distortion/
-├── Source/
-│   ├── PluginProcessor.cpp/h    # Audio processing (3400+ lines)
-│   ├── PluginEditor.cpp/h       # GUI implementation
-│   ├── CustomKnob.cpp/h         # Custom rotary controls
-│   ├── FactoryPresets.h         # Factory bank (single source of truth)
-│   ├── Diagnostics/             # Anonymous bug reporting (opt-out)
-│   ├── Tools/                   # Headless harnesses (render, soak, UI snapshot)
-│   └── Tests/                   # Unit test suite (2580+ assertions)
-├── Resources/                   # Images, textures and fonts
-├── installer/                   # Inno Setup (Windows) + .pkg (macOS)
-├── CMakeLists.txt              # Cross-platform build
-├── Distortion.jucer            # Projucer project
-├── AGENTS.md                   # Developer documentation / source of truth
-└── .github/workflows/          # CI/CD pipeline
+cmake --build build --target Distortion_VST3
 ```
 
-## Plugin Formats
+On Linux, install `libasound2-dev` and `libcurl4-openssl-dev` first. On macOS
+this produces a universal binary; add `-DCMAKE_OSX_ARCHITECTURES=arm64` for a
+faster single-arch dev build. Run the tests with:
 
-- **VST3**: Primary format (all platforms)
-- **AU (Audio Unit)**: macOS only — Logic Pro / GarageBand
-- **Standalone**: **shipped on macOS only** (in the `.pkg`). The `Distortion_Standalone` target builds on every platform for local testing, but only the `build-macos` CI job packages it — Windows and Linux release artifacts contain the VST3 and nothing else.
+```bash
+cmake --build build --target DistortionTests
+./build/DistortionTests_artefacts/Debug/DistortionTests
+```
 
-## Installation
+```
+Source/
+├── PluginProcessor.cpp/h    # Audio processing
+├── PluginEditor.cpp/h       # GUI
+├── FactoryPresets.h         # Factory bank (single source of truth)
+├── Diagnostics/             # Anonymous bug reporting (opt-out)
+├── Tools/                   # Headless harnesses: render, soak, UI snapshot
+└── Tests/                   # 2580+ assertions
+```
 
-- **Windows**: run the installer (`SledgeDistortion-<version>-Windows.exe`) — installs to `%CommonProgramFiles%\VST3\` by default, replaces any previous version cleanly, and automatically installs the Microsoft VC++ runtime if the machine is missing it (required on clean Windows 10 installs). The installer is currently **unsigned**, so SmartScreen shows an "unrecognised app" warning on first run — click **More info → Run anyway**.
-- **Linux**: unpack the tarball to `~/.vst3/`
-- **macOS**: run the `.pkg` installer (VST3 → `/Library/Audio/Plug-Ins/VST3`, AU → `/Library/Audio/Plug-Ins/Components`, Standalone → `/Applications`). The current builds are **unsigned** until an Apple Developer ID is configured — on first launch right-click the `.pkg` → **Open** to bypass Gatekeeper.
+## Contributing
 
-### End-user requirements (Windows)
+Contributions are welcome — bug reports, DAW compatibility results, fixes,
+features. **[`CONTRIBUTING.md`](CONTRIBUTING.md)** covers setup, the test and
+validation steps a PR needs to pass, and the handful of rules that are
+load-bearing rather than stylistic (no allocation in `processBlock`, no locks in
+the scope path, and a new dependency brings its licence notice with it).
 
-- 64-bit Windows 10 or later (ARM64 Windows works via x64 emulation)
-- VC++ 2015–2022 x64 runtime — bundled with the installer; only needed manually for zip installs: https://aka.ms/vs/17/release/vc_redist.x64.exe
+If you want the deep context, [`AGENTS.md`](AGENTS.md) is the project's source of
+truth and [`docs/Architecture Contract.md`](docs/Architecture%20Contract.md)
+defines the signal chain and what may not move within it.
 
-## Build requirements
-
-- CMake 3.22+
-- C++17 compiler
-- JUCE 7.0.12 (auto-fetched by CMake)
-- ALSA development libraries (Linux)
-- Xcode command-line tools + macOS 11.0 SDK (macOS)
+If you're unsure whether an idea fits, open an issue and ask first — it's
+cheaper than finding out in review. Starter-sized work gets labelled
+`good first issue`.
 
 ## Privacy & bug reporting
 
@@ -196,4 +177,6 @@ To pay, or for anything else — commercial questions, bug reports you would
 rather not file in the issue tracker, or licensing under other terms — get in
 touch at **elar.muzik@gmail.com**.
 
-Copyright © 2026 Boris Miscenco.
+---
+
+Copyright © 2026 Boris Miscenco · [Monolit Beatz](https://monolitbeatz.com)
