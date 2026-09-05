@@ -1635,6 +1635,106 @@ void ProcessBlockTests::runTest()
 
     beginTest("Mono In / Stereo Out");
     testMonoInStereoOut();
+
+    beginTest("Mono Input Toggle");
+    testMonoInputToggle();
+
+    beginTest("Mono Source Detection");
+    testMonoSourceDetection();
+}
+
+// Builds a stereo buffer carrying signal on the left and silence on the right -
+// a bass plugged into interface input 1 with nothing in input 2.
+static juce::AudioBuffer<float> makeOneSidedBuffer(int numSamples)
+{
+    auto buffer = generateSineWave(220.0, 44100.0, numSamples, 0.5f, 2);
+    buffer.clear(1, 0, numSamples);
+    return buffer;
+}
+
+void ProcessBlockTests::testMonoInputToggle()
+{
+    // Off: a one-sided source must stay one-sided. Anything else would be
+    // rewriting the stereo image of every existing session.
+    {
+        PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(44100.0, 512);
+        processor.prepareToPlay(44100.0, 512);
+        setParameter(processor.parameters, "distortionAmount", 50.0f);
+        setParameter(processor.parameters, "clipType", 1.0f);
+        setParameter(processor.parameters, "monoInput", 0.0f);
+
+        auto buffer = makeOneSidedBuffer(512);
+        juce::MidiBuffer midi;
+        processor.processBlock(buffer, midi);
+
+        float rightPeak = 0.0f;
+        for (int i = 0; i < 512; ++i)
+            rightPeak = juce::jmax(rightPeak, std::abs(buffer.getSample(1, i)));
+
+        expect(rightPeak < 0.001f, "with Mono Input off the silent channel must stay silent");
+    }
+
+    // On: the same source reaches both channels identically.
+    {
+        PluginProcessor processor;
+        processor.setRateAndBufferSizeDetails(44100.0, 512);
+        processor.prepareToPlay(44100.0, 512);
+        setParameter(processor.parameters, "distortionAmount", 50.0f);
+        setParameter(processor.parameters, "clipType", 1.0f);   // deterministic clip, see testMonoInStereoOut
+        setParameter(processor.parameters, "monoInput", 1.0f);
+
+        auto buffer = makeOneSidedBuffer(512);
+        juce::MidiBuffer midi;
+        processor.processBlock(buffer, midi);
+
+        float maxDiff = 0.0f, rightPeak = 0.0f;
+        for (int i = 0; i < 512; ++i)
+        {
+            const float l = buffer.getSample(0, i);
+            const float r = buffer.getSample(1, i);
+            maxDiff   = juce::jmax(maxDiff, std::abs(l - r));
+            rightPeak = juce::jmax(rightPeak, std::abs(r));
+        }
+
+        expect(rightPeak > 0.001f, "with Mono Input on the right channel must carry the signal");
+        expect(maxDiff < 1.0e-6f, "both channels must match so the source is centred");
+    }
+}
+
+void ProcessBlockTests::testMonoSourceDetection()
+{
+    PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
+    processor.prepareToPlay(44100.0, 512);
+    setParameter(processor.parameters, "monoInput", 0.0f);
+
+    juce::MidiBuffer midi;
+    expect(! processor.monoSourceDetected.load(), "nothing detected before any audio");
+
+    // One block is deliberately not enough: the hint needs a sustained run so a
+    // rest on one side of a stereo take cannot trip it.
+    {
+        auto buffer = makeOneSidedBuffer(512);
+        processor.processBlock(buffer, midi);
+        expect(! processor.monoSourceDetected.load(), "a single one-sided block must not trigger the hint");
+    }
+
+    // ~2 seconds of one-sided audio does.
+    for (int i = 0; i < 200; ++i)
+    {
+        auto buffer = makeOneSidedBuffer(512);
+        processor.processBlock(buffer, midi);
+    }
+    expect(processor.monoSourceDetected.load(), "sustained one-sided audio should raise the hint");
+
+    // Genuine stereo clears it again.
+    for (int i = 0; i < 10; ++i)
+    {
+        auto stereo = generateSineWave(220.0, 44100.0, 512, 0.5f, 2);
+        processor.processBlock(stereo, midi);
+    }
+    expect(! processor.monoSourceDetected.load(), "signal on both channels should clear the hint");
 }
 
 void ProcessBlockTests::testMonoInStereoOut()

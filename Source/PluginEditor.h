@@ -1025,11 +1025,12 @@ private:
 
 // Scrollable content for the settings overlay (everything below the fixed header).
 // Lives inside a juce::Viewport so rows are never clipped at small window sizes.
-class SettingsContent : public juce::Component
+class SettingsContent : public juce::Component,
+                       private juce::Timer
 {
 public:
-    // Summed height of all rows below the header (382px of content + 12px bottom slack).
-    static constexpr int kContentHeight = 394;
+    // Summed height of all rows below the header (406px of content + 12px bottom slack).
+    static constexpr int kContentHeight = 418;
 
     SettingsContent(juce::AudioProcessorValueTreeState& apvts, SettingsState& state, PluginProcessor& proc)
         : settingsState(state), processor(proc)
@@ -1070,6 +1071,18 @@ public:
         linearPhaseToggle.setLookAndFeel(&pillLnf);
         linearPhaseAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
             apvts, "linearPhaseDry", linearPhaseToggle);
+
+        // Mono Input toggle
+        addAndMakeVisible(monoInputToggle);
+        monoInputToggle.setButtonText("");
+        monoInputToggle.setLookAndFeel(&pillLnf);
+        monoInputAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+            apvts, "monoInput", monoInputToggle);
+
+        // Slow poll purely so the Mono Input hint can appear while the panel is
+        // open. It repaints only when the state actually flips, so an idle panel
+        // costs one atomic load every 250ms.
+        startTimerHz(4);
 
         // Window Scale combo
         addAndMakeVisible(windowScaleCombo);
@@ -1181,6 +1194,7 @@ public:
         antiAliasToggle.setLookAndFeel(nullptr);
         autoGainToggle.setLookAndFeel(nullptr);
         linearPhaseToggle.setLookAndFeel(nullptr);
+        monoInputToggle.setLookAndFeel(nullptr);
         tooltipsToggle.setLookAndFeel(nullptr);
         oscilloscopeToggle.setLookAndFeel(nullptr);
         scopeStereoToggle.setLookAndFeel(nullptr);
@@ -1227,6 +1241,18 @@ public:
         // Linear Phase Dry row label
         auto lpRow = inner.removeFromTop(20.0f);
         g.drawText("Lin. Phase Dry", lpRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
+        inner.removeFromTop(4.0f);
+
+        // Mono Input row label. Lit while the processor has seen a one-sided
+        // signal, as a hint that this is the control you are looking for - the
+        // audio is never changed on the strength of that detection.
+        auto miRow = inner.removeFromTop(20.0f);
+        const bool hint = processor.monoSourceDetected.load(std::memory_order_relaxed)
+                          && ! monoInputToggle.getToggleState();
+        g.setColour(hint ? juce::Colour(0xFFFF2244) : juce::Colours::white);
+        g.drawText(hint ? "Mono Input  â" : "Mono Input",
+                   miRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
+        g.setColour(juce::Colours::white);
         inner.removeFromTop(12.0f);
 
         // INTERFACE section header
@@ -1326,6 +1352,12 @@ public:
         auto lpRow = inner.removeFromTop(20);
         lpRow.removeFromLeft(140);
         linearPhaseToggle.setBounds(lpRow.removeFromLeft(50).reduced(0, 2));
+        inner.removeFromTop(4);
+
+        // Mono Input row - must stay in step with the label in paint()
+        auto miRow = inner.removeFromTop(20);
+        miRow.removeFromLeft(140);
+        monoInputToggle.setBounds(miRow.removeFromLeft(50).reduced(0, 2));
         inner.removeFromTop(12);
 
         // INTERFACE header + divider
@@ -1416,6 +1448,8 @@ private:
     juce::ToggleButton antiAliasToggle;
     juce::ToggleButton autoGainToggle;
     juce::ToggleButton linearPhaseToggle;
+    juce::ToggleButton monoInputToggle;
+    bool lastMonoHint = false;
     juce::ComboBox oversamplingCombo;
     juce::ComboBox windowScaleCombo;
     juce::ToggleButton tooltipsToggle;
@@ -1429,6 +1463,18 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> cleanModeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> autoGainAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> linearPhaseAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> monoInputAttachment;
+
+    void timerCallback() override
+    {
+        const bool hint = processor.monoSourceDetected.load(std::memory_order_relaxed)
+                          && ! monoInputToggle.getToggleState();
+        if (hint != lastMonoHint)
+        {
+            lastMonoHint = hint;
+            repaint();
+        }
+    }
 };
 
 // Settings overlay modal panel — fixed frame + header, with scrollable content.

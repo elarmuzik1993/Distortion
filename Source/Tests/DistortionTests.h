@@ -159,6 +159,8 @@ private:
     void testEmptyBufferHandling();
     void testOutputGain();
     void testMonoInStereoOut();
+    void testMonoInputToggle();
+    void testMonoSourceDetection();
 };
 
 /** Null-test gate for PR-8 processBlock decomposition — bit-exact determinism check */

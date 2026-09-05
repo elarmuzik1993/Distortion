@@ -235,6 +235,7 @@ PluginProcessor::PluginProcessor()
     toneParam = parameters.getRawParameterValue("tone");
     waveshaperCleanParam = parameters.getRawParameterValue("waveshaperClean");
     linearPhaseDryParam = parameters.getRawParameterValue("linearPhaseDry");
+    monoInputParam = parameters.getRawParameterValue("monoInput");
     cleanBoostParam = parameters.getRawParameterValue("cleanBoost");
     for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
         eqBandParam[i] = parameters.getRawParameterValue("eqBand" + juce::String(i));
@@ -1377,10 +1378,50 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // This runs before the anomaly probe: that probe reads one frame from every
     // channel, and sampling an uninitialised channel could report a non-finite
     // block and raise a false diagnostic.
+    //
+    // With Mono Input on, the same copy is applied across every channel: there the
+    // host did write channel 1, it just holds silence because nothing is plugged
+    // into the second interface input.
     {
-        const int firstUnwritten = juce::jmax(1, getTotalNumInputChannels());
-        for (int ch = firstUnwritten; ch < buffer.getNumChannels(); ++ch)
+        const bool monoInput = monoInputParam && monoInputParam->load() > 0.5f;
+        const int firstToOverwrite = monoInput ? 1
+                                               : juce::jmax(1, getTotalNumInputChannels());
+        for (int ch = firstToOverwrite; ch < buffer.getNumChannels(); ++ch)
             buffer.copyFrom(ch, 0, buffer, 0, 0, buffer.getNumSamples());
+    }
+
+    // Mono-source detection. Advisory only - it lights the Mono Input control and
+    // never touches the audio. Requires one channel to carry signal while the
+    // other stays silent for a sustained run of blocks, so a rest in one side of a
+    // stereo take does not trip it.
+    if (buffer.getNumChannels() >= 2)
+    {
+        const int numSamples = buffer.getNumSamples();
+        const float peakL = buffer.getMagnitude(0, 0, numSamples);
+        const float peakR = buffer.getMagnitude(1, 0, numSamples);
+
+        constexpr float kLiveThreshold   = 0.003f;   // ~-50 dBFS
+        constexpr float kSilentThreshold = 0.0001f;  // ~-80 dBFS
+        const bool oneSided = (peakL > kLiveThreshold && peakR < kSilentThreshold)
+                           || (peakR > kLiveThreshold && peakL < kSilentThreshold);
+
+        if (oneSided)
+        {
+            // ~2 seconds of audio before the hint appears, block size independent.
+            const int blocksNeeded = juce::jmax(1, (int) (currentSampleRate * 2.0f
+                                                          / juce::jmax(1, numSamples)));
+            if (monoDetectBlocks < blocksNeeded)
+                ++monoDetectBlocks;
+            if (monoDetectBlocks >= blocksNeeded)
+                monoSourceDetected.store(true, std::memory_order_relaxed);
+        }
+        else if (peakL > kLiveThreshold && peakR > kLiveThreshold)
+        {
+            // Both sides live: definitely not a mono source. Silence on both leaves
+            // the state alone, so the hint survives a pause between notes.
+            monoDetectBlocks = 0;
+            monoSourceDetected.store(false, std::memory_order_relaxed);
+        }
     }
 
     // RT-safe anomaly probe (USE-53): sample the INPUT buffer's first frame per channel.
@@ -3480,6 +3521,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         juce::ParameterID{ "linearPhaseDry", 1 },
         "Linear Phase Dry",
         false));  // Default OFF — preserves existing IIR character and sessions
+
+    // Mono Input. A single-input instrument (a bass or guitar on interface input 1)
+    // arrives on a stereo bus with one channel silent, which plays back through one
+    // speaker. When on, processBlock copies channel 0 across the others so the
+    // source is centred. Default OFF: it collapses the stereo image, and doing that
+    // to genuinely stereo material without being asked would be wrong.
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{ "monoInput", 1 },
+        "Mono Input",
+        false));
 
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         juce::ParameterID{ "cleanBoost", 1 },

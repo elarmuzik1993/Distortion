@@ -7,6 +7,7 @@ Full development history, newest first.
 ## Unreleased — Relicensed to GPL v3
 
 **Audio**
+- **Mono Input switch** (Settings). A bass or guitar on interface input 1 arrives on a stereo bus with the second channel silent, which plays back through one speaker. Switching this on copies the input across both channels so the source is centred. Default off, and the plugin never engages it on its own: a hard-panned source is legitimately silent on one side, and collapsing that unasked would wreck a mix. When it does see a sustained one-sided signal it highlights the control as a hint, without touching the audio.
 - **Mono-in / stereo-out is now supported.** A bass or guitar arrives on a single interface input, but the plugin previously required the input and output channel counts to match, so a mono source on a stereo track was processed on the left channel only and played back through one speaker. The mono input is now copied across the output channels before any processing, so a single-input instrument is centred.
 
 **UI**

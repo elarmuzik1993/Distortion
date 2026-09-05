@@ -281,6 +281,14 @@ public:
     // Atomic gain reduction for UI meter (in dB) - public for UI access
     std::atomic<float> currentGainReductionDB{ 0.0f };
     std::atomic<float> phaseCorrelation{ 1.0f };  // Phase correlation for UI meter (-1.0 to +1.0)
+
+    // True once one channel has carried signal while the other stayed silent for
+    // long enough that it is very unlikely to be musical content. Purely a UI hint
+    // for the Mono Input control - it never changes the audio, because a
+    // hard-panned source is legitimately silent on one side and collapsing it
+    // unasked would wreck a mix.
+    std::atomic<bool> monoSourceDetected{ false };
+    int monoDetectBlocks = 0;   // audio thread only; consecutive one-sided blocks
     std::atomic<float> lfoPhaseForUI{ 0.0f };     // LFO phase (0-1) for UI arc animation
 
     // Real-time safe debug flags (atomic, no logging in audio thread) - public for test access
@@ -498,6 +506,7 @@ private:
     std::atomic<float>* toneParam = nullptr;            // Post-distortion tone (2000-20000Hz)
     std::atomic<float>* waveshaperCleanParam = nullptr; // 0=Gritty (tone→waveshaper), 1=Clean (waveshaper→tone)
     std::atomic<float>* linearPhaseDryParam = nullptr;  // FIR linear-phase oversampling toggle (default OFF)
+    std::atomic<float>* monoInputParam = nullptr;       // copy channel 0 across the others (default OFF)
     std::atomic<float>* cleanBoostParam = nullptr;      // Clean boost on/off (pre-emphasis into distortion)
 
     // Compressor state variables (LA-2A optical cell simulation)
