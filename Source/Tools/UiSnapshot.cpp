@@ -78,6 +78,16 @@ void feedScope(PluginProcessor& proc)
     // A small offset keeps the two stereo traces distinguishable in the render.
     constexpr double rightPhaseOffset = 0.25;
 
+    // Drive the distortion. Without this the render is a picture of true bypass:
+    // distortionAmount defaults to 0 and compEnabled to false, so processBlock
+    // takes the bypass branch (PluginProcessor.cpp), which still feeds the scope
+    // - producing a clean sine that shows the plugin doing nothing at all.
+    // 65% on the default Brutal Fuzz clip is well past the 0.5% bypass threshold
+    // and gives visible saturation rather than a barely-bent sine.
+    constexpr float driveNormalised = 0.65f;   // range is 0-100, so this is 65%
+    if (auto* p = proc.parameters.getParameter("distortionAmount"))
+        p->setValueNotifyingHost(driveNormalised);
+
     juce::AudioBuffer<float> buffer(2, blockSize);
     juce::MidiBuffer midi;
 
