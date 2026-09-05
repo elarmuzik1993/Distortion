@@ -165,9 +165,18 @@ public:
             // target so the centre line eases in and out instead of strobing at
             // the 30 Hz refresh whenever the signal hovers around the threshold.
             {
-                const float peak = cachedBuffer.getMagnitude(0, cachedBuffer.getNumSamples());
-                const float target = peak > 0.002f ? 1.0f : 0.0f;   // ~-54 dBFS
-                signalPresence += (target - signalPresence) * 0.15f;
+                const int numSamples = cachedBuffer.getNumSamples();
+                float loudest = 0.0f;
+                for (int ch = 0; ch < 2; ++ch)
+                {
+                    const float peak = ch < cachedBuffer.getNumChannels()
+                                     ? cachedBuffer.getMagnitude(ch, 0, numSamples)
+                                     : 0.0f;
+                    const float target = peak > 0.002f ? 1.0f : 0.0f;   // ~-54 dBFS
+                    channelPresence[ch] += (target - channelPresence[ch]) * 0.15f;
+                    loudest = juce::jmax(loudest, channelPresence[ch]);
+                }
+                signalPresence = loudest;
             }
 
             // Rising zero-crossing trigger on left channel
@@ -198,9 +207,12 @@ private:
     juce::AudioBuffer<float> cachedBuffer;   // Use this for drawing
     bool stereoMode = true;
     int triggerOffset = 0;
-    // 0 = scope is idle, 1 = a waveform is on screen. Smoothed in timerCallback
-    // so the centre line fades rather than blinking between frames.
-    float signalPresence = 0.0f;
+    // 0 = channel is silent, 1 = it has a waveform. Tracked per channel, not
+    // across the buffer: a mono source leaves the other channel flat, and a flat
+    // channel drawn at full alpha is a hard line across the centre of the scope
+    // sitting next to the live one. Smoothed so traces fade rather than blink.
+    float channelPresence[2] = { 0.0f, 0.0f };
+    float signalPresence = 0.0f;   // max across channels, for summed mono mode
 
     // Crack layers, scaled to the full editor size by the editor; this component
     // samples the slice under its own bounds. extremeMix is the eased crossfade
@@ -266,19 +278,20 @@ private:
         return path;
     }
 
-    void strokeWithGlow(juce::Graphics& g, const juce::Path& path, juce::Colour colour, float mainAlpha)
+    void strokeWithGlow(juce::Graphics& g, const juce::Path& path, juce::Colour colour,
+                        float mainAlpha, float presence)
     {
         if (path.isEmpty()) return;
 
         // Silence is a flat buffer, which draws as a hard neon line straight
-        // across the middle of the scope - indistinguishable from a divider and
-        // the thing people actually see when nothing is playing. Fade the trace
-        // out with the signal so an idle scope draws no waveform at all.
-        if (signalPresence <= 0.001f) return;
+        // across the middle of the scope - indistinguishable from a divider.
+        // presence is per channel, so a mono source hides the silent channel's
+        // flat trace while the live one keeps drawing normally.
+        if (presence <= 0.001f) return;
 
-        g.setColour(colour.withAlpha(0.25f * signalPresence));
+        g.setColour(colour.withAlpha(0.25f * presence));
         g.strokePath(path, juce::PathStrokeType(3.0f));
-        g.setColour(colour.withAlpha(mainAlpha * signalPresence));
+        g.setColour(colour.withAlpha(mainAlpha * presence));
         g.strokePath(path, juce::PathStrokeType(1.0f));
     }
 
@@ -292,7 +305,8 @@ private:
             return cachedBuffer.getSample(channel, triggerOffset + idx);
         };
         strokeWithGlow(g, buildWaveformPath(numSamples, readSample), colour,
-                       channel == 0 ? 0.9f : 0.6f);
+                       channel == 0 ? 0.9f : 0.6f,
+                       channelPresence[juce::jlimit(0, 1, channel)]);
     }
 
     void drawMonoWithGlow(juce::Graphics& g, juce::Colour colour)
@@ -313,7 +327,7 @@ private:
                 return cachedBuffer.getSample(0, triggerOffset + idx);
             };
 
-        strokeWithGlow(g, buildWaveformPath(numSamples, readSample), colour, 0.9f);
+        strokeWithGlow(g, buildWaveformPath(numSamples, readSample), colour, 0.9f, signalPresence);
     }
 };
 
