@@ -133,12 +133,18 @@ public:
             g.drawLine(0, y, bounds.getWidth(), y, 1.0f);
         }
 
-        // Emphasized center line - the zero-amplitude reference. It eases back
-        // under signal so it stops competing with the trace, but never all the
-        // way out: it is what makes DC offset and asymmetric clipping (Tube
-        // Overdrive is asymmetric by design) readable against zero.
-        g.setColour(juce::Colours::grey.withAlpha(juce::jmap(signalPresence, 0.4f, 0.1f)));
-        g.drawLine(0, bounds.getHeight() / 2, bounds.getWidth(), bounds.getHeight() / 2, 1.5f);
+        // Emphasized center line - the zero-amplitude reference. It gives the
+        // idle scope its horizon, but once a waveform is up it reads as a divider
+        // cutting the trace in half, so it eases all the way out. A faint
+        // remainder was tried and is still plainly visible against the trace.
+        {
+            const float alpha = juce::jmap(signalPresence, 0.4f, 0.0f);
+            if (alpha > 0.0f)
+            {
+                g.setColour(juce::Colours::grey.withAlpha(alpha));
+                g.drawLine(0, bounds.getHeight() / 2, bounds.getWidth(), bounds.getHeight() / 2, 1.5f);
+            }
+        }
 
         // Draw waveforms with neon red glow effect
         if (stereoMode)
