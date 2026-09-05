@@ -625,6 +625,16 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addAndMakeVisible(eqButton);
     eqButton.onClick = [this]() { toggleGraphicEqOverlay(); };
 
+    // addChildComponent, not addAndMakeVisible: this one stays hidden until a mono
+    // source is detected or the switch is on. Clicking it flips the parameter, so
+    // the fix is one click from where the problem is visible.
+    addChildComponent(monoButton);
+    monoButton.onClick = [this]()
+    {
+        if (auto* p = audioProcessor.parameters.getParameter("monoInput"))
+            p->setValueNotifyingHost(monoButton.isActive() ? 0.0f : 1.0f);
+    };
+
     // Load UI settings — capture first-run state before loading
     const bool settingsFileExisted = getSettingsFile().existsAsFile();
     loadSettings();
@@ -1005,6 +1015,8 @@ void PluginEditor::resized()
     eqButton.setBounds(xyButton.getRight() + presetSpacing,
                        presetY, settingsBtnSize, settingsBtnSize);
 
+
+
     // Global Mix slider - directly below preset selector
     const int mixLabelWidth = S(28);
     const int mixSliderY = presetY + presetHeight + S(2);
@@ -1039,6 +1051,14 @@ void PluginEditor::resized()
 
     // LFO Enable Toggle - to the left of LFO tab
     lfoEnableToggle.setBounds(lfoTabX - toggleSize - S(4), presetY, toggleSize, toggleSize);
+
+    // Mono indicator. Anchored to the right-hand group rather than following the
+    // icon row: the icon row butts straight into the MONOLIT logo, and a fifth
+    // button there is drawn underneath it. This sits in the gap between the logo
+    // and the LFO toggle. The slot is laid out even while the button is hidden, so
+    // nothing shuffles when a mono source is detected.
+    monoButton.setBounds(lfoEnableToggle.getX() - presetSpacing - settingsBtnSize,
+                         presetY, settingsBtnSize, settingsBtnSize);
     lfoEnableLock.setBounds(lfoTabX - toggleSize - S(4) + toggleSize - S(12), presetY, S(12), S(12));
 
     auto contentArea = bounds;
@@ -1407,6 +1427,39 @@ void PluginEditor::timerCallback()
     // Advance the EXTREME crack crossfade (self-limiting: repaints only while the
     // fade is actually moving).
     advanceExtremeFade();
+
+    updateMonoIndicator();
+}
+
+void PluginEditor::updateMonoIndicator()
+{
+    auto* param = audioProcessor.parameters.getRawParameterValue("monoInput");
+    const bool on = param != nullptr && param->load() > 0.5f;
+    const bool detected = audioProcessor.monoSourceDetected.load(std::memory_order_relaxed);
+
+    // Shown while there is something to say. Staying visible when it is on matters:
+    // otherwise switching it on would make the control vanish and leave no way back
+    // except the Settings panel.
+    const bool shouldShow = on || detected;
+    if (monoButton.isVisible() != shouldShow)
+        monoButton.setVisible(shouldShow);
+
+    const bool wantsAttention = detected && ! on;
+    monoButton.setState(on, wantsAttention);
+
+    if (wantsAttention)
+    {
+        // ~1.1s cycle on the 60Hz tick. Triangle rather than a sine so the bright
+        // point is brief and the icon reads as blinking for attention.
+        monoPulsePhase += 1.0f / 66.0f;
+        if (monoPulsePhase >= 1.0f)
+            monoPulsePhase -= 1.0f;
+        monoButton.setPulsePhase(1.0f - std::abs(monoPulsePhase * 2.0f - 1.0f));
+    }
+    else
+    {
+        monoPulsePhase = 0.0f;
+    }
 }
 
 void PluginEditor::morphDistortionParameters(float x, float y)

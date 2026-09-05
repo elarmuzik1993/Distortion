@@ -854,6 +854,94 @@ private:
     bool active = false;
 };
 
+// Toolbar indicator for Mono Input. Two circles: apart when the plugin is
+// treating the input as stereo, overlapping when it is collapsing a mono source.
+// It only appears when there is something to say - a mono source has been
+// detected, or the switch is on - so it is never one more permanent icon.
+class MonoButton : public juce::Button
+{
+public:
+    MonoButton() : juce::Button("Mono Input") {}
+
+    // active: Mono Input is on. attention: a mono source was detected while it is
+    // off, which is the case worth interrupting someone for.
+    void setState(bool isActive, bool wantsAttention)
+    {
+        if (active != isActive || attention != wantsAttention)
+        {
+            active = isActive;
+            attention = wantsAttention;
+            repaint();
+        }
+    }
+
+    // 0..1, driven by the editor's existing 60Hz tick - no timer of its own.
+    void setPulsePhase(float phase)
+    {
+        if (! attention)
+            return;
+        pulse = phase;
+        repaint();
+    }
+
+    bool isActive() const { return active; }
+
+    void paintButton(juce::Graphics& g, bool isMouseOver, bool isButtonDown) override
+    {
+        auto bounds = getLocalBounds().toFloat().reduced(2.0f);
+
+        juce::Colour col = isButtonDown ? juce::Colours::white
+                         : isMouseOver  ? juce::Colour(0xFFFF4466)
+                                        : juce::Colour(0xFFFF0044);
+
+        // Pulsing is what actually catches an eye; colour alone reads as decoration.
+        float intensity = active ? 1.0f : 0.45f;
+        if (attention)
+            intensity = 0.5f + 0.5f * pulse;
+
+        // Frame (matches ScopeButton / XyButton / EqButton)
+        g.setColour(col.withAlpha(intensity * 0.6f));
+        g.drawRoundedRectangle(bounds, 2.0f, 1.0f);
+
+        // Two circles. Apart reads as two channels; overlapping reads as one
+        // source in both - which is exactly what the switch does.
+        // Radius comes from the WIDTH: two circles side by side span 4.2r, so
+        // sizing from the height overflows the icon area and both states end up
+        // looking like the same cramped blob.
+        auto area = bounds.reduced(bounds.getWidth() * 0.14f, bounds.getHeight() * 0.22f);
+        const float r  = juce::jmin(area.getHeight() * 0.5f, area.getWidth() / 4.4f);
+        const float cy = area.getCentreY();
+
+        // Centre distance carries the meaning: clearly apart for two channels,
+        // well inside each other for one source in both.
+        const float d  = active ? r * 1.05f : r * 2.2f;
+        const float lx = area.getCentreX() - d * 0.5f;
+        const float rx = area.getCentreX() + d * 0.5f;
+
+        g.setColour(col.withAlpha(intensity));
+        g.drawEllipse(lx - r, cy - r, r * 2.0f, r * 2.0f, 1.2f);
+        g.drawEllipse(rx - r, cy - r, r * 2.0f, r * 2.0f, 1.2f);
+
+        // Merged: fill the lens where they cross, so "one signal" is unmistakable
+        // rather than just two rings that happen to touch.
+        if (active)
+        {
+            // The lens where the two circles cross: width 2r - d, height set by the
+            // chord at that separation. Filling it is what makes "one signal in
+            // both" read at 24px rather than two rings that happen to touch.
+            const float lensW = 2.0f * r - d;
+            const float lensH = 2.0f * std::sqrt(juce::jmax(0.0f, r * r - (d * 0.5f) * (d * 0.5f)));
+            g.setColour(col.withAlpha(intensity * 0.4f));
+            g.fillEllipse(area.getCentreX() - lensW * 0.5f, cy - lensH * 0.5f, lensW, lensH);
+        }
+    }
+
+private:
+    bool active = false;
+    bool attention = false;
+    float pulse = 0.0f;
+};
+
 // Settings state for UI-only settings persisted via XML
 struct SettingsState
 {
@@ -2409,6 +2497,8 @@ private:
     ScopeButton scopeButton;  // Toolbar duplicate of the Settings oscilloscope toggle
     XyButton xyButton;        // Toolbar quick-toggle for the XY Morph overlay
     EqButton eqButton;        // Toolbar quick-toggle for the Graphic EQ overlay
+    MonoButton monoButton;    // Appears only while a mono source is detected, or Mono Input is on
+    float monoPulsePhase = 0.0f;
     SettingsState settingsState;
 
     void showSettingsOverlay();
@@ -2421,6 +2511,7 @@ private:
     void applyWindowScale(int scalePercent);
     void rebuildScaledTextureIfNeeded();
     void advanceExtremeFade();
+    void updateMonoIndicator();
     void loadSettings();
     void saveSettings();
    #if defined (DISTORTION_UI_SNAPSHOT) && DISTORTION_UI_SNAPSHOT
