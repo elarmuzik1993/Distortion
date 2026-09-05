@@ -14,7 +14,7 @@ oscilloscope instead of hunting through menus and numeric fields.
 
 <img src="docs/images/scale-100-extreme.png" alt="Sledge Distortion plugin interface" width="880">
 
-<sub>Shown with the EXTREME texture mode enabled</sub>
+<sub>Shown with the "EXTREME" mode enabled</sub>
 
 </div>
 
