@@ -158,6 +158,7 @@ private:
     void testWetDryMix();
     void testEmptyBufferHandling();
     void testOutputGain();
+    void testMonoInStereoOut();
 };
 
 /** Null-test gate for PR-8 processBlock decomposition — bit-exact determinism check */

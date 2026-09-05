@@ -740,7 +740,12 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     currentSampleRate = static_cast<float>(sampleRate);
     lfoPhase = 0.0f;  // Reset LFO phase
 
-    const int numChannels = std::max(1, getTotalNumInputChannels());
+    // Sized for the widest layout we can be handed, not just the input count:
+    // mono-in / stereo-out gives processBlock a two-channel buffer while
+    // getTotalNumInputChannels() is 1, and every internal buffer and DSP spec
+    // below has to be wide enough for what actually gets processed.
+    const int numChannels = std::max(1, std::max(getTotalNumInputChannels(),
+                                                 getTotalNumOutputChannels()));
 
     // Output gain is applied AFTER downsampling at normal sample rate
     smoothedOutputGain.reset(sampleRate, DSPConstants::GAIN_SMOOTH_TIME_S);
@@ -1019,9 +1024,16 @@ bool PluginProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
         && layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
         return false;
 
-    // This checks if the input layout matches the output layout
 #if ! JucePlugin_IsSynth
-    if (layouts.getMainOutputChannelSet() != layouts.getMainInputChannelSet())
+    // mono->mono and stereo->stereo, plus mono->stereo. A bass or guitar arrives
+    // on one interface input and is a mono source, but players insert it into a
+    // stereo path; refusing that layout leaves the signal on the left channel
+    // only. processBlock copies the mono input across the extra output channels.
+    const auto in  = layouts.getMainInputChannelSet();
+    const auto out = layouts.getMainOutputChannelSet();
+    const bool monoToStereo = in == juce::AudioChannelSet::mono()
+                           && out == juce::AudioChannelSet::stereo();
+    if (in != out && ! monoToStereo)
         return false;
 #endif
 
@@ -1171,7 +1183,10 @@ void PluginProcessor::rebuildOversampling(double sampleRate, int samplesPerBlock
 {
     const int stages = requestedOversamplingStages.load(std::memory_order_acquire);
     const bool linearPhase = linearPhaseDryParam && (linearPhaseDryParam->load() > 0.5f);
-    const int numChannels = std::max(1, getTotalNumInputChannels());
+    // Widest layout, matching prepareToPlay - see the note there. An oversampler
+    // built for 1 channel would be handed 2 under mono-in / stereo-out.
+    const int numChannels = std::max(1, std::max(getTotalNumInputChannels(),
+                                                 getTotalNumOutputChannels()));
     const double sr = sampleRate;
     const int currentBlockSize = samplesPerBlock;
     const bool needsRebuild = stages != currentOversamplingStages
@@ -1352,6 +1367,21 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Early return for empty buffers
     if (buffer.getNumSamples() == 0 || buffer.getNumChannels() == 0)
         return;
+
+    // Mono in, stereo out: the host hands us a buffer with as many channels as
+    // the OUTPUT bus, but only the input ones hold audio - the rest are
+    // undefined. Copy the mono input across them so a single-input source (a
+    // bass or guitar on interface input 1) is centred instead of arriving on the
+    // left speaker alone, and so the whole chain below sees two real channels.
+    //
+    // This runs before the anomaly probe: that probe reads one frame from every
+    // channel, and sampling an uninitialised channel could report a non-finite
+    // block and raise a false diagnostic.
+    {
+        const int firstUnwritten = juce::jmax(1, getTotalNumInputChannels());
+        for (int ch = firstUnwritten; ch < buffer.getNumChannels(); ++ch)
+            buffer.copyFrom(ch, 0, buffer, 0, 0, buffer.getNumSamples());
+    }
 
     // RT-safe anomaly probe (USE-53): sample the INPUT buffer's first frame per channel.
     // isfinite is cheap; placed before the bypass/safety early-returns so every non-empty

@@ -6,6 +6,12 @@ Full development history, newest first.
 
 ## Unreleased — Relicensed to GPL v3
 
+**Audio**
+- **Mono-in / stereo-out is now supported.** A bass or guitar arrives on a single interface input, but the plugin previously required the input and output channel counts to match, so a mono source on a stereo track was processed on the left channel only and played back through one speaker. The mono input is now copied across the output channels before any processing, so a single-input instrument is centred.
+
+**UI**
+- **Nothing is drawn across the middle of the oscilloscope any more.** Silence is a flat buffer, so with no audio the trace drew as a hard line through the centre, and the zero-reference graticule sat under it — together they read as a divider rather than a scope. Signal presence is now tracked per channel: an idle scope draws no trace, a mono source no longer leaves a flat line beside its live channel, and the only thing crossing the centre is the waveform.
+
 **Licensing**
 - **Sledge Distortion is now free software under the GNU General Public License v3**, replacing PolyForm Noncommercial 1.0.0. JUCE 7 offers either paid tier-leveled terms or the GPL v3, and this project takes the GPL route — which is also why a permissive licence is not an option while the build links the non-ISC JUCE modules. Practical effects: the source may be used, modified and redistributed commercially provided derivatives stay GPL v3 with source available, and JUCE's $50k revenue limit no longer applies.
 - **Distribution model**: pay-what-you-want. The GPL guarantees the freedom to use and share the plugin whether or not anyone pays; what is sold is prebuilt, ready-to-install binaries and continued development.

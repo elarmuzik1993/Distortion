@@ -1632,6 +1632,60 @@ void ProcessBlockTests::runTest()
 
     beginTest("Output Gain");
     testOutputGain();
+
+    beginTest("Mono In / Stereo Out");
+    testMonoInStereoOut();
+}
+
+void ProcessBlockTests::testMonoInStereoOut()
+{
+    // A bass or guitar arrives on one interface input. If the plugin refuses the
+    // mono-in / stereo-out layout, or accepts it and leaves the second channel
+    // alone, the player hears the signal in the left speaker only.
+    PluginProcessor processor;
+
+    juce::AudioProcessor::BusesLayout layout;
+    layout.inputBuses.add(juce::AudioChannelSet::mono());
+    layout.outputBuses.add(juce::AudioChannelSet::stereo());
+    expect(processor.setBusesLayout(layout), "mono-in / stereo-out layout must be supported");
+    expectEquals(processor.getTotalNumInputChannels(), 1, "layout should give one input channel");
+    expectEquals(processor.getTotalNumOutputChannels(), 2, "layout should give two output channels");
+
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
+    processor.prepareToPlay(44100.0, 512);
+    setParameter(processor.parameters, "distortionAmount", 50.0f);
+    // Tube Overdrive, not the default Brutal Fuzz: that clip adds per-channel
+    // analog noise by design, so two identical channels legitimately diverge and
+    // an exact comparison could not be made.
+    setParameter(processor.parameters, "clipType", 1.0f);
+
+    // The host sizes the buffer to the output bus, so channel 1 arrives holding
+    // whatever was in that memory. A sentinel stands in for that: if the value
+    // survives, the mono input was never copied across.
+    auto buffer = generateSineWave(220.0, 44100.0, 512, 0.5f, 1);
+    buffer.setSize(2, 512, true, false, true);
+    for (int i = 0; i < 512; ++i)
+        buffer.setSample(1, i, 12345.0f);
+
+    juce::MidiBuffer midi;
+    processor.processBlock(buffer, midi);
+
+    float maxDiff   = 0.0f;
+    float peak      = 0.0f;
+    float rightPeak = 0.0f;
+    for (int i = 0; i < 512; ++i)
+    {
+        const float l = buffer.getSample(0, i);
+        const float r = buffer.getSample(1, i);
+        expect(std::isfinite(l) && std::isfinite(r), "output must stay finite");
+        maxDiff   = juce::jmax(maxDiff, std::abs(l - r));
+        peak      = juce::jmax(peak, std::abs(l));
+        rightPeak = juce::jmax(rightPeak, std::abs(r));
+    }
+
+    expect(peak > 0.001f, "left channel should carry the processed signal");
+    expect(rightPeak > 0.001f, "right channel must not be silent - a mono source reaches both speakers");
+    expect(maxDiff < 1.0e-6f, "both output channels must match, so a mono source is centred");
 }
 
 void ProcessBlockTests::testTrueBypass()
