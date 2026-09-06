@@ -40,7 +40,7 @@ The built plugin lands in `build/Distortion_artefacts/Release/VST3/`.
 
 ## Before you open a pull request
 
-**Run the tests.** The suite is a JUCE `UnitTest` runner covering DSP,
+**Run the tests.** 3100+ assertions, a JUCE `UnitTest` runner covering DSP,
 compression, LFO, `processBlock`, thread safety, sample rates from 44.1k to 192k,
 the graphic EQ, state I/O, factory presets and settings persistence.
 
