@@ -83,10 +83,15 @@ jobs:
       run: |
         build/DistortionTests_artefacts/${{ env.BUILD_TYPE }}/DistortionTests.exe
 
+    # pluginval is pinned rather than tracked at 'latest'. An unpinned validator
+    # changes underneath the pipeline, so a red run cannot be told apart from a
+    # tool bump and a green one is not reproducible. v1.0.4 is byte-identical to
+    # what 'latest' served when this was pinned, so this froze the binary without
+    # changing it. Note the run is still seeded randomly per invocation (see #44).
     - name: Validate with pluginval (strictness 10)
       shell: bash
       run: |
-        curl -fsSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip
+        curl -fsSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_Windows.zip
         unzip -q -o pluginval.zip
         ./pluginval.exe --strictness-level 10 --timeout-ms 600000 --validate "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Sledge Distortion.vst3"
 
@@ -315,9 +320,10 @@ jobs:
       run: |
         ./build/DistortionTests_artefacts/${{ env.BUILD_TYPE }}/DistortionTests
 
+    # Pinned validator - see the note in build-windows.
     - name: Validate with pluginval (strictness 10)
       run: |
-        curl -fsSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Linux.zip
+        curl -fsSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_Linux.zip
         unzip -q -o pluginval.zip
         chmod +x pluginval
         xvfb-run -a ./pluginval --strictness-level 10 --timeout-ms 600000 --validate "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Sledge Distortion.vst3"
@@ -459,9 +465,10 @@ jobs:
             || { echo "ERROR: $slice is not universal (arm64 + x86_64)"; exit 1; }
         done
 
+    # Pinned validator - see the note in build-windows.
     - name: Validate with pluginval (strictness 10)
       run: |
-        curl -fsSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+        curl -fsSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_macOS.zip
         unzip -q -o pluginval.zip
         PV="pluginval.app/Contents/MacOS/pluginval"
         "$PV" --strictness-level 10 --timeout-ms 600000 --validate "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Sledge Distortion.vst3"
