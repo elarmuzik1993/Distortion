@@ -105,7 +105,15 @@ licence. This is not a free choice: JUCE 7 is offered under either paid terms or
 the GPL v3, and this project takes the GPL route, so a permissive licence is not
 available while the build links the non-ISC JUCE modules.
 
-You keep the copyright on what you write. There is no CLA.
+**You keep the copyright on what you write.** There is a short
+[Contributor Licence Agreement](CLA.md) — one page, no signature, no bot. It is a
+*licence*, not an assignment: you keep your rights and can reuse your own work
+anywhere. What it grants is permission broad enough to relicense the project if
+that is ever forced — JUCE is paid-or-GPL, and one unreachable contributor could
+otherwise freeze the licence permanently.
+
+Opening a pull request means you agree to it. If you would rather not, say so in
+the PR — for a typo or a docs fix I would rather have the fix than the paperwork.
 
 ## Where to read next
 

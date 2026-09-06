@@ -9,6 +9,10 @@
 - [ ] **Phase coherence preserved**: Dry/wet alignment maintained across DSP changes.
 - [ ] **Bypass compensation**: PDC and latency reporting updated if DSP latency changed.
 
+## Contributor Licence Agreement
+
+- [ ] I have read and agree to the [CLA](../CLA.md). *(You keep your copyright — it grants permission to relicense if the project ever has to move off the GPL. Not needed for typo or docs-only fixes.)*
+
 ## Testing & Verification
 
 - [ ] `cmake --build build --target DistortionTests` runs with zero failures.

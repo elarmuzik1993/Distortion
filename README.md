@@ -152,6 +152,10 @@ If you're unsure whether an idea fits, open an issue and ask first — it's
 cheaper than finding out in review. Starter-sized work gets labelled
 `good first issue`.
 
+There's a one-page [CLA](CLA.md) — you keep your copyright; it grants permission
+to relicense the project if that's ever forced. Opening a PR means you agree to
+it, and it isn't needed for typo or docs fixes.
+
 ## Privacy & bug reporting
 
 Sledge Distortion can send **anonymous** bug reports (version, OS, host, sample
