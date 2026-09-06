@@ -83,10 +83,15 @@ jobs:
       run: |
         build/DistortionTests_artefacts/${{ env.BUILD_TYPE }}/DistortionTests.exe
 
+    # pluginval is pinned rather than tracked at 'latest'. An unpinned validator
+    # changes underneath the pipeline, so a red run cannot be told apart from a
+    # tool bump and a green one is not reproducible. v1.0.4 is byte-identical to
+    # what 'latest' served when this was pinned, so this froze the binary without
+    # changing it. Note the run is still seeded randomly per invocation (see #44).
     - name: Validate with pluginval (strictness 10)
       shell: bash
       run: |
-        curl -fsSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip
+        curl -fsSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_Windows.zip
         unzip -q -o pluginval.zip
         ./pluginval.exe --strictness-level 10 --timeout-ms 600000 --validate "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Sledge Distortion.vst3"
 
@@ -315,9 +320,10 @@ jobs:
       run: |
         ./build/DistortionTests_artefacts/${{ env.BUILD_TYPE }}/DistortionTests
 
+    # Pinned validator - see the note in build-windows.
     - name: Validate with pluginval (strictness 10)
       run: |
-        curl -fsSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Linux.zip
+        curl -fsSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_Linux.zip
         unzip -q -o pluginval.zip
         chmod +x pluginval
         xvfb-run -a ./pluginval --strictness-level 10 --timeout-ms 600000 --validate "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Sledge Distortion.vst3"
@@ -374,16 +380,20 @@ jobs:
         retention-days: 30
 
   build-macos:
-    # GitHub bills macOS runners at 10x minutes (Linux 1x, Windows 2x), so this
-    # job is the most expensive thing in the workflow by a wide margin. It runs
-    # only where it is load-bearing: release tags, and on-demand via the Actions
-    # UI. The release job below needs it, and tags satisfy this condition, so
-    # publishing still gets a validated macOS build.
+    # Runs on every push and PR, alongside Windows and Linux.
     #
-    # Trade-off: macOS regressions surface at tag time rather than on the PR.
-    # Run the workflow manually before tagging if a change touches the macOS
-    # path (CMakeLists, installer/macos/, or anything platform-conditional).
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    # This job used to be gated to tags and manual dispatch because GitHub bills
+    # macOS runners at 10x minutes (Linux 1x, Windows 2x). That multiplier only
+    # applies to metered minutes: standard GitHub-hosted runners are free and
+    # unmetered on public repositories, whatever the OS, so the gate was costing
+    # coverage and saving nothing.
+    #
+    # It cost real coverage. macOS is the only platform building a universal
+    # binary (arm64 + x86_64) and the only one running auval, and none of that
+    # was exercised until a release tag - so a tag was the first thing to test
+    # the macOS path, which is the failure mode RELEASE_CHECKLIST.md exists to
+    # avoid. It is also the platform most exposed to SDK drift, since pinned
+    # JUCE 7.0.12 uses APIs that newer macOS SDKs have removed.
     runs-on: macos-14
 
     # Apple Developer ID signing + notarization creds (set as repo secrets to
@@ -459,9 +469,10 @@ jobs:
             || { echo "ERROR: $slice is not universal (arm64 + x86_64)"; exit 1; }
         done
 
+    # Pinned validator - see the note in build-windows.
     - name: Validate with pluginval (strictness 10)
       run: |
-        curl -fsSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+        curl -fsSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_macOS.zip
         unzip -q -o pluginval.zip
         PV="pluginval.app/Contents/MacOS/pluginval"
         "$PV" --strictness-level 10 --timeout-ms 600000 --validate "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Sledge Distortion.vst3"
