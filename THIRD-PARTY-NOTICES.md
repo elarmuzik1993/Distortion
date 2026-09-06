@@ -736,3 +736,12 @@ DEALINGS IN THE FONT SOFTWARE.
 with the factory preset bank, are original works
 Copyright © 2026 Boris Miscenco, distributed under the GNU General Public
 License v3 as part of this project.
+
+**Trademarks.** "Sledge Distortion", "Monolit Beatz" and the Monolit Beatz logo
+are trademarks of Boris Miscenco. The artwork above is licensed under the GPL v3
+as copyrighted work, but that licence grants no trademark rights: GPL v3 §7(e)
+permits withholding permission to use names, trademarks and logos, and that
+permission is withheld. A modified version of this plugin must not be presented
+as Sledge Distortion, and must not use the Monolit Beatz name or logo in a way
+that suggests it originates from or is endorsed by Boris Miscenco. Redistributing
+the work unmodified is unaffected.

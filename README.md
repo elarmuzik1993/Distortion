@@ -190,6 +190,27 @@ To pay, or for anything else — commercial questions, bug reports you would
 rather not file in the issue tracker, or licensing under other terms — get in
 touch at **aidevblock@gmail.com**.
 
+### Trademarks
+
+**Sledge Distortion**, **Monolit Beatz** and the Monolit Beatz logo are
+trademarks of Boris Miscenco.
+
+The GPL v3 covers the *code*. It does not grant rights to the names or the logo —
+GPL v3 §7(e) expressly permits withholding trademark permission, and that
+permission is withheld here.
+
+You are free to fork this project, modify it, and distribute or sell your version
+under the GPL. What you may not do is present it as Sledge Distortion, or use the
+Monolit Beatz name or logo in a way that suggests the result comes from me or is
+endorsed by me. **Give your fork its own name and its own mark.**
+
+This is not a restriction on the software licence and adds no condition to the
+GPL. It is a separate right, under a separate body of law, that the GPL leaves
+untouched. Unmodified builds may of course be redistributed as they are, names
+and all — that is the point of the licence.
+
+If you want to use the name or logo for something else, ask: **aidevblock@gmail.com**.
+
 ---
 
 Copyright © 2026 Boris Miscenco · [Monolit Beatz](https://monolitbeatz.com)
