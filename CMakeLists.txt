@@ -62,6 +62,12 @@ else()
         "#pragma once\n#define GIT_VERSION_STRING \"v2.3\"\n")
 endif()
 
+function(add_git_version_dependency target)
+    if(TARGET GitVersion)
+        add_dependencies(${target} GitVersion)
+    endif()
+endfunction()
+
 # Plugin sources (shared between plugin and tests)
 set(PLUGIN_SOURCES
     Source/PluginProcessor.cpp
@@ -124,9 +130,7 @@ juce_add_plugin(Distortion
 )
 
 target_sources(Distortion PRIVATE ${PLUGIN_SOURCES})
-if(TARGET GitVersion)
-    add_dependencies(Distortion GitVersion)
-endif()
+add_git_version_dependency(Distortion)
 
 # Generate JuceHeader.h for Projucer-style compatibility
 juce_generate_juce_header(Distortion)
@@ -241,6 +245,7 @@ target_sources(DistortionTests PRIVATE
     ${PLUGIN_SOURCES}
     ${TEST_SOURCES}
 )
+add_git_version_dependency(DistortionTests)
 
 # Generate JuceHeader.h for Projucer-style compatibility
 juce_generate_juce_header(DistortionTests)
@@ -306,6 +311,7 @@ target_sources(DistortionRender PRIVATE
     ${PLUGIN_SOURCES}
     Source/Tools/RenderHarness.cpp
 )
+add_git_version_dependency(DistortionRender)
 
 juce_generate_juce_header(DistortionRender)
 
@@ -357,6 +363,7 @@ target_sources(DistortionUiSnapshot PRIVATE
     ${PLUGIN_SOURCES}
     Source/Tools/UiSnapshot.cpp
 )
+add_git_version_dependency(DistortionUiSnapshot)
 
 juce_generate_juce_header(DistortionUiSnapshot)
 
@@ -414,6 +421,7 @@ target_sources(DistortionSoak PRIVATE
     ${PLUGIN_SOURCES}
     Source/Tools/SoakHarness.cpp
 )
+add_git_version_dependency(DistortionSoak)
 
 juce_generate_juce_header(DistortionSoak)
 
