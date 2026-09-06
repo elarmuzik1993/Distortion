@@ -4,7 +4,7 @@ Sledge Distortion is a **VST3** plugin on every platform, plus **AU** and a
 **Standalone** app on macOS. Install it, then load it on a track inside your DAW.
 
 > **Is it safe? Why does my OS warn me?**
-> Sledge is a free indie release and the builds are **not yet code-signed**
+> Sledge is free software under the GPL v3 and the builds are **not yet code-signed**
 > (signing is a paid certificate we'll add as the plugin grows). Unsigned does
 > **not** mean unsafe — it just means your OS can't verify the publisher name,
 > so it shows a caution prompt. Every release is built in public on GitHub
@@ -90,12 +90,21 @@ natively on both Apple Silicon and Intel.
 ## Linux
 
 1. Download `SledgeDistortion-<version>-Linux.tar.gz`.
-2. Unpack it into your VST3 folder:
+2. Unpack it, then move the plugin into your VST3 folder:
    ```bash
    mkdir -p ~/.vst3
-   tar -xzf SledgeDistortion-*-Linux.tar.gz -C ~/.vst3
+   tar -xzf SledgeDistortion-*-Linux.tar.gz
+   mv SledgeDistortion-*-Linux/"Sledge Distortion.vst3" ~/.vst3/
    ```
+   The archive unpacks into a single `SledgeDistortion-<version>-Linux/` folder,
+   so extract it first and move the bundle across — extracting straight into
+   `~/.vst3` would bury the plugin a level too deep for some hosts and leave the
+   licence files loose in your plugin folder.
 3. Rescan plugins in your DAW. Done.
+
+The folder you unpacked also holds `LICENSE.txt` and `THIRD-PARTY-NOTICES.md`.
+Copies of both travel inside the `.vst3` bundle as well, so the terms stay with
+the plugin wherever it ends up.
 
 No signing prompts on Linux.
 

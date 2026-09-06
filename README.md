@@ -32,7 +32,10 @@ app** on macOS.
 ## Install
 
 Grab the build for your platform from the
-[latest release](https://github.com/elarmuzik1993/Distortion/releases).
+[latest release](https://github.com/elarmuzik1993/Distortion/releases/latest).
+**[`INSTALL.md`](INSTALL.md) is the step-by-step guide** — per-platform
+instructions, how to get past the unsigned-build prompts, and how to verify your
+download against `SHA256SUMS`.
 
 | Platform | What to run | Where it lands |
 |---|---|---|
@@ -46,9 +49,10 @@ Windows 10 installs. If you use the plain ZIP instead, install
 [the runtime](https://aka.ms/vs/17/release/vc_redist.x64.exe) yourself.
 
 > **Builds are currently unsigned.** On Windows, SmartScreen shows an
-> "unrecognised app" warning — **More info → Run anyway**. On macOS, right-click
-> the `.pkg` → **Open** to get past Gatekeeper. Code-signing is wired into CI and
-> switches on when the certificates exist.
+> "unrecognised app" warning — **More info → Run anyway**, or use the ZIP, which
+> avoids the prompt entirely. On macOS, right-click the `.pkg` → **Open**, then
+> clear the quarantine flag — [`INSTALL.md`](INSTALL.md) has the exact commands.
+> Code-signing is wired into CI and switches on when the certificates exist.
 
 Requires 64-bit Windows 10+, macOS 11+, or a Linux distro with ALSA. ARM64
 Windows works through x64 emulation; macOS builds are universal (arm64 +
