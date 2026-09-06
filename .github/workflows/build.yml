@@ -58,7 +58,7 @@ jobs:
         echo "dev version: $VER"
 
     - name: Setup Python
-      uses: actions/setup-python@39cd1474dd08734594f0db9846050af33939634d # v5.3.0
+      uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
       with:
         python-version: '3.11'
 
@@ -92,7 +92,7 @@ jobs:
 
     - name: Sign VST3 (Azure Trusted Signing)
       if: env.AZURE_CLIENT_ID != ''
-      uses: azure/trusted-signing-action@3f66c6b24d7756f70a59a7f34f4340d859b89736 # v0.5.9
+      uses: azure/trusted-signing-action@bb15ca63eb5548cc306f4f335c5617bb414abcad # v0.5.9
       with:
         azure-tenant-id: ${{ env.AZURE_TENANT_ID }}
         azure-client-id: ${{ env.AZURE_CLIENT_ID }}
@@ -126,7 +126,7 @@ jobs:
 
     - name: Sign installer (Azure Trusted Signing)
       if: env.AZURE_CLIENT_ID != ''
-      uses: azure/trusted-signing-action@3f66c6b24d7756f70a59a7f34f4340d859b89736 # v0.5.9
+      uses: azure/trusted-signing-action@bb15ca63eb5548cc306f4f335c5617bb414abcad # v0.5.9
       with:
         azure-tenant-id: ${{ env.AZURE_TENANT_ID }}
         azure-client-id: ${{ env.AZURE_CLIENT_ID }}
@@ -602,25 +602,25 @@ jobs:
 
     steps:
     - name: Download Windows installer
-      uses: actions/download-artifact@fa2a9010641654f639b319853fe77b1981f7334e # v4.1.8
+      uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
       with:
         name: SledgeDistortion-Installer-Windows
         path: release
 
     - name: Download Windows ZIP
-      uses: actions/download-artifact@fa2a9010641654f639b319853fe77b1981f7334e # v4.1.8
+      uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
       with:
         name: SledgeDistortion-Windows-zip
         path: release
 
     - name: Download Linux tarball
-      uses: actions/download-artifact@fa2a9010641654f639b319853fe77b1981f7334e # v4.1.8
+      uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
       with:
         name: SledgeDistortion-Linux-tarball
         path: release
 
     - name: Download macOS installer
-      uses: actions/download-artifact@fa2a9010641654f639b319853fe77b1981f7334e # v4.1.8
+      uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
       with:
         name: SledgeDistortion-Installer-macOS
         path: release
@@ -630,7 +630,7 @@ jobs:
     # reaching the release page. Adding *.zip below without this would publish
     # the Windows zip only and leave macOS users on the highest-friction path.
     - name: Download macOS ZIP
-      uses: actions/download-artifact@fa2a9010641654f639b319853fe77b1981f7334e # v4.1.8
+      uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
       with:
         name: SledgeDistortion-macOS-zip
         path: release
@@ -644,7 +644,7 @@ jobs:
         cat SHA256SUMS
 
     - name: Create GitHub Release
-      uses: softprops/action-gh-release@c95fe0f20b7003c74f73266f101210644ab1145d # v2.1.0
+      uses: softprops/action-gh-release@01570a1f39cb168c169c802c3bceb9e93fb10974 # v2.1.0
       with:
         files: |
           release/*.exe
