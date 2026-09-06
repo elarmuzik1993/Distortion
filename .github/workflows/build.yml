@@ -380,16 +380,20 @@ jobs:
         retention-days: 30
 
   build-macos:
-    # GitHub bills macOS runners at 10x minutes (Linux 1x, Windows 2x), so this
-    # job is the most expensive thing in the workflow by a wide margin. It runs
-    # only where it is load-bearing: release tags, and on-demand via the Actions
-    # UI. The release job below needs it, and tags satisfy this condition, so
-    # publishing still gets a validated macOS build.
+    # Runs on every push and PR, alongside Windows and Linux.
     #
-    # Trade-off: macOS regressions surface at tag time rather than on the PR.
-    # Run the workflow manually before tagging if a change touches the macOS
-    # path (CMakeLists, installer/macos/, or anything platform-conditional).
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    # This job used to be gated to tags and manual dispatch because GitHub bills
+    # macOS runners at 10x minutes (Linux 1x, Windows 2x). That multiplier only
+    # applies to metered minutes: standard GitHub-hosted runners are free and
+    # unmetered on public repositories, whatever the OS, so the gate was costing
+    # coverage and saving nothing.
+    #
+    # It cost real coverage. macOS is the only platform building a universal
+    # binary (arm64 + x86_64) and the only one running auval, and none of that
+    # was exercised until a release tag - so a tag was the first thing to test
+    # the macOS path, which is the failure mode RELEASE_CHECKLIST.md exists to
+    # avoid. It is also the platform most exposed to SDK drift, since pinned
+    # JUCE 7.0.12 uses APIs that newer macOS SDKs have removed.
     runs-on: macos-14
 
     # Apple Developer ID signing + notarization creds (set as repo secrets to
