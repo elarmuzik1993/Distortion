@@ -1,0 +1,68 @@
+name: Bug Report
+description: Report a bug, crash, or unexpected behavior in Sledge Distortion
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please ensure you have checked existing issues first.
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - Windows 10/11 (x64)
+        - macOS (Apple Silicon arm64)
+        - macOS (Intel x86_64)
+        - Linux (x86_64)
+    validations:
+      required: true
+  - type: dropdown
+    id: format
+    attributes:
+      label: Plugin Format
+      options:
+        - VST3
+        - AU (macOS only)
+        - Standalone App
+    validations:
+      required: true
+  - type: input
+    id: daw
+    attributes:
+      label: DAW / Host & Version
+      placeholder: e.g. Ableton Live 12.0.5, Reaper 7.18, FL Studio 21.2, Logic Pro 11
+    validations:
+      required: true
+  - type: input
+    id: audio_settings
+    attributes:
+      label: Sample Rate & Buffer Size
+      placeholder: e.g. 44.1 kHz, 256 samples
+    validations:
+      required: false
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Steps to reproduce the behavior.
+      placeholder: |
+        1. Insert Sledge Distortion on a track
+        2. Enable EXTREME clip character
+        3. Switch Oscilloscope overlay to Graphic EQ
+        4. See error...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs Actual Behavior
+    validations:
+      required: false

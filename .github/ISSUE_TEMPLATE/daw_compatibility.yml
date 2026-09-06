@@ -1,0 +1,40 @@
+name: DAW Compatibility Report
+description: Share test results or host compatibility findings for Sledge Distortion
+labels: ["daw-compatibility", "qa"]
+body:
+  - type: input
+    id: daw_name
+    attributes:
+      label: Host / DAW Name & Version
+      placeholder: e.g. Bitwig Studio 5.1.9, Cubase Pro 13, Studio One 6.5
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - Windows 10/11
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux
+    validations:
+      required: true
+  - type: dropdown
+    id: status
+    attributes:
+      label: Compatibility Status
+      options:
+        - Works Perfectly (PASS)
+        - Minor Cosmetic / Layout Issue
+        - Audio Anomaly / Automation Glitch
+        - Fails Validation / Host Crash
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Test Details & Observations
+      description: Notes on automation, preset saving, resizing, transport sync (LFO), or pluginval pass.
+    validations:
+      required: true
