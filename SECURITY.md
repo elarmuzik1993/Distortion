@@ -13,7 +13,7 @@ next tagged release.
 ## Reporting a vulnerability
 
 **Please do not open a public issue for a security problem.** Report it privately
-to **elar.muzik@gmail.com** and give me a chance to fix it before it is public.
+to **aidevblock@gmail.com** and give me a chance to fix it before it is public.
 
 Useful things to include: what you found, how to reproduce it, the plugin version
 and format (VST3 / AU / Standalone), your OS, and what an attacker could actually

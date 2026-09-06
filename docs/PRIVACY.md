@@ -61,4 +61,4 @@ loading).
 - Manual reports are only ever sent when you click **Send**.
 - To clear the local queue, delete the `reports/` folder shown above.
 
-*Questions: contact Monolit Beatz (elar.muzik@gmail.com).*
+*Questions: contact Monolit Beatz (aidevblock@gmail.com).*
