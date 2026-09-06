@@ -139,7 +139,7 @@ jobs:
         files-folder-recurse: false
 
     - name: Upload Windows installer
-      uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: SledgeDistortion-Installer-Windows
         path: dist/*.exe
@@ -154,7 +154,7 @@ jobs:
         cp -r "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Sledge Distortion.vst3" artifact/Windows/
 
     - name: Upload Windows VST3
-      uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: SledgeDistortion-VST3-Windows
         path: artifact/Windows/Sledge Distortion.vst3
@@ -237,7 +237,7 @@ jobs:
         Get-ChildItem "SledgeDistortion-$ver-Windows.zip" | ForEach-Object { "packaged $($_.Name) ($([math]::Round($_.Length/1MB,1))MB)" }
 
     - name: Upload Windows ZIP
-      uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: SledgeDistortion-Windows-zip
         path: SledgeDistortion-*-Windows.zip
@@ -328,7 +328,7 @@ jobs:
         cp -r "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Sledge Distortion.vst3" artifact/Linux/
 
     - name: Upload Linux VST3
-      uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: SledgeDistortion-VST3-Linux
         path: artifact/Linux/Sledge Distortion.vst3
@@ -367,7 +367,7 @@ jobs:
         done
 
     - name: Upload Linux tarball
-      uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: SledgeDistortion-Linux-tarball
         path: SledgeDistortion-*-Linux.tar.gz
@@ -541,7 +541,7 @@ jobs:
         xcrun stapler staple "$PKG"
 
     - name: Upload macOS installer
-      uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: SledgeDistortion-Installer-macOS
         path: dist/*.pkg
@@ -580,7 +580,7 @@ jobs:
         done
 
     - name: Upload macOS bundles zip
-      uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: SledgeDistortion-macOS-zip
         path: SledgeDistortion-*-macOS.zip
