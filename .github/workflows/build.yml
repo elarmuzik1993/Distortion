@@ -15,6 +15,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
 
+permissions:
+  contents: read
+
 env:
   BUILD_TYPE: Release
   PLUGIN_NAME: "Sledge Distortion"
@@ -36,7 +39,7 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       with:
         submodules: recursive
 
@@ -55,7 +58,7 @@ jobs:
         echo "dev version: $VER"
 
     - name: Setup Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@39cd1474dd08734594f0db9846050af33939634d # v5.3.0
       with:
         python-version: '3.11'
 
@@ -89,7 +92,7 @@ jobs:
 
     - name: Sign VST3 (Azure Trusted Signing)
       if: env.AZURE_CLIENT_ID != ''
-      uses: azure/trusted-signing-action@v0.5.9
+      uses: azure/trusted-signing-action@3f66c6b24d7756f70a59a7f34f4340d859b89736 # v0.5.9
       with:
         azure-tenant-id: ${{ env.AZURE_TENANT_ID }}
         azure-client-id: ${{ env.AZURE_CLIENT_ID }}
@@ -123,7 +126,7 @@ jobs:
 
     - name: Sign installer (Azure Trusted Signing)
       if: env.AZURE_CLIENT_ID != ''
-      uses: azure/trusted-signing-action@v0.5.9
+      uses: azure/trusted-signing-action@3f66c6b24d7756f70a59a7f34f4340d859b89736 # v0.5.9
       with:
         azure-tenant-id: ${{ env.AZURE_TENANT_ID }}
         azure-client-id: ${{ env.AZURE_CLIENT_ID }}
@@ -136,7 +139,7 @@ jobs:
         files-folder-recurse: false
 
     - name: Upload Windows installer
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
       with:
         name: SledgeDistortion-Installer-Windows
         path: dist/*.exe
@@ -151,7 +154,7 @@ jobs:
         cp -r "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Sledge Distortion.vst3" artifact/Windows/
 
     - name: Upload Windows VST3
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
       with:
         name: SledgeDistortion-VST3-Windows
         path: artifact/Windows/Sledge Distortion.vst3
@@ -234,7 +237,7 @@ jobs:
         Get-ChildItem "SledgeDistortion-$ver-Windows.zip" | ForEach-Object { "packaged $($_.Name) ($([math]::Round($_.Length/1MB,1))MB)" }
 
     - name: Upload Windows ZIP
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
       with:
         name: SledgeDistortion-Windows-zip
         path: SledgeDistortion-*-Windows.zip
@@ -325,7 +328,7 @@ jobs:
         cp -r "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Sledge Distortion.vst3" artifact/Linux/
 
     - name: Upload Linux VST3
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
       with:
         name: SledgeDistortion-VST3-Linux
         path: artifact/Linux/Sledge Distortion.vst3
@@ -364,7 +367,7 @@ jobs:
         done
 
     - name: Upload Linux tarball
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
       with:
         name: SledgeDistortion-Linux-tarball
         path: SledgeDistortion-*-Linux.tar.gz
@@ -538,7 +541,7 @@ jobs:
         xcrun stapler staple "$PKG"
 
     - name: Upload macOS installer
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
       with:
         name: SledgeDistortion-Installer-macOS
         path: dist/*.pkg
@@ -577,7 +580,7 @@ jobs:
         done
 
     - name: Upload macOS bundles zip
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
       with:
         name: SledgeDistortion-macOS-zip
         path: SledgeDistortion-*-macOS.zip
@@ -599,25 +602,25 @@ jobs:
 
     steps:
     - name: Download Windows installer
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@fa2a9010641654f639b319853fe77b1981f7334e # v4.1.8
       with:
         name: SledgeDistortion-Installer-Windows
         path: release
 
     - name: Download Windows ZIP
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@fa2a9010641654f639b319853fe77b1981f7334e # v4.1.8
       with:
         name: SledgeDistortion-Windows-zip
         path: release
 
     - name: Download Linux tarball
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@fa2a9010641654f639b319853fe77b1981f7334e # v4.1.8
       with:
         name: SledgeDistortion-Linux-tarball
         path: release
 
     - name: Download macOS installer
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@fa2a9010641654f639b319853fe77b1981f7334e # v4.1.8
       with:
         name: SledgeDistortion-Installer-macOS
         path: release
@@ -627,7 +630,7 @@ jobs:
     # reaching the release page. Adding *.zip below without this would publish
     # the Windows zip only and leave macOS users on the highest-friction path.
     - name: Download macOS ZIP
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@fa2a9010641654f639b319853fe77b1981f7334e # v4.1.8
       with:
         name: SledgeDistortion-macOS-zip
         path: release
@@ -641,7 +644,7 @@ jobs:
         cat SHA256SUMS
 
     - name: Create GitHub Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@c95fe0f20b7003c74f73266f101210644ab1145d # v2.1.0
       with:
         files: |
           release/*.exe
