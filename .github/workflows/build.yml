@@ -589,6 +589,14 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
 
+    # Required to publish the release. The repository's default workflow
+    # permission is read-only, so without this GITHUB_TOKEN cannot create a
+    # release and the step fails with a bare 403 - which is what happened on the
+    # first v2.3.0 tag: all three platforms built, then the release step 403'd
+    # three times and aborted. Scoped to this job; every other job only reads.
+    permissions:
+      contents: write
+
     steps:
     - name: Download Windows installer
       uses: actions/download-artifact@v4
