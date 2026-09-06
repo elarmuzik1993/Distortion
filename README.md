@@ -7,6 +7,8 @@
 **A distortion you shape by hand.** Draw the EQ curve straight onto the
 oscilloscope instead of hunting through menus and numeric fields.
 
+by **[Monolit Beatz](https://monolitbeatz.com)**
+
 [![Build](https://github.com/elarmuzik1993/Distortion/actions/workflows/build.yml/badge.svg)](https://github.com/elarmuzik1993/Distortion/actions/workflows/build.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-c9184a.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-343a40)
