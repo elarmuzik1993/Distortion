@@ -97,7 +97,7 @@ jobs:
 
     - name: Sign VST3 (Azure Trusted Signing)
       if: env.AZURE_CLIENT_ID != ''
-      uses: azure/trusted-signing-action@bb15ca63eb5548cc306f4f335c5617bb414abcad # v0.5.9
+      uses: azure/trusted-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
       with:
         azure-tenant-id: ${{ env.AZURE_TENANT_ID }}
         azure-client-id: ${{ env.AZURE_CLIENT_ID }}
@@ -131,7 +131,7 @@ jobs:
 
     - name: Sign installer (Azure Trusted Signing)
       if: env.AZURE_CLIENT_ID != ''
-      uses: azure/trusted-signing-action@bb15ca63eb5548cc306f4f335c5617bb414abcad # v0.5.9
+      uses: azure/trusted-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
       with:
         azure-tenant-id: ${{ env.AZURE_TENANT_ID }}
         azure-client-id: ${{ env.AZURE_CLIENT_ID }}
