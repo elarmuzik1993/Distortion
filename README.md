@@ -171,7 +171,7 @@ Full details — exactly what is collected, when it's sent, and how to turn it o
 
 Sledge Distortion is free software, licensed under the
 [GNU General Public License v3.0](LICENSE). You may use, study, modify and
-redistribute it — including commercially — provided that derivative works are
+redistribute it — provided that derivative works are
 also released under the GPL v3 and their source is made available.
 
 The plugin is built on [JUCE](https://juce.com), whose GPL v3 option this
@@ -203,17 +203,6 @@ The GPL v3 covers the *code*. It does not grant rights to the names or the logo 
 GPL v3 §7(e) expressly permits withholding trademark permission, and that
 permission is withheld here.
 
-You are free to fork this project, modify it, and distribute or sell your version
-under the GPL. What you may not do is present it as Sledge Distortion, or use the
-Monolit Beatz name or logo in a way that suggests the result comes from me or is
-endorsed by me. **Give your fork its own name and its own mark.**
-
-This is not a restriction on the software licence and adds no condition to the
-GPL. It is a separate right, under a separate body of law, that the GPL leaves
-untouched. Unmodified builds may of course be redistributed as they are, names
-and all — that is the point of the licence.
-
-If you want to use the name or logo for something else, ask: **aidevblock@gmail.com**.
 
 ---
 
