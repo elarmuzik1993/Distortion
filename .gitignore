@@ -49,5 +49,8 @@ __pycache__/
 *.pyc
 *.egg-info/
 
-# Claude Code local runtime state
-.claude/scheduled_tasks.lock
+# AI assistant configuration files
+.claude/
+CLAUDE.md
+GEMINI.md
+AGENTS.md
