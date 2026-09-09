@@ -49,8 +49,11 @@ __pycache__/
 *.pyc
 *.egg-info/
 
-# AI assistant configuration files
+# AI assistant & internal development configuration files
 .claude/
 CLAUDE.md
 GEMINI.md
 AGENTS.md
+RELEASE_CHECKLIST.md
+THIRD-PARTY-NOTICES.md
+realtime-audio-safety-checklist.md
