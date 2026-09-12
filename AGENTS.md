@@ -110,7 +110,7 @@ Steps 12–14 live inside `applyAutoGainAndISP`; 15–16 are in `processBlock` p
 - **Golden Audio**: Reference file comparison tests included.
 - **Host validation**: CI gates on `pluginval --strictness-level 10` (Windows + Linux; xvfb on Linux).
 - **Soak/stress**: `DistortionSoak` console tool (`Source/Tools/SoakHarness.cpp`) runs N instances faster-than-realtime, failing on non-finite output or RSS growth (DoD 24h/10+-instance gates). **Run it on Linux** — the leak half reads `/proc/self/statm`, so it is Linux-only. Elsewhere the harness reports `SOAK INCOMPLETE` and exits non-zero rather than `PASSED`: it checked finiteness but not memory growth, and only a `PASSED` earns the `RELEASE_CHECKLIST.md` §4 box. It used to print `PASSED` on Windows with the leak check silently skipped, which is how a half-run gate can look like a clean one.
-- **Version-stamped targets**: every target that compiles `PluginEditor.cpp` must depend on `GitVersion`; building that target directly must refresh `Source/GitVersion.h` before compilation.
+- **Version-stamped targets**: every target that compiles `PLUGIN_SOURCES` must depend on `GitVersion`; building that target directly must refresh `Source/GitVersion.h` before compilation. Declare the header as a `BYPRODUCTS` output so Ninja restats it within the same build.
 - **UI/layout changes**: verify with `DistortionUiSnapshot` (`Source/Tools/UiSnapshot.cpp`), **not** by screenshotting the standalone — its menu bar and "audio input is muted" banner shift and clip the editor, pushing the knob row outside the window. The tool paints the real `PluginEditor` offscreen at exact geometry:
   ```bash
   cmake --build build --target DistortionUiSnapshot

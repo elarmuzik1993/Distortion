@@ -55,6 +55,7 @@ if(GIT_FOUND)
             -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
             -DOUTPUT_FILE=${CMAKE_SOURCE_DIR}/Source/GitVersion.h
             -P ${CMAKE_SOURCE_DIR}/cmake/GitVersion.cmake
+        BYPRODUCTS ${CMAKE_SOURCE_DIR}/Source/GitVersion.h
         COMMENT "Generating GitVersion.h from git..."
     )
 else()
