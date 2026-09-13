@@ -1711,8 +1711,9 @@ public:
         g.setColour(juce::Colour(0xFFCCCCCC));
         g.setFont(juce::Font(13.0f));
         g.drawFittedText(
-            "Monolit sends anonymous bug reports to help fix issues. "
-            "You can turn them off anytime in Settings.",
+            "Monolit sends anonymous bug reports and a daily usage ping to help fix "
+            "issues and see how the plugin is used. You can turn both off anytime in "
+            "Settings.",
             inner.toNearestInt(), juce::Justification::topLeft, 4);
     }
 

@@ -13,6 +13,7 @@
 #include "Diagnostics/AppPaths.h"
 #include "Diagnostics/ReportComposer.h"
 #include "Diagnostics/ReportEndpoint.h"
+#include "Diagnostics/PingEndpoint.h"
 #include <memory>
 
 namespace
@@ -282,6 +283,13 @@ PluginProcessor::PluginProcessor()
     installId = diag::ReportComposer::loadOrCreateInstallId (diag::installIdFile());
     buildReportPipeline (diag::reportsDir(), defaultTransport);
 
+    // Launch ping (USE-53 companion): anonymous install/version/OS/host, at most once
+    // per install per day. Shares the bug-report consent toggle -- there is no separate
+    // setting, so disabling bug reports also stops this.
+    pingSender = std::make_unique<diag::PingSender> (defaultTransport, diag::pingEndpoint(), diag::lastPingFile());
+    if (bugReportsEnabled.load())
+        pingSender->requestSend (diag::Ping::compose (wrapperType, installId));
+
     // Deferred, scan-safe launch drain: a plugin-scan construct/destroy storm never
     // survives the delay, so this only fires in a real session.
     // Safety: this ctor and ~PluginProcessor both run on the message thread (JUCE
@@ -306,6 +314,7 @@ PluginProcessor::~PluginProcessor()
     if (bugReportsEnabled.load() && reportStore != nullptr && sink.hasAnomalies())
         enqueueAndComposeReport ("auto", {});
     reportSender.reset();   // joins the background thread (bounded)
+    pingSender.reset();     // joins the background thread (bounded)
     parameters.removeParameterListener("linearPhaseDry", this);
 }
 

@@ -25,4 +25,8 @@ namespace diag
 
     inline juce::File settingsFile()  { return productDir().getChildFile ("settings.xml"); }
     inline juce::File installIdFile() { return productDir().getChildFile ("installId"); }
+
+    // Holds the UTC date ("YYYY-MM-DD") of the last successfully-sent launch ping, so
+    // PingSender can cap sends to once per install per day.
+    inline juce::File lastPingFile()  { return productDir().getChildFile ("lastPing"); }
 }

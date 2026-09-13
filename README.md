@@ -131,9 +131,9 @@ Source/
 ├── PluginProcessor.cpp/h    # Audio processing
 ├── PluginEditor.cpp/h       # GUI
 ├── FactoryPresets.h         # Factory bank (single source of truth)
-├── Diagnostics/             # Anonymous bug reporting (opt-out)
+├── Diagnostics/             # Anonymous bug reporting + usage ping (opt-out)
 ├── Tools/                   # Headless harnesses: render, soak, UI snapshot
-└── Tests/                   # 3100+ assertions
+└── Tests/                   # 3125+ assertions
 ```
 
 ## Contributing
@@ -160,9 +160,10 @@ it, and it isn't needed for typo or docs fixes.
 
 Sledge Distortion can send **anonymous** bug reports (version, OS, host, sample
 rate/block size, anomaly counts, a random install ID — no audio, no presets, no
-file paths, no personal data). It is **on by default and opt-out**: a one-time
-notice explains it on first launch, and you can switch it off any time in
-**Settings → "Send anonymous bug reports"**.
+file paths, no personal data) and an **anonymous daily usage ping** (a subset of
+the same fields, at most once per install per day, no anomaly data). Both are
+**on by default and opt-out**: a one-time notice explains it on first launch, and
+you can switch both off any time in **Settings → "Send anonymous bug reports"**.
 
 Full details — exactly what is collected, when it's sent, and how to turn it off
 — are in **[docs/PRIVACY.md](docs/PRIVACY.md)**.

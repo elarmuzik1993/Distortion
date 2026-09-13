@@ -15,6 +15,7 @@
 #include "../Diagnostics/DiagnosticsSink.h"
 #include "../Diagnostics/ReportComposer.h"
 #include "../Diagnostics/ReportSender.h"
+#include "../Diagnostics/PingSender.h"
 
 //==============================================================================
 // Test Categories
@@ -767,6 +768,74 @@ public:
     }
 };
 
+class DiagPingSenderTest : public juce::UnitTest
+{
+public:
+    DiagPingSenderTest() : juce::UnitTest ("Diagnostics PingSender", "Diagnostics") {}
+    void runTest() override
+    {
+        auto tmp = juce::File::createTempFile ("diagping");
+        tmp.deleteFile(); tmp.createDirectory();
+        diag::Ping ping; ping.installId = "id-1"; ping.pluginVersion = "v9.9";
+
+        beginTest ("first send of the day POSTs and writes the marker");
+        {
+            auto marker = tmp.getChildFile ("lastPing1");
+            FakeTransport tx;
+            diag::PingSender sender (tx, "https://example.test/ping", marker);
+            bool attempted = sender.sendIfDue (ping, "2026-09-13");
+            expect (attempted, "should have attempted a send");
+            expectEquals (tx.calls, 1);
+            expectEquals (marker.loadFileAsString(), juce::String ("2026-09-13"));
+        }
+
+        beginTest ("second send same day is skipped");
+        {
+            auto marker = tmp.getChildFile ("lastPing2");
+            marker.replaceWithText ("2026-09-13");
+            FakeTransport tx;
+            diag::PingSender sender (tx, "https://example.test/ping", marker);
+            bool attempted = sender.sendIfDue (ping, "2026-09-13");
+            expect (! attempted, "should have skipped, same day already sent");
+            expectEquals (tx.calls, 0);
+        }
+
+        beginTest ("new day resends");
+        {
+            auto marker = tmp.getChildFile ("lastPing3");
+            marker.replaceWithText ("2026-09-12");
+            FakeTransport tx;
+            diag::PingSender sender (tx, "https://example.test/ping", marker);
+            bool attempted = sender.sendIfDue (ping, "2026-09-13");
+            expect (attempted, "should resend on a new day");
+            expectEquals (tx.calls, 1);
+            expectEquals (marker.loadFileAsString(), juce::String ("2026-09-13"));
+        }
+
+        beginTest ("failed POST does not write the marker, so it retries next launch");
+        {
+            auto marker = tmp.getChildFile ("lastPing4");
+            FakeTransport tx; tx.succeed = false;
+            diag::PingSender sender (tx, "https://example.test/ping", marker);
+            bool attempted = sender.sendIfDue (ping, "2026-09-13");
+            expect (attempted, "should still count as an attempt");
+            expect (! marker.existsAsFile(), "marker must stay absent after a failed send");
+        }
+
+        beginTest ("compose populates ping from install id + wrapper type");
+        {
+            auto p = diag::Ping::compose (juce::AudioProcessor::wrapperType_VST3, "id-2");
+            expectEquals (p.installId, juce::String ("id-2"));
+            expectEquals (p.hostWrapper, juce::String ("VST3"));
+            expect (p.os.isNotEmpty(), "os should be filled");
+            expect (p.createdUtc.isNotEmpty(), "timestamp should be filled");
+            expect (p.toJson().contains ("id-2"), "installId should round-trip into the JSON body");
+        }
+
+        tmp.deleteRecursively();
+    }
+};
+
 class DiagProcessorTest : public juce::UnitTest
 {
 public:
@@ -1042,6 +1111,7 @@ inline void registerAllTests()
     static DiagReportStoreTest diagReportStoreTest;
     static DiagSinkComposerTest diagSinkComposerTest;
     static DiagSenderTest diagSenderTest;
+    static DiagPingSenderTest diagPingSenderTest;
     static DiagProcessorTest diagProcessorTest;
     static SettingsPersistenceTest settingsPersistenceTest;
 }

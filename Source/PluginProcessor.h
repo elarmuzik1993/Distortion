@@ -19,6 +19,7 @@
 #include "Diagnostics/ReportStore.h"
 #include "Diagnostics/ReportSender.h"
 #include "Diagnostics/CurlTransport.h"
+#include "Diagnostics/PingSender.h"
 
 //==============================================================================
 // DSP Constants - Centralized configuration for audio processing algorithms
@@ -308,6 +309,7 @@ private:
     std::unique_ptr<diag::ReportStore>  reportStore;                  // null until pipeline built
     std::unique_ptr<diag::ReportSender> reportSender;
     std::unique_ptr<juce::Timer>        drainTimer;                   // deferred launch drain (production)
+    std::unique_ptr<diag::PingSender>   pingSender;                   // launch-ping companion (USE-53)
     juce::String                        installId;
 
     void buildReportPipeline (const juce::File& dir, diag::ITransport& transport);

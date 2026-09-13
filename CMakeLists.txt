@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.22)
 
+if(POLICY CMP0177)
+    cmake_policy(SET CMP0177 NEW)
+endif()
+
 # ============================================================================
 # macOS: universal binary + minimum deployment target.
 # These MUST be set before project()/the first target or they won't apply to
@@ -86,6 +90,10 @@ set(PLUGIN_SOURCES
     Source/Diagnostics/ReportEndpoint.h
     Source/Diagnostics/CurlTransport.h
     Source/Diagnostics/CurlTransport.cpp
+    Source/Diagnostics/Ping.h
+    Source/Diagnostics/PingEndpoint.h
+    Source/Diagnostics/PingSender.h
+    Source/Diagnostics/PingSender.cpp
 )
 
 # Test sources
