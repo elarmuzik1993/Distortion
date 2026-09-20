@@ -144,9 +144,6 @@ validation steps a PR needs to pass, and the handful of rules that are
 load-bearing rather than stylistic (no allocation in `processBlock`, no locks in
 the scope path, and a new dependency brings its licence notice with it).
 
-If you want the deep context, [`AGENTS.md`](AGENTS.md) is the project's source of
-truth.
-
 If you're unsure whether an idea fits, open an issue and ask first — it's
 cheaper than finding out in review. Starter-sized work gets labelled
 `good first issue`.

@@ -71,8 +71,7 @@ Its leak half reads `/proc/self/statm`, so on other platforms it reports
 
 ## Rules that will bite you
 
-These are not style preferences. Each one is load-bearing, and the full set lives
-in [`AGENTS.md`](AGENTS.md).
+These are not style preferences. Each one is load-bearing.
 
 - **No dynamic allocation in `processBlock`.** Ever. Allocate in
   `prepareToPlay`.
@@ -117,6 +116,4 @@ the PR — for a typo or a docs fix I would rather have the fix than the paperwo
 
 ## Where to read next
 
-- [`AGENTS.md`](AGENTS.md) — the project's source of truth: architecture,
-  engineering standards, build and release process.
 - [`CHANGELOG.md`](CHANGELOG.md) — what changed and when.
