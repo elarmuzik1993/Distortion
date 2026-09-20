@@ -145,8 +145,7 @@ load-bearing rather than stylistic (no allocation in `processBlock`, no locks in
 the scope path, and a new dependency brings its licence notice with it).
 
 If you want the deep context, [`AGENTS.md`](AGENTS.md) is the project's source of
-truth and [`docs/Architecture Contract.md`](docs/Architecture%20Contract.md)
-defines the signal chain and what may not move within it.
+truth.
 
 If you're unsure whether an idea fits, open an issue and ask first — it's
 cheaper than finding out in review. Starter-sized work gets labelled

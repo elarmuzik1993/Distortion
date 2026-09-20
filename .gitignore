@@ -57,3 +57,8 @@ AGENTS.md
 RELEASE_CHECKLIST.md
 THIRD-PARTY-NOTICES.md
 realtime-audio-safety-checklist.md
+docs/superpowers/
+docs/Fractional Delay Compensation (DSP).md
+docs/DISTORTION_44KHZ_TEST_PROCEDURE.txt
+docs/Architecture Contract.md
+docs/DAW_QA_matrix.md

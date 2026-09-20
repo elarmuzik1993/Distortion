@@ -13,14 +13,14 @@ much cheaper than finding out in review.
 - **Report a bug.** DAW, OS, plugin format, sample rate and buffer size, plus what
   you did and what you heard. Audio bugs are often sample-rate- or
   buffer-size-specific, so those two fields matter more than they look.
-- **Test in a DAW nobody has tried.** `docs/DAW_QA_matrix.md` tracks host
-  coverage. Filling in a row is a real contribution.
+- **Test in a DAW nobody has tried.** Open an issue with the host, OS, sample
+  rate, buffer size and what you heard. A result from a host nobody has checked
+  is a real contribution.
 - **Fix something.** Starter-sized work is labelled `good first issue`. If that
   list is empty, open an issue saying what you'd like to take on and it can be
   scoped with you.
-- **Improve the DSP.** This is the deep end — read
-  `docs/Architecture Contract.md` first; the signal chain has a defined order and
-  changing it has audible consequences.
+- **Improve the DSP.** This is the deep end — open an issue first; the signal
+  chain has a defined order and changing it has audible consequences.
 
 ## Getting set up
 
@@ -119,6 +119,4 @@ the PR — for a typo or a docs fix I would rather have the fix than the paperwo
 
 - [`AGENTS.md`](AGENTS.md) — the project's source of truth: architecture,
   engineering standards, build and release process.
-- [`docs/Architecture Contract.md`](docs/Architecture%20Contract.md) — the signal
-  chain, in order, and what may not move.
 - [`CHANGELOG.md`](CHANGELOG.md) — what changed and when.
