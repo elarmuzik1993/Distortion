@@ -1,18 +1,8 @@
-/*
-  ==============================================================================
-
-    This file contains the basic framework code for a JUCE plugin editor.
-
-  ==============================================================================
-*/
-
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
 #include "GitVersion.h"
 #include "FactoryPresets.h"
 #include "Diagnostics/AppPaths.h"
-
-//Setup Slider in Constructor Here
 
 PluginEditor::PluginEditor(PluginProcessor& p)
     : AudioProcessorEditor(&p), audioProcessor(p), oscilloscope(p), gainReductionMeter(p), phaseCorrelationMeter(p)
@@ -335,12 +325,6 @@ PluginEditor::PluginEditor(PluginProcessor& p)
         audioProcessor.parameters, "cleanBoost", cleanBoostButton);
 
     // Setup preset selector
-    // Note: presetLabel removed - no "Preset:" text shown
-    presetLabel.setText("", juce::dontSendNotification);
-    presetLabel.setJustificationType(juce::Justification::centredRight);
-    presetLabel.setColour(juce::Label::textColourId, juce::Colours::white);
-    presetLabel.setFont(juce::Font(12.0f * fs, juce::Font::bold));
-
     addAndMakeVisible(presetSelector);
     presetSelector.setLookAndFeel(&comboBoxLookAndFeel);  // Apply neon red styling
     presetSelector.setTextWhenNothingSelected("Select Preset...");
@@ -1000,9 +984,6 @@ void PluginEditor::resized()
     // below the logo. Centre against the logo's band instead.
     const int presetY = (titleHeight - presetHeight) / 2;
     const int presetX = titleArea.getX();
-
-    // Hide the label (set to zero width)
-    presetLabel.setBounds(0, 0, 0, 0);
 
     // Preset selector (Save/Delete are inside the dropdown)
     presetSelector.setBounds(presetX, presetY, presetSelectorWidth, presetHeight);

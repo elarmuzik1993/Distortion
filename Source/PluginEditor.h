@@ -1,11 +1,3 @@
-/*
-  ==============================================================================
-
-    This file contains the basic framework code for a JUCE plugin editor.
-
-  ==============================================================================
-*/
-
 #pragma once
 
 #include <JuceHeader.h>
@@ -15,8 +7,6 @@
 #include "PluginProcessor.h"
 
 //==============================================================================
-/**
-*/
 class Oscilloscope : public juce::Component, public juce::Timer
 {
 public:
@@ -2416,9 +2406,8 @@ private:
     juce::Label globalMixLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> globalMixAttachment;
 
-    // Preset selector components
+    // Preset selector (Save/Delete live inside the dropdown)
     juce::ComboBox presetSelector;
-    juce::Label presetLabel;
 
     // Lock icons for each parameter
     LockIcon inputGainLock, outputGainLock, distortionAmountLock, highPassFreqLock;
@@ -2488,9 +2477,6 @@ private:
     void updateLFOVisibility();
     void updateModulationHighlight();
     void morphDistortionParameters(float x, float y);  // XY Morph Pad callback
-
-    // LFO modulation visual feedback state
-    float uiLfoPhase = 0.0f;  // Smooth UI-side phase accumulator for LFO arc animation
 
     // Preset management methods
     void savePreset(const juce::String& presetName);
