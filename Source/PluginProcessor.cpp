@@ -3375,7 +3375,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         juce::ParameterID{ "distortionAmount", 1 },
         "Distortion Amount",
         juce::NormalisableRange<float>(0.0f, 100.0f),
-        0.0f));
+        20.0f));  // Default 20 = audible out of the box; 0 is a true bypass (see
+                  // applyDistortionStage), so a fresh instance previously did nothing.
 
     // Input filter cutoff/centre. Full-range so low-pass and band-pass modes are usable
     // across the spectrum; log-style skew (centre ~1 kHz) keeps the knob musical. The ID

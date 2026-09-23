@@ -2708,8 +2708,9 @@ void ParameterTests::testParameterDefaults(PluginProcessor& processor)
     auto* distortion = processor.parameters.getParameter("distortionAmount");
     if (distortion != nullptr)
     {
-        expectWithinAbsoluteError(distortion->getDefaultValue(), 0.0f, 0.01f,
-                                  "Distortion default should be 0");
+        // getDefaultValue() is normalised: 20% of the 0-100 range.
+        expectWithinAbsoluteError(distortion->getDefaultValue(), 0.2f, 0.01f,
+                                  "Distortion default should be 20%");
     }
 
     auto* compEnabled = processor.parameters.getParameter("compEnabled");
