@@ -1,10 +1,3 @@
-/*
-  ==============================================================================
-    CustomKnob.cpp
-    Created: 28 Sep 2025 5:09:33pm
-    Author:  boris
-  ==============================================================================
-*/
 #include "CustomKnob.h"
 
 CustomKnob::CustomKnob()
@@ -87,7 +80,7 @@ void CustomKnob::paint(juce::Graphics& g)
     g.setGradientFill(body);
     g.fillEllipse(cx - bodyR, cy - bodyR, bodyR * 2.0f, bodyR * 2.0f);
 
-    // 3. Outer groove (full 270° track)
+    // 3. Outer groove (full 300° track)
     g.setColour(juce::Colour(0xff282828));
     g.strokePath(makeArc(cx, cy, arcR, START, END), stroke);
 

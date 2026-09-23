@@ -8,7 +8,8 @@ public:
 
     void paint(juce::Graphics& g) override;
 
-    // Set LFO arc: active = targeted by LFO, lfoPhase = 0-1 cycle position, depth = 0-1 intensity
+    // Set LFO arc: active = targeted by LFO, lfoPhase = 0-1 cycle position,
+    // depth = -1..1 intensity (negative when the LFO is inverted)
     void setLFOArc(bool active, float lfoPhase, float depth)
     {
         lfoArcActive = active;
@@ -20,7 +21,7 @@ public:
 private:
     bool lfoArcActive = false;
     float lfoArcPhase = 0.0f;   // 0-1, current LFO cycle position
-    float lfoArcDepth = 0.0f;   // 0-1, controls arc intensity/size
+    float lfoArcDepth = 0.0f;   // -1..1, controls arc size; sign sets direction
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(CustomKnob)
 };
