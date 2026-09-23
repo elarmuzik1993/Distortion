@@ -41,7 +41,7 @@ namespace FactoryPresets
         static const std::vector<ParamValue> b = {
             { "inputGain",          50.0f },
             { "outputGain",         50.0f },
-            { "distortionAmount",    0.0f },
+            { "distortionAmount",   20.0f },
             { "highPassFreq",       20.0f },
             { "filterMode",          0.0f },
             { "subGuardFreq",       60.0f },
