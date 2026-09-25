@@ -731,9 +731,9 @@ DEALINGS IN THE FONT SOFTWARE.
 
 ## Artwork and presets
 
-`Resources/background.png`, `Resources/ui_texture.png`,
-`Resources/ui_texture_extreme.png` and `Resources/Logo Title.png`, together
-with the factory preset bank, are original works
+`Resources/ui_texture.png`, `Resources/ui_texture_extreme.png` and
+`Resources/Logo Title.png`, together with the factory preset bank, are
+original works
 Copyright © 2026 Boris Miscenco, distributed under the GNU General Public
 License v3 as part of this project.
 

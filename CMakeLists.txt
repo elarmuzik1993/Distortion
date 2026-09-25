@@ -51,20 +51,42 @@ endif()
 # ============================================================================
 # Auto-generate version header from git at build time
 # ============================================================================
+# Written into the build tree, not Source/, so a build never dirties the
+# checkout. Every target that compiles the plugin sources picks it up through
+# distortion_use_git_version() below.
+set(DISTORTION_GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
+
+# Older builds wrote the header into Source/, where it would now shadow the
+# generated one (a quoted #include searches the including file's directory
+# first). It is gitignored, so this only removes a stale build output.
+if(EXISTS "${CMAKE_SOURCE_DIR}/Source/GitVersion.h")
+    file(REMOVE "${CMAKE_SOURCE_DIR}/Source/GitVersion.h")
+    message(STATUS "Removed stale Source/GitVersion.h (now generated in the build tree)")
+endif()
+
 find_package(Git QUIET)
 if(GIT_FOUND)
     add_custom_target(GitVersion ALL
         COMMAND ${CMAKE_COMMAND}
             -DGIT_EXECUTABLE=${GIT_EXECUTABLE}
             -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -DOUTPUT_FILE=${CMAKE_SOURCE_DIR}/Source/GitVersion.h
+            -DOUTPUT_FILE=${DISTORTION_GENERATED_DIR}/GitVersion.h
+            -DFALLBACK_VERSION=v${PROJECT_VERSION}
             -P ${CMAKE_SOURCE_DIR}/cmake/GitVersion.cmake
+        BYPRODUCTS ${DISTORTION_GENERATED_DIR}/GitVersion.h
         COMMENT "Generating GitVersion.h from git..."
     )
 else()
-    file(WRITE ${CMAKE_SOURCE_DIR}/Source/GitVersion.h
-        "#pragma once\n#define GIT_VERSION_STRING \"v2.3\"\n")
+    file(WRITE ${DISTORTION_GENERATED_DIR}/GitVersion.h
+        "#pragma once\n#define GIT_VERSION_STRING \"v${PROJECT_VERSION}\"\n")
 endif()
+
+function(distortion_use_git_version target)
+    target_include_directories(${target} PRIVATE "${DISTORTION_GENERATED_DIR}")
+    if(TARGET GitVersion)
+        add_dependencies(${target} GitVersion)
+    endif()
+endfunction()
 
 # Plugin sources (shared between plugin and tests)
 set(PLUGIN_SOURCES
@@ -132,9 +154,7 @@ juce_add_plugin(Distortion
 )
 
 target_sources(Distortion PRIVATE ${PLUGIN_SOURCES})
-if(TARGET GitVersion)
-    add_dependencies(Distortion GitVersion)
-endif()
+distortion_use_git_version(Distortion)
 
 # Generate JuceHeader.h for Projucer-style compatibility
 juce_generate_juce_header(Distortion)
@@ -249,6 +269,7 @@ target_sources(DistortionTests PRIVATE
     ${PLUGIN_SOURCES}
     ${TEST_SOURCES}
 )
+distortion_use_git_version(DistortionTests)
 
 # Generate JuceHeader.h for Projucer-style compatibility
 juce_generate_juce_header(DistortionTests)
@@ -314,6 +335,7 @@ target_sources(DistortionRender PRIVATE
     ${PLUGIN_SOURCES}
     Source/Tools/RenderHarness.cpp
 )
+distortion_use_git_version(DistortionRender)
 
 juce_generate_juce_header(DistortionRender)
 
@@ -365,6 +387,7 @@ target_sources(DistortionUiSnapshot PRIVATE
     ${PLUGIN_SOURCES}
     Source/Tools/UiSnapshot.cpp
 )
+distortion_use_git_version(DistortionUiSnapshot)
 
 juce_generate_juce_header(DistortionUiSnapshot)
 
@@ -422,6 +445,7 @@ target_sources(DistortionSoak PRIVATE
     ${PLUGIN_SOURCES}
     Source/Tools/SoakHarness.cpp
 )
+distortion_use_git_version(DistortionSoak)
 
 juce_generate_juce_header(DistortionSoak)
 

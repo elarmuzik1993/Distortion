@@ -1,6 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
-#include "../GitVersion.h"
+#include "GitVersion.h"
 
 namespace diag
 {

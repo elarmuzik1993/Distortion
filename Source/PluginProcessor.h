@@ -219,6 +219,7 @@ public:
 #endif
 
     void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    using AudioProcessor::processBlock;  // keep the double overload visible
 
     //==============================================================================
     // Bug reporting (USE-53)

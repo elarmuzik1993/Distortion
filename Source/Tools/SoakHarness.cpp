@@ -74,6 +74,21 @@ int main(int argc, char* argv[])
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
 
+    for (int i = 1; i < argc; ++i)
+    {
+        const juce::String t(argv[i]);
+        if (t == "--help" || t == "-h")
+        {
+            std::cout <<
+                "Soak / multi-instance harness for Sledge Distortion (Monolit Beatz)\n\n"
+                "  --instances <n>  plugin instances, one factory preset each (default 10)\n"
+                "  --seconds <n>    seconds of audio to render per instance (default 60)\n\n"
+                "  Exits non-zero on non-finite output or memory growth, and off Linux\n"
+                "  (no resident-set reporting) as SOAK INCOMPLETE.\n";
+            return 0;
+        }
+    }
+
     const int numInstances = juce::jmax(1, intArg(argc, argv, "--instances", 10));
     const int seconds      = juce::jmax(1, intArg(argc, argv, "--seconds", 60));
 

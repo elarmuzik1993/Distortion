@@ -43,7 +43,7 @@ public:
     void runTest() override;
 
 private:
-    void testClipType(PluginProcessor& processor, int clipType, const juce::String& name);
+    void testClipType(PluginProcessor& processor, int clipType, const juce::String& label);
     void testEdgeCases(PluginProcessor& processor);
     void testOutputRange(PluginProcessor& processor);
 };
@@ -116,7 +116,7 @@ public:
     void runTest() override;
 
 private:
-    void testWaveformShape(PluginProcessor& processor, int waveformType, const juce::String& name);
+    void testWaveformShape(PluginProcessor& processor, int waveformType, const juce::String& label);
     void testOutputRange(PluginProcessor& processor);
     void testRandomSampleHold(PluginProcessor& processor);
 };
@@ -387,7 +387,7 @@ private:
 
     juce::File getTestAudioDirectory();
     void testSilencePassthrough();
-    void testDistortionOutput(int clipType, const juce::String& name);
+    void testDistortionOutput(int clipType, const juce::String& label);
     void test808BandSplit();
 };
 
@@ -500,7 +500,7 @@ public:
         expect(buffer.getNumChannels() == 2, "Channel count mismatch");
         expect(buffer.getNumSamples() == 512, "Sample count mismatch");
         buffer.clear();
-        expect(buffer.getMagnitude(0, 512) == 0.0f, "Buffer not cleared");
+        expect(juce::exactlyEqual(buffer.getMagnitude(0, 512), 0.0f), "Buffer not cleared");
     }
 };
 
