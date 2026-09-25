@@ -31,26 +31,26 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addChildComponent(graphicEqOverlay);
     graphicEqOverlay.getBandGainDb = [this](int i) -> float
     {
-        if (auto* p = audioProcessor.parameters.getParameter("eqBand" + juce::String(i)))
-            return p->convertFrom0to1(p->getValue());
+        if (auto* param = audioProcessor.parameters.getParameter("eqBand" + juce::String(i)))
+            return param->convertFrom0to1(param->getValue());
         return 0.0f;
     };
     graphicEqOverlay.onBandChanged = [this](int i, float db)
     {
-        if (auto* p = audioProcessor.parameters.getParameter("eqBand" + juce::String(i)))
-            p->setValueNotifyingHost(p->convertTo0to1(db));
+        if (auto* param = audioProcessor.parameters.getParameter("eqBand" + juce::String(i)))
+            param->setValueNotifyingHost(param->convertTo0to1(db));
     };
     // eqEnabled is stored as "1 = active"; the overlay speaks in terms of bypass.
     graphicEqOverlay.getBypassed = [this]() -> bool
     {
-        if (auto* p = audioProcessor.parameters.getParameter("eqEnabled"))
-            return p->getValue() < 0.5f;   // enabled < 0.5 => bypassed
+        if (auto* param = audioProcessor.parameters.getParameter("eqEnabled"))
+            return param->getValue() < 0.5f;   // enabled < 0.5 => bypassed
         return false;
     };
     graphicEqOverlay.onBypassToggle = [this](bool bypass)
     {
-        if (auto* p = audioProcessor.parameters.getParameter("eqEnabled"))
-            p->setValueNotifyingHost(bypass ? 0.0f : 1.0f);
+        if (auto* param = audioProcessor.parameters.getParameter("eqEnabled"))
+            param->setValueNotifyingHost(bypass ? 0.0f : 1.0f);
     };
 
     addAndMakeVisible(gainReductionMeter);
@@ -616,8 +616,8 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addAndMakeVisible(monoButton);
     monoButton.onClick = [this]()
     {
-        if (auto* p = audioProcessor.parameters.getParameter("monoInput"))
-            p->setValueNotifyingHost(monoButton.isActive() ? 0.0f : 1.0f);
+        if (auto* param = audioProcessor.parameters.getParameter("monoInput"))
+            param->setValueNotifyingHost(monoButton.isActive() ? 0.0f : 1.0f);
     };
 
     // Load UI settings — capture first-run state before loading
@@ -811,7 +811,7 @@ void PluginEditor::advanceExtremeFade()
         return;
 
     const float target = extremeParam->load() > 0.5f ? 1.0f : 0.0f;
-    if (extremePhase == target)
+    if (juce::exactlyEqual(extremePhase, target))
         return;
 
     const float step = 1.0f / juce::jmax(1.0f, kExtremeFadeSeconds * 60.0f);

@@ -1933,7 +1933,7 @@ public:
     {
         if (getBandGainDb)
             for (int i = 0; i < kNumBands; ++i)
-                gains[i] = getBandGainDb(i);
+                gains[(size_t) i] = getBandGainDb(i);
         if (getBypassed)
             bypassed = getBypassed();
         repaint();
@@ -1983,9 +1983,10 @@ public:
         for (int i = 0; i < kNumBands; ++i)
         {
             const float g = getBandGainDb(i);
-            if (std::abs(g - gains[i]) > 1.0e-3f)
+            auto& gain = gains[(size_t) i];
+            if (std::abs(g - gain) > 1.0e-3f)
             {
-                gains[i] = g;
+                gain = g;
                 changed = true;
             }
         }
@@ -2042,8 +2043,9 @@ public:
         for (int i = 0; i < kNumBands; ++i)
         {
             const float x = bandX(i, b);
-            const float y = dbToY(gains[i], b);
-            const bool active = std::abs(gains[i]) > 0.05f;
+            const float gain = gains[(size_t) i];
+            const float y = dbToY(gain, b);
+            const bool active = std::abs(gain) > 0.05f;
             g.setColour((active ? neon : neon.withAlpha(0.45f)).withMultipliedAlpha(ca));
             g.fillEllipse(x - 2.6f, y - 2.6f, 5.2f, 5.2f);
         }
@@ -2117,10 +2119,12 @@ private:
         const int i3 = juce::jmin(kNumBands - 1, i1 + 2);
         const float t = fb - (float) i1;
         const float t2 = t * t, t3 = t2 * t;
-        return 0.5f * ((2.0f * gains[i1])
-                     + (-gains[i0] + gains[i2]) * t
-                     + (2.0f * gains[i0] - 5.0f * gains[i1] + 4.0f * gains[i2] - gains[i3]) * t2
-                     + (-gains[i0] + 3.0f * gains[i1] - 3.0f * gains[i2] + gains[i3]) * t3);
+        const float p0 = gains[(size_t) i0], p1 = gains[(size_t) i1];
+        const float p2 = gains[(size_t) i2], p3 = gains[(size_t) i3];
+        return 0.5f * ((2.0f * p1)
+                     + (-p0 + p2) * t
+                     + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t2
+                     + (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t3);
     }
 
     void paintAt(juce::Point<float> p)
@@ -2160,7 +2164,7 @@ private:
     void setBand(int i, float db)
     {
         db = juce::jlimit(-kRangeDb, kRangeDb, db);
-        gains[i] = db;
+        gains[(size_t) i] = db;
         if (onBandChanged)
             onBandChanged(i, db);
         repaint();

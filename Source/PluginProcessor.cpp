@@ -797,10 +797,10 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // Prepare DSP filters with oversampled sample rate & block size
     juce::dsp::ProcessSpec spec;
     spec.sampleRate = sampleRate * oversamplingFactor;
-    spec.maximumBlockSize = static_cast<juce::uint32>(samplesPerBlock * oversamplingFactor);
+    spec.maximumBlockSize = static_cast<juce::uint32>((size_t) samplesPerBlock * oversamplingFactor);
     spec.numChannels = static_cast<juce::uint32>(numChannels);
 
-    const int worstCaseOversampledBlockSize = (samplesPerBlock * oversamplingFactor) + 64;
+    const int worstCaseOversampledBlockSize = (samplesPerBlock * (int) oversamplingFactor) + 64;
 
     // CRITICAL: For JUCE IIR ProcessorDuplicator filters, the order MUST be:
     // 1. prepare() - creates the internal state
@@ -1264,7 +1264,7 @@ void PluginProcessor::rebuildOversampling(double sampleRate, int samplesPerBlock
     // Re-prepare filters at new oversampled spec
     juce::dsp::ProcessSpec spec;
     spec.sampleRate = sr * oversamplingFactor;
-    spec.maximumBlockSize = static_cast<juce::uint32>(currentBlockSize * oversamplingFactor);
+    spec.maximumBlockSize = static_cast<juce::uint32>((size_t) currentBlockSize * oversamplingFactor);
     spec.numChannels = static_cast<juce::uint32>(numChannels);
 
     const float toneFreq = toneParam ? toneParam->load() : 20000.0f;
@@ -3021,12 +3021,13 @@ void PluginProcessor::prepareEqBands(const juce::dsp::ProcessSpec& baseSpec)
         // rather than writing coefficients that would make the filter diverge.
         eqBandUsable[i] = DSPConstants::EQ_FREQS[i] < maxEqFreq;
 
-        eqBands[i].prepare(baseSpec);
+        auto& band = eqBands[(size_t) i];
+        band.prepare(baseSpec);
         // Seed with unity (0 dB) peak at this band's centre frequency.
         if (eqBandUsable[i])
-            writePeakFilterCoeffs(*eqBands[i].state, eqSampleRate,
+            writePeakFilterCoeffs(*band.state, eqSampleRate,
                                   DSPConstants::EQ_FREQS[i], DSPConstants::EQ_Q, 1.0);
-        eqBands[i].reset();
+        band.reset();
 
         eqGainSmoothed[i].reset(baseSpec.sampleRate, DSPConstants::EQ_GAIN_SMOOTH_TIME_S);
         const float g = eqBandParam[i] ? eqBandParam[i]->load() : 0.0f;
@@ -3081,16 +3082,17 @@ void PluginProcessor::processGraphicEq(juce::AudioBuffer<float>& buffer)
 
         // Advance the ramp across this block; rewrite coefficients only when the
         // gain actually moved (in place, no allocation).
+        auto& band = eqBands[(size_t) i];
         const float g = eqGainSmoothed[i].skip(numSamples);
         if (std::abs(g - eqLastGainDb[i]) > 1.0e-3f)
         {
-            writePeakFilterCoeffs(*eqBands[i].state, eqSampleRate,
+            writePeakFilterCoeffs(*band.state, eqSampleRate,
                                   DSPConstants::EQ_FREQS[i], DSPConstants::EQ_Q,
                                   juce::Decibels::decibelsToGain(g));
             eqLastGainDb[i] = g;
         }
 
-        eqBands[i].process(context);
+        band.process(context);
     }
 }
 
