@@ -160,6 +160,22 @@ int main(int argc, char* argv[])
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
 
+    for (int i = 1; i < argc; ++i)
+    {
+        const juce::String t(argv[i]);
+        if (t == "--help" || t == "-h")
+        {
+            std::cout <<
+                "Offline UI snapshot harness for Sledge Distortion (Monolit Beatz)\n\n"
+                "  --out <dir>      output directory (default ui-shots)\n"
+                "  --scale <pct>    render one window scale: 70, 80, 90 or 100 (default all)\n"
+                "  --collapsed      scope folded away\n"
+                "  --extreme        EXTREME mode engaged\n"
+                "  --signal         feed a signal so the scope shows a waveform\n";
+            return 0;
+        }
+    }
+
     juce::String outDir = "ui-shots";
     int onlyScale = 0;
     bool collapsed = false;

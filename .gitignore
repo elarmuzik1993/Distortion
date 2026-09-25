@@ -37,6 +37,9 @@ Builds/
 # Test outputs
 *.test
 test_results/
+# Default outputs of the UI snapshot and render harnesses (written to the CWD)
+ui-shots/
+render.wav
 
 # Binary data
 *.vst3
