@@ -1,4 +1,4 @@
-# Generates Source/GitVersion.h with version info from git
+# Generates GitVersion.h (OUTPUT_FILE, in the build tree) with version info from git
 
 # Get the latest tag (e.g. v2.0) or fall back
 execute_process(
@@ -9,11 +9,12 @@ execute_process(
     ERROR_QUIET
     RESULT_VARIABLE TAG_RESULT
 )
+set(TAG_IS_FALLBACK FALSE)
 if(NOT TAG_RESULT EQUAL 0 OR GIT_TAG STREQUAL "")
-    # No tags reachable (shallow clone, fresh fork). Keep this in step with
-    # project(... VERSION) in CMakeLists.txt or untagged builds advertise a
-    # version the binary isn't.
-    set(GIT_TAG "v2.3")
+    # No tags reachable (shallow clone, fresh fork): fall back to
+    # project(... VERSION), passed in by CMakeLists.txt.
+    set(GIT_TAG "${FALLBACK_VERSION}")
+    set(TAG_IS_FALLBACK TRUE)
 endif()
 
 # Count commits since that tag
@@ -61,11 +62,19 @@ if(GIT_BRANCH MATCHES "^ship/(v[0-9]+\\.[0-9]+)$")
 endif()
 
 # Build version string: "v2.0" if on tag, "v2.0.3-a4a6176" if ahead of that tag,
-# or "v2.1-a4a6176" on a ship/v2.1 branch before the v2.1 tag exists.
-if(GIT_COMMITS STREQUAL "0")
+# or "v2.1-a4a6176" on a ship/v2.1 branch before the v2.1 tag exists. With no
+# tag reachable, "v2.3.0-a4a6176" keeps an untagged build from claiming to be
+# the release.
+if(GIT_COMMITS STREQUAL "0" AND NOT TAG_IS_FALLBACK)
     set(VERSION_STRING "${GIT_TAG}")
 elseif(NOT BRANCH_VERSION STREQUAL "" AND NOT GIT_TAG STREQUAL BRANCH_VERSION)
     set(VERSION_STRING "${BRANCH_VERSION}-${GIT_HASH}")
+elseif(TAG_IS_FALLBACK)
+    if(GIT_HASH STREQUAL "unknown")
+        set(VERSION_STRING "${GIT_TAG}")
+    else()
+        set(VERSION_STRING "${GIT_TAG}-${GIT_HASH}")
+    endif()
 else()
     set(VERSION_STRING "${GIT_TAG}.${GIT_COMMITS}-${GIT_HASH}")
 endif()
