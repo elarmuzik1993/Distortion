@@ -5088,6 +5088,23 @@ void NamProfileTests::runTest()
         expectEquals(static_cast<int>(processor.oversamplingFactor), 1);
     }
 
+    beginTest("A SlimmableContainer profile loads and runs");
+    {
+        // Many downloaded profiles ship as containers of several sized submodels.
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        expect(processor.loadProfileBlocking(namTestModel("slimmable_container.nam")),
+               "slimmable_container.nam loads");
+        expect(processor.getProfileStatus().error.isEmpty(), "No error after a good load");
+
+        processor.timerCallback();
+        juce::AudioBuffer<float> out;
+        const float rms = processSine(processor, 8, &out);
+        expect(processor.activeProfile != nullptr, "The container is the active profile");
+        expect(! containsInvalidSamples(out), "Output stays finite");
+        expect(rms > 0.0f, "The container produces output");
+    }
+
     beginTest("An active profile changes the sound and stays finite, with and without Sub Guard");
     {
         for (const float subGuard : { 0.0f, 80.0f })

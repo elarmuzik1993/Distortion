@@ -78,7 +78,8 @@ file(GLOB NAM_CORE_SOURCES CONFIGURE_DEPENDS
 # OBJECT, not STATIC: each architecture registers its config parser from a
 # static initialiser in its own object file. Nothing references those objects,
 # so a static archive would let the linker drop them and every model would fail
-# to load with "No config parser registered".
+# to load with "No config parser registered". The plugin formats need one more
+# step for the same reason; see the format loop after target_link_libraries(Distortion).
 add_library(nam_core OBJECT ${NAM_CORE_SOURCES})
 set_target_properties(nam_core PROPERTIES
     CXX_STANDARD 20
@@ -236,6 +237,15 @@ target_link_libraries(Distortion
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags
 )
+
+# Distortion itself is JUCE's shared-code static library, so the nam_core objects
+# linked above land inside that archive, and the linker drops the unreferenced
+# ones again when it builds each format: every architecture's registration goes
+# with them. Link the objects straight into every format target as well. With
+# all of them already defined, the archive's copies are never pulled in.
+foreach(format IN LISTS DISTORTION_FORMATS)
+    target_sources(Distortion_${format} PRIVATE $<TARGET_OBJECTS:nam_core>)
+endforeach()
 
 # ============================================================================
 # Post-build: Fix invalid JSON in VST3 moduleinfo.json
