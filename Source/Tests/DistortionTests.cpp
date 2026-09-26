@@ -5019,4 +5019,245 @@ void InputFilterModeTest::runTest()
     }
 }
 
+
+//==============================================================================
+// NAM profile (prototype)
+//==============================================================================
+
+namespace
+{
+    juce::File namTestModel(const char* name)
+    {
+        return juce::File(DISTORTION_NAM_TEST_MODELS_DIR).getChildFile(name);
+    }
+
+    // Loads through setStateInformation run on the profile loader thread; wait
+    // for it rather than sleeping a fixed time.
+    bool waitForProfileLoad(PluginProcessor& processor, int timeoutMs = 10000)
+    {
+        const auto deadline = juce::Time::getMillisecondCounter() + static_cast<juce::uint32>(timeoutMs);
+        while (processor.getProfileStatus().loading)
+        {
+            if (juce::Time::getMillisecondCounter() > deadline)
+                return false;
+            juce::Thread::sleep(5);
+        }
+        return true;
+    }
+
+    void prepareForProfileTest(PluginProcessor& processor, double sampleRate = 48000.0, int blockSize = 512)
+    {
+        processor.setRateAndBufferSizeDetails(sampleRate, blockSize);
+        processor.prepareToPlay(sampleRate, blockSize);
+        setParameter(processor.parameters, "distortionAmount", 60.0f);
+        setParameter(processor.parameters, "subGuardFreq", 0.0f);
+    }
+
+    float processSine(PluginProcessor& processor, int blocks, juce::AudioBuffer<float>* lastOut = nullptr)
+    {
+        juce::MidiBuffer midi;
+        float rms = 0.0f;
+        for (int b = 0; b < blocks; ++b)
+        {
+            auto buffer = generateSineWave(440.0, processor.getSampleRate(), processor.getBlockSize(), 0.5f);
+            processor.processBlock(buffer, midi);
+            rms = calculateRMS(buffer);
+            if (lastOut != nullptr)
+                lastOut->makeCopyOf(buffer);
+        }
+        return rms;
+    }
+}
+
+void NamProfileTests::runTest()
+{
+    beginTest("Loading a profile reports it and switches the chain to 1x");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        expect(processor.oversamplingFactor > 1, "Default setting oversamples");
+
+        expect(processor.loadProfileBlocking(namTestModel("wavenet.nam")), "wavenet.nam loads");
+        const auto status = processor.getProfileStatus();
+        expectEquals(status.name, juce::String("wavenet"));
+        expect(status.error.isEmpty(), "No error after a good load");
+        expectWithinAbsoluteError(status.expectedSampleRate, 48000.0, 0.5);
+        expect(! processor.profileSampleRateMismatch(), "48 kHz host matches a 48 kHz profile");
+
+        processor.timerCallback();   // drains the pending 1x rebuild, as the 50 ms timer would
+        expectEquals(static_cast<int>(processor.oversamplingFactor), 1);
+    }
+
+    beginTest("An active profile changes the sound and stays finite, with and without Sub Guard");
+    {
+        for (const float subGuard : { 0.0f, 80.0f })
+        {
+            // Reference: the built-in clip type, also at 1x, so the only difference is the profile.
+            PluginProcessor reference;
+            prepareForProfileTest(reference);
+            setParameter(reference.parameters, "subGuardFreq", subGuard);
+            reference.requestOversamplingRebuild(0);
+            reference.handleAsyncUpdate();
+            juce::AudioBuffer<float> refOut;
+            processSine(reference, 8, &refOut);
+
+            PluginProcessor processor;
+            prepareForProfileTest(processor);
+            setParameter(processor.parameters, "subGuardFreq", subGuard);
+            expect(processor.loadProfileBlocking(namTestModel("wavenet.nam")), "wavenet.nam loads");
+            processor.timerCallback();
+            juce::AudioBuffer<float> out;
+            const float rms = processSine(processor, 8, &out);
+
+            expect(processor.activeProfile != nullptr && processor.activeProfile->getNumChannels() == 2,
+                   "The audio thread picked up a stereo profile");
+            expect(! containsInvalidSamples(out), "Output is finite");
+            expect(rms > 1.0e-4f, "Output is not silent");
+
+            float maxDiff = 0.0f;
+            for (int ch = 0; ch < out.getNumChannels(); ++ch)
+                for (int i = 0; i < out.getNumSamples(); ++i)
+                    maxDiff = juce::jmax(maxDiff, std::abs(out.getSample(ch, i) - refOut.getSample(ch, i)));
+            expect(maxDiff > 1.0e-3f, "The profile, not the built-in clip type, shaped the output (Sub Guard "
+                                      + juce::String(subGuard) + " Hz)");
+        }
+    }
+
+    beginTest("Clearing restores the built-in clip type and the oversampling setting");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        processor.loadProfileBlocking(namTestModel("wavenet.nam"));
+        processor.timerCallback();
+        processSine(processor, 2);
+
+        processor.clearProfile();
+        processSine(processor, 1);      // audio thread swaps in the empty profile
+        processor.timerCallback();      // frees the old one and rebuilds the oversampler
+        processSine(processor, 1);
+
+        expect(! processor.isProfileLoaded(), "No profile reported after clearing");
+        expect(processor.activeProfile == nullptr || processor.activeProfile->getNumChannels() == 0,
+               "The audio thread holds no model");
+        expect(processor.oversamplingFactor > 1, "The user's oversampling setting is back");
+        expect(processor.retiredProfile.load() == nullptr, "The replaced profile was freed");
+    }
+
+   #if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD
+    beginTest("No allocation while a profile runs or while one is swapped in");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        setParameter(processor.parameters, "subGuardFreq", 80.0f);
+        processor.loadProfileBlocking(namTestModel("wavenet.nam"));
+        processor.timerCallback();
+        processSine(processor, 4);   // warm-up: swap done, filters settled
+
+        juce::MidiBuffer midi;
+        auto buffer = generateSineWave(440.0, 48000.0, 512, 0.5f);
+        rt_guard::resetAllocationCounter();
+        processor.processBlock(buffer, midi);
+        expectEquals(rt_guard::getAllocationCount(), 0, "processBlock with an active profile");
+
+        // A second profile arrives while audio runs: the swap itself must not allocate or free.
+        expect(processor.loadProfileBlocking(namTestModel("lstm.nam")), "lstm.nam loads");
+        expect(! processor.oversamplingRebuildPending.load(),
+               "Swapping profiles does not request an oversampler rebuild");
+        processor.timerCallback();
+        auto swapBuffer = generateSineWave(440.0, 48000.0, 512, 0.5f);
+        rt_guard::resetAllocationCounter();
+        processor.processBlock(swapBuffer, midi);
+        expectEquals(rt_guard::getAllocationCount(), 0, "processBlock that swaps profiles");
+        expect(processor.activeProfile != nullptr && processor.activeProfile->getName() == "lstm",
+               "The new profile is active after the swap");
+        expect(! containsInvalidSamples(swapBuffer), "Output stays finite across the swap");
+    }
+   #endif
+
+    beginTest("A profile prepared for other settings is refreshed before it runs");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor, 48000.0, 512);
+        processor.loadProfileBlocking(namTestModel("wavenet.nam"));
+
+        // The host changes settings before the audio thread picked the profile up.
+        prepareForProfileTest(processor, 44100.0, 1024);
+        processSine(processor, 1);      // stale: handed back, not run
+        processor.timerCallback();      // re-prepares it (and rebuilds to 1x)
+        processSine(processor, 1);
+
+        expect(processor.activeProfile != nullptr && processor.activeProfile->getNumChannels() > 0,
+               "The refreshed profile is active");
+        if (processor.activeProfile != nullptr)
+        {
+            expectWithinAbsoluteError(processor.activeProfile->getPreparedSampleRate(), 44100.0, 0.5);
+            expect(processor.activeProfile->getPreparedBlockSize() >= 1024, "Prepared for the new block size");
+        }
+        expect(processor.profileSampleRateMismatch(), "A 48 kHz profile at 44.1 kHz is flagged");
+    }
+
+    beginTest("Bad files fail cleanly and leave the built-in clip type running");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+
+        expect(! processor.loadProfileBlocking(namTestModel("does-not-exist.nam")), "Missing file fails");
+        expect(processor.getProfileStatus().error.isNotEmpty(), "Missing file reports an error");
+
+        auto garbage = juce::File::createTempFile(".nam");
+        garbage.replaceWithText("{ not a model");
+        expect(! processor.loadProfileBlocking(garbage), "Malformed file fails");
+        expect(processor.getProfileStatus().error.isNotEmpty(), "Malformed file reports an error");
+        garbage.deleteFile();
+
+        expect(! processor.isProfileLoaded(), "Nothing is loaded after failures");
+        processor.timerCallback();
+        expect(processor.oversamplingFactor > 1, "Oversampling untouched by failed loads");
+        juce::AudioBuffer<float> out;
+        processSine(processor, 2, &out);
+        expect(! containsInvalidSamples(out), "Built-in path still runs");
+    }
+
+    beginTest("A session remembers the profile by path and restores it");
+    {
+        juce::MemoryBlock saved;
+        {
+            PluginProcessor processor;
+            prepareForProfileTest(processor);
+            processor.loadProfileBlocking(namTestModel("wavenet.nam"));
+            processor.getStateInformation(saved);
+        }
+
+        PluginProcessor restored;
+        prepareForProfileTest(restored);
+        restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+        expect(waitForProfileLoad(restored), "Restore finished loading");
+        expectEquals(restored.getProfileStatus().name, juce::String("wavenet"));
+
+        // A session saved without a profile clears one that is loaded.
+        juce::MemoryBlock plain;
+        {
+            PluginProcessor processor;
+            prepareForProfileTest(processor);
+            processor.getStateInformation(plain);
+        }
+        restored.setStateInformation(plain.getData(), static_cast<int>(plain.getSize()));
+        expect(! restored.isProfileLoaded(), "A session without a profile clears it");
+
+        // A session whose profile file is missing falls back to the built-in clip
+        // type rather than keeping the profile that was loaded before it.
+        restored.loadProfileBlocking(namTestModel("wavenet.nam"));
+        auto xml = restored.parameters.copyState().createXml();
+        const auto missing = namTestModel("moved-away.nam").getFullPathName();
+        xml->setAttribute(PluginProcessor::profilePathAttribute, missing);
+        juce::MemoryBlock missingState;
+        juce::AudioProcessor::copyXmlToBinary(*xml, missingState);
+        restored.setStateInformation(missingState.getData(), static_cast<int>(missingState.getSize()));
+        expect(waitForProfileLoad(restored), "Restore attempt finished");
+        expect(! restored.isProfileLoaded(), "The previous profile is not kept");
+        expect(restored.getProfileStatus().error.isNotEmpty(), "The missing file is reported");
+        expectEquals(restored.getProfileStatus().path, missing, "The path is kept for the next save");
+    }
+}
+
 #endif // JUCE_DEBUG

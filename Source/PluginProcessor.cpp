@@ -316,6 +316,13 @@ PluginProcessor::~PluginProcessor()
     reportSender.reset();   // joins the background thread (bounded)
     pingSender.reset();     // joins the background thread (bounded)
     parameters.removeParameterListener("linearPhaseDry", this);
+
+    // No loader may publish once the slots below are freed.
+    profileLoader.removeAllJobs(true, 10000);
+    delete pendingProfile.exchange(nullptr);
+    delete retiredProfile.exchange(nullptr);
+    delete activeProfile;
+    activeProfile = nullptr;
 }
 
 //==============================================================================
@@ -987,6 +994,20 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     highBandBufferB.setSize(numChannels, worstCaseOversampledBlockSize, false, false, true);
     dryBuffer.setSize(numChannels, samplesPerBlock + 64, false, false, true);
 
+    // NAM profile: record the rate and block size profiles must be prepared for,
+    // and bring the active one up to them. Processing is stopped here, so the
+    // audio-thread-owned activeProfile may be touched. A pending profile prepared
+    // for other settings is caught at swap time and refreshed by the timer.
+    profileHostSampleRate.store(sampleRate);
+    profileHostBlockSize.store(samplesPerBlock);
+    profilePreparedRate = sampleRate;
+    profilePreparedBlock = samplesPerBlock;
+    profileScratch.setSize(2 * numChannels + 1, samplesPerBlock, false, false, true);
+    if (activeProfile != nullptr && activeProfile->getNumChannels() > 0
+        && (! juce::exactlyEqual(activeProfile->getPreparedSampleRate(), sampleRate)
+            || activeProfile->getPreparedBlockSize() != samplesPerBlock))
+        activeProfile->prepare(sampleRate, samplesPerBlock);
+
     sink.reset();   // start each prepared session with clean anomaly counters
 }
 
@@ -1176,6 +1197,10 @@ void PluginProcessor::timerCallback()
     // once per request even if multiple changes arrived since the last tick.
     if (oversamplingRebuildPending.exchange(false, std::memory_order_acq_rel))
         handleAsyncUpdate();
+
+    collectRetiredProfile();
+    if (pendingProfileStale.exchange(false, std::memory_order_acq_rel))
+        refreshPendingProfile();
 }
 
 void PluginProcessor::handleAsyncUpdate()
@@ -1191,7 +1216,11 @@ void PluginProcessor::handleAsyncUpdate()
 
 void PluginProcessor::rebuildOversampling(double sampleRate, int samplesPerBlock)
 {
-    const int stages = requestedOversamplingStages.load(std::memory_order_acquire);
+    // A NAM profile only sounds right at the rate it was trained at, so while one
+    // is loaded the chain runs at the host rate (1x). The user's setting returns
+    // when the profile is cleared.
+    const int stages = profileWanted.load(std::memory_order_acquire)
+        ? 0 : requestedOversamplingStages.load(std::memory_order_acquire);
     const bool linearPhase = linearPhaseDryParam && (linearPhaseDryParam->load() > 0.5f);
     // Widest layout, matching prepareToPlay - see the note there. An oversampler
     // built for 1 channel would be handed 2 under mono-in / stereo-out.
@@ -1377,6 +1406,8 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Early return for empty buffers
     if (buffer.getNumSamples() == 0 || buffer.getNumChannels() == 0)
         return;
+
+    takePendingProfile();
 
     // Mono in, stereo out: the host hands us a buffer with as many channels as
     // the OUTPUT bus, but only the input ones hold audio - the rest are
@@ -2159,6 +2190,9 @@ void PluginProcessor::getStateInformation(juce::MemoryBlock& destData)
     // Stamp the schema version so future loads can migrate deterministically
     // instead of sniffing for the presence of individual attributes.
     state.setProperty(stateVersionAttribute, currentStateVersion, nullptr);
+    // The profile is remembered by path. A session opened where the file is
+    // missing keeps the path and falls back to the built-in clip type.
+    state.setProperty(profilePathAttribute, getProfileStatus().path, nullptr);
     std::unique_ptr<juce::XmlElement> xml(state.createXml());
     copyXmlToBinary(*xml, destData);
 }
@@ -2171,6 +2205,21 @@ void PluginProcessor::setStateInformation(const void* data, int sizeInBytes)
         parameters.replaceState(juce::ValueTree::fromXml(*xmlState));
 
         migrateState(*xmlState);
+
+        const juce::String profilePath = xmlState->getStringAttribute(profilePathAttribute);
+        if (profilePath.isEmpty())
+        {
+            if (isProfileLoaded() || getProfileStatus().path.isNotEmpty())
+                clearProfile();
+        }
+        else if (juce::File::isAbsolutePath(profilePath) && profilePath != getProfileStatus().path)
+        {
+            // Drop the current profile first, so a session whose file is missing
+            // falls back to the built-in clip type rather than keeping this one.
+            if (isProfileLoaded())
+                clearProfile();
+            loadProfileAsync(juce::File(profilePath));
+        }
 
         // Signal audio thread to reset state (thread-safe handoff)
         stateNeedsReset.store(true, std::memory_order_release);
@@ -2201,6 +2250,154 @@ void PluginProcessor::migrateState(const juce::XmlElement& xmlState)
     // Upgrade the live tree to the current version so the next save is written
     // in the latest format regardless of where this state originated.
     parameters.state.setProperty(stateVersionAttribute, currentStateVersion, nullptr);
+}
+
+// =============================================================================
+// NAM profile (prototype)
+// =============================================================================
+
+int PluginProcessor::beginProfileRequest(const juce::File& file)
+{
+    const juce::ScopedLock sl(profileStatusLock);
+    profileStatus.path = file.getFullPathName();
+    profileStatus.error = {};
+    profileStatus.loading = true;
+    return ++profileRequestId;
+}
+
+void PluginProcessor::loadProfileAsync(const juce::File& file)
+{
+    const int requestId = beginProfileRequest(file);
+    profileLoader.addJob([this, file, requestId] { loadProfileNow(file, requestId); });
+}
+
+bool PluginProcessor::loadProfileBlocking(const juce::File& file)
+{
+    return loadProfileNow(file, beginProfileRequest(file));
+}
+
+bool PluginProcessor::loadProfileNow(const juce::File& file, int requestId)
+{
+    // One model per channel of the widest layout the plugin accepts (stereo), so
+    // a later mono -> stereo change never leaves a channel without a model.
+    constexpr int numChannels = 2;
+
+    // Prepared for what the host last asked for; before the first prepareToPlay,
+    // for NAM's native 48 kHz. A mismatch is caught at swap time and refreshed.
+    const double sampleRate = profileHostSampleRate.load() > 0.0 ? profileHostSampleRate.load() : 48000.0;
+    const int maxBlockSize = profileHostBlockSize.load() > 0 ? profileHostBlockSize.load() : 512;
+
+    juce::String error;
+    auto profile = NamProfile::load(file, numChannels, sampleRate, maxBlockSize, error);
+
+    const juce::ScopedLock sl(profileStatusLock);
+    if (requestId != profileRequestId.load())
+        return false;   // superseded by a newer load or a clear while this one ran
+
+    profileStatus.loading = false;
+    if (profile == nullptr)
+    {
+        profileStatus.error = error;
+        return false;
+    }
+
+    profileStatus.name = profile->getName();
+    profileStatus.path = file.getFullPathName();
+    profileStatus.expectedSampleRate = profile->getExpectedSampleRate();
+    profileStatus.error = {};
+
+    publishProfile(profile.release());
+    // Entering profile mode switches the chain to 1x. Swapping one profile for
+    // another needs no rebuild, which would reset the DSP state for nothing.
+    if (! profileWanted.exchange(true, std::memory_order_acq_rel))
+        oversamplingRebuildPending.store(true, std::memory_order_release);
+    return true;
+}
+
+void PluginProcessor::clearProfile()
+{
+    const juce::ScopedLock sl(profileStatusLock);
+    ++profileRequestId;   // an in-flight load must not publish after this
+    profileStatus = {};
+    publishProfile(NamProfile::makeEmpty().release());
+    if (profileWanted.exchange(false, std::memory_order_acq_rel))
+        oversamplingRebuildPending.store(true, std::memory_order_release);   // back to the user's setting
+}
+
+PluginProcessor::ProfileStatus PluginProcessor::getProfileStatus() const
+{
+    const juce::ScopedLock sl(profileStatusLock);
+    return profileStatus;
+}
+
+bool PluginProcessor::isProfileLoaded() const
+{
+    const juce::ScopedLock sl(profileStatusLock);
+    return profileStatus.name.isNotEmpty();
+}
+
+bool PluginProcessor::profileSampleRateMismatch() const
+{
+    const auto status = getProfileStatus();
+    const double hostRate = profileHostSampleRate.load();
+    return status.name.isNotEmpty() && hostRate > 0.0
+        && std::abs(hostRate - status.expectedSampleRate) > 1.0;
+}
+
+void PluginProcessor::publishProfile(NamProfile* profile)
+{
+    // Whoever exchanges a pointer out of the slot owns it; an older profile the
+    // audio thread never picked up is freed here, off the audio thread.
+    delete pendingProfile.exchange(profile, std::memory_order_acq_rel);
+}
+
+void PluginProcessor::takePendingProfile() noexcept
+{
+    // The replaced profile can only be parked once the timer has collected the
+    // previous one, so a swap waits a tick rather than freeing anything here.
+    if (retiredProfile.load(std::memory_order_acquire) != nullptr)
+        return;
+
+    auto* next = pendingProfile.exchange(nullptr, std::memory_order_acq_rel);
+    if (next == nullptr)
+        return;
+
+    // Prepared for other settings (prepareToPlay ran while it was loading): hand
+    // it back for the timer to re-prepare. If a newer one arrived meanwhile,
+    // this one is superseded and goes out through the retired slot instead.
+    if (next->getNumChannels() > 0
+        && (! juce::exactlyEqual(next->getPreparedSampleRate(), profilePreparedRate)
+            || next->getPreparedBlockSize() < profilePreparedBlock))
+    {
+        NamProfile* expected = nullptr;
+        if (! pendingProfile.compare_exchange_strong(expected, next, std::memory_order_acq_rel))
+            retiredProfile.store(next, std::memory_order_release);
+        pendingProfileStale.store(true, std::memory_order_release);
+        return;
+    }
+
+    if (activeProfile != nullptr)
+        retiredProfile.store(activeProfile, std::memory_order_release);
+    activeProfile = next;
+}
+
+void PluginProcessor::collectRetiredProfile()
+{
+    delete retiredProfile.exchange(nullptr, std::memory_order_acq_rel);
+}
+
+void PluginProcessor::refreshPendingProfile()
+{
+    auto* profile = pendingProfile.exchange(nullptr, std::memory_order_acq_rel);
+    if (profile == nullptr)
+        return;
+
+    if (profile->getNumChannels() > 0)
+        profile->prepare(profileHostSampleRate.load(), profileHostBlockSize.load());
+
+    NamProfile* expected = nullptr;
+    if (! pendingProfile.compare_exchange_strong(expected, profile, std::memory_order_acq_rel))
+        delete profile;   // a newer profile was published while this one was re-prepared
 }
 
 // =============================================================================
@@ -2332,6 +2529,108 @@ float PluginProcessor::applyDistortionStage(float inputSample, int channel,
     return inputSample * (1.0f - sampleMixAmount) + distorted * sampleMixAmount;
 }
 
+PluginProcessor::SampleControls PluginProcessor::advanceSampleControls(float lfoPhaseIncrement) noexcept
+{
+    SampleControls c;
+    c.gain            = inputGainRamp.advance();
+    c.drive           = driveRamp.advance();
+    c.mix             = distMixRamp.advance();
+    c.distortionParam = pb_modulatedDistortionParam;
+
+    // Only destinations 0 (distortion) and 3 (mix) are modulated here. Destination 4
+    // (output gain) is handled in the output-gain stage; advancing lfoPhase here too
+    // would double-advance it and run the tremolo at ~2x rate.
+    if (pb_lfoEnabled && pb_lfoPhaseIncrement > 0.0f
+        && (pb_lfoDestination == 0 || pb_lfoDestination == 3))
+    {
+        float sampleLfoValue = generateLFOWaveform(lfoPhase, pb_lfoWaveform);
+        if (std::isnan(sampleLfoValue) || std::isinf(sampleLfoValue))
+            sampleLfoValue = 0.0f;
+        const float sampleLfoMod = sampleLfoValue * pb_lfoSign * pb_lfoDepth / 100.0f;
+
+        if (pb_lfoDestination == 0)
+        {
+            c.distortionParam = juce::jlimit(0.0f, 100.0f,
+                pb_distortionParam + sampleLfoMod * 50.0f);
+            c.drive = 1.0f + (c.distortionParam / 100.0f) * 3.0f;
+            if (pb_extremeEnabled) c.drive *= 4.0f;
+        }
+        else if (pb_lfoDestination == 3)
+        {
+            const float modMix = juce::jlimit(0.0f, 100.0f,
+                pb_distMix + sampleLfoMod * 50.0f);
+            c.mix = modMix / 100.0f;
+        }
+
+        lfoPhase += lfoPhaseIncrement;
+        if (lfoPhase >= 1.0f)
+            lfoPhase -= 1.0f;
+    }
+    return c;
+}
+
+namespace
+{
+    // Distortion Amount drives a profile through its input level, the way
+    // pushing a pedal harder does: 0% -> -24 dB, 50% -> -6 dB, 100% -> +12 dB.
+    // Mix-level material is far hotter than the instrument level most captures
+    // expect, so the range sits mostly below unity.
+    float profileInputGainDb(float distortionParam) noexcept
+    {
+        return -24.0f + distortionParam * 0.36f;
+    }
+}
+
+bool PluginProcessor::applyProfileStage(float* const* channels) noexcept
+{
+    auto* profile = activeProfile;
+    const int numSamples = static_cast<int>(pb_numSamples);
+    const int numChannels = static_cast<int>(pb_numChannels);
+
+    // Only at 1x: the model runs at the rate it was prepared for. Right after a
+    // profile loads, the oversampler rebuild is still pending for a tick; the
+    // built-in clip type covers those few blocks.
+    if (profile == nullptr || profile->getNumChannels() == 0 || oversamplingFactor != 1
+        || numChannels < 1 || numChannels > 2
+        || numSamples > profileScratch.getNumSamples()
+        || profileScratch.getNumChannels() < 2 * numChannels + 1)
+        return false;
+
+    std::array<float*, 2> modelIn {};
+    std::array<float*, 2> modelOut {};
+    for (int ch = 0; ch < numChannels; ++ch)
+    {
+        modelIn[static_cast<size_t>(ch)]  = profileScratch.getWritePointer(ch);
+        modelOut[static_cast<size_t>(ch)] = profileScratch.getWritePointer(numChannels + ch);
+    }
+    float* mix = profileScratch.getWritePointer(2 * numChannels);
+    const float lfoPhaseIncrement = pb_lfoPhaseIncrement / static_cast<float>(oversamplingFactor);
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        const auto c = advanceSampleControls(lfoPhaseIncrement);
+        // Same bypass threshold as applyDistortionStage. The model keeps running
+        // below it so its state stays continuous when the amount comes back up.
+        mix[i] = c.distortionParam < 0.5f ? 0.0f : c.mix;
+        const float inputGain = c.gain
+            * juce::Decibels::decibelsToGain(profileInputGainDb(c.distortionParam));
+        for (size_t ch = 0; ch < static_cast<size_t>(numChannels); ++ch)
+            modelIn[ch][i] = channels[ch][i] * inputGain;
+    }
+
+    const float outputGain = profile->getOutputGain();
+    for (int ch = 0; ch < juce::jmin(numChannels, profile->getNumChannels()); ++ch)
+    {
+        const auto idx = static_cast<size_t>(ch);
+        profile->process(ch, modelIn[idx], modelOut[idx], numSamples);
+
+        float* data = channels[ch];
+        for (int i = 0; i < numSamples; ++i)
+            data[i] = data[i] * (1.0f - mix[i]) + modelOut[idx][i] * outputGain * mix[i];
+    }
+    return true;
+}
+
 bool PluginProcessor::applySubGuardSplit()
 {
     pb_subGuardActive = (pb_subGuardFreq > 1.0f);
@@ -2344,49 +2643,21 @@ bool PluginProcessor::applySubGuardSplit()
         // Per-sample LFO phase increment (oversampled rate: divide by oversamplingFactor)
         const float lfoOversampledPhaseInc = pb_lfoPhaseIncrement / static_cast<float>(oversamplingFactor);
 
+        std::array<float*, 2> channels {};
+        for (size_t channel = 0; channel < juce::jmin(pb_numChannels, channels.size()); ++channel)
+            channels[channel] = pb_oversampledBlock.getChannelPointer(channel);
+        if (applyProfileStage(channels.data()))
+            return true;
+
         for (size_t sample = 0; sample < pb_numSamples; ++sample)
         {
-            const float currentGain = inputGainRamp.advance();
-            float sampleDrive       = driveRamp.advance();
-            float sampleMixAmount   = distMixRamp.advance();
-            float sampleDistortionParam = pb_modulatedDistortionParam;
-
-            // Only destinations 0 (distortion) and 3 (mix) are modulated here. Destination 4
-            // (output gain) is handled in the output-gain stage; advancing lfoPhase here too
-            // would double-advance it and run the tremolo at ~2x rate.
-            if (pb_lfoEnabled && pb_lfoPhaseIncrement > 0.0f
-                && (pb_lfoDestination == 0 || pb_lfoDestination == 3))
-            {
-                float sampleLfoValue = generateLFOWaveform(lfoPhase, pb_lfoWaveform);
-                if (std::isnan(sampleLfoValue) || std::isinf(sampleLfoValue))
-                    sampleLfoValue = 0.0f;
-                const float sampleLfoMod = sampleLfoValue * pb_lfoSign * pb_lfoDepth / 100.0f;
-
-                if (pb_lfoDestination == 0)
-                {
-                    sampleDistortionParam = juce::jlimit(0.0f, 100.0f,
-                        pb_distortionParam + sampleLfoMod * 50.0f);
-                    sampleDrive = 1.0f + (sampleDistortionParam / 100.0f) * 3.0f;
-                    if (pb_extremeEnabled) sampleDrive *= 4.0f;
-                }
-                else if (pb_lfoDestination == 3)
-                {
-                    const float modMix = juce::jlimit(0.0f, 100.0f,
-                        pb_distMix + sampleLfoMod * 50.0f);
-                    sampleMixAmount = modMix / 100.0f;
-                }
-
-                lfoPhase += lfoOversampledPhaseInc;
-                if (lfoPhase >= 1.0f)
-                    lfoPhase -= 1.0f;
-            }
+            const auto c = advanceSampleControls(lfoOversampledPhaseInc);
 
             for (size_t channel = 0; channel < pb_numChannels; ++channel)
             {
                 auto* channelData = pb_oversampledBlock.getChannelPointer(channel);
                 channelData[sample] = applyDistortionStage(channelData[sample],
-                    static_cast<int>(channel), currentGain, sampleDrive,
-                    sampleMixAmount, sampleDistortionParam);
+                    static_cast<int>(channel), c.gain, c.drive, c.mix, c.distortionParam);
             }
         }
         return true;
@@ -2541,49 +2812,22 @@ bool PluginProcessor::applySubGuardSplit()
     // Apply studio distortion ONLY to the (possibly blended) high band
     const float lfoOversampledPhaseIncSG = pb_lfoPhaseIncrement / static_cast<float>(oversamplingFactor);
 
-    for (size_t sample = 0; sample < pb_numSamples; ++sample)
+    std::array<float*, 2> highChannels {};
+    for (size_t channel = 0; channel < juce::jmin(pb_numChannels, highChannels.size()); ++channel)
+        highChannels[channel] = highBandBuffer.getWritePointer(static_cast<int>(channel));
+
+    if (! applyProfileStage(highChannels.data()))
     {
-        const float currentGain = inputGainRamp.advance();
-        float sampleDrive       = driveRamp.advance();
-        float sampleMixAmount   = distMixRamp.advance();
-        float sampleDistortionParam = pb_modulatedDistortionParam;
-
-        // Only destinations 0 (distortion) and 3 (mix) are modulated here. Destination 4
-        // (output gain) is handled in the output-gain stage; advancing lfoPhase here too
-        // would double-advance it and run the tremolo at ~2x rate.
-        if (pb_lfoEnabled && pb_lfoPhaseIncrement > 0.0f
-            && (pb_lfoDestination == 0 || pb_lfoDestination == 3))
+        for (size_t sample = 0; sample < pb_numSamples; ++sample)
         {
-            float sampleLfoValue = generateLFOWaveform(lfoPhase, pb_lfoWaveform);
-            if (std::isnan(sampleLfoValue) || std::isinf(sampleLfoValue))
-                sampleLfoValue = 0.0f;
-            const float sampleLfoMod = sampleLfoValue * pb_lfoSign * pb_lfoDepth / 100.0f;
+            const auto c = advanceSampleControls(lfoOversampledPhaseIncSG);
 
-            if (pb_lfoDestination == 0)
+            for (size_t channel = 0; channel < pb_numChannels; ++channel)
             {
-                sampleDistortionParam = juce::jlimit(0.0f, 100.0f,
-                    pb_distortionParam + sampleLfoMod * 50.0f);
-                sampleDrive = 1.0f + (sampleDistortionParam / 100.0f) * 3.0f;
-                if (pb_extremeEnabled) sampleDrive *= 4.0f;
+                auto* highBandData = highBandBuffer.getWritePointer(static_cast<int>(channel));
+                highBandData[sample] = applyDistortionStage(highBandData[sample],
+                    static_cast<int>(channel), c.gain, c.drive, c.mix, c.distortionParam);
             }
-            else if (pb_lfoDestination == 3)
-            {
-                const float modMix = juce::jlimit(0.0f, 100.0f,
-                    pb_distMix + sampleLfoMod * 50.0f);
-                sampleMixAmount = modMix / 100.0f;
-            }
-
-            lfoPhase += lfoOversampledPhaseIncSG;
-            if (lfoPhase >= 1.0f)
-                lfoPhase -= 1.0f;
-        }
-
-        for (size_t channel = 0; channel < pb_numChannels; ++channel)
-        {
-            auto* highBandData = highBandBuffer.getWritePointer(static_cast<int>(channel));
-            highBandData[sample] = applyDistortionStage(highBandData[sample],
-                static_cast<int>(channel), currentGain, sampleDrive,
-                sampleMixAmount, sampleDistortionParam);
         }
     }
 
