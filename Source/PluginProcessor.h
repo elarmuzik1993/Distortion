@@ -55,6 +55,10 @@ namespace DSPConstants
 
     // Default parameter values
     constexpr float DEFAULT_HIPASS_FREQ = 20.0f;              // Default hi-pass filter frequency (subsonic only)
+    constexpr float DEFAULT_LOWPASS_FREQ = 20000.0f;          // Low-pass default: fully open
+    constexpr float DEFAULT_BANDPASS_FREQ = 1000.0f;          // Band-pass default: mid-range centre
+    constexpr float HIPASS_TRANSPARENT_MAX_FREQ = 25.0f;      // High-pass at/below this counts as flat
+    constexpr float LOWPASS_TRANSPARENT_MIN_FREQ = 19000.0f;  // Low-pass at/above this counts as flat
 
     // Oscilloscope configuration
     constexpr int SCOPE_BUFFER_SIZE = 2048;                   // Circular buffer size for waveform display

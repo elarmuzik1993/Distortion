@@ -3,6 +3,7 @@
 #include <JuceHeader.h>
 #include "CustomKnob.h"
 #include "CyclingComboBox.h"
+#include "FilterModeSwitch.h"
 #include "FontHelper.h"
 #include "PluginProcessor.h"
 
@@ -2428,6 +2429,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> subGuardAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> clipTypeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> filterModeAttachment;
+    std::unique_ptr<FilterModeSwitch::Listener> filterModeSwitch;
     // UI texture: authored 1:1 against the 960x564 expanded layout (metal at the
     // title strip, red glass across the scope, metal + knob cutouts below), so it
     // is drawn to the full bounds rather than tiled or letterboxed. The source is
