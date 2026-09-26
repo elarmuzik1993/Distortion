@@ -49,6 +49,59 @@ else()
 endif()
 
 # ============================================================================
+# Neural Amp Modeler core: runs .nam profiles in place of the built-in clip types
+# ============================================================================
+# Both pinned. NAM Core's own CMakeLists builds its tools and tests, so it is
+# only populated (SOURCE_SUBDIR points at a directory with no CMakeLists) and
+# compiled below as an object library. Its sources need C++20; Sledge stays on
+# C++17 and only includes NAM's headers, which are C++17-clean.
+include(FetchContent)
+FetchContent_Declare(
+    nam_core
+    GIT_REPOSITORY https://github.com/sdatkinson/NeuralAmpModelerCore.git
+    GIT_TAG 0b3d3c97b0859a3a8c92a8628c4dd89a25eb5842
+    GIT_SUBMODULES ""
+    SOURCE_SUBDIR no-cmake-build
+)
+FetchContent_Declare(
+    eigen
+    URL https://gitlab.com/libeigen/eigen/-/archive/bc3b39870ecb690a623a3f49149a358b95c5781d/eigen-bc3b39870ecb690a623a3f49149a358b95c5781d.tar.gz
+    URL_HASH SHA256=5f6557d1aca6e959a4b955c55f2935261fd30de59c0c79e35bc6d5cbe1de22d1
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SOURCE_SUBDIR no-cmake-build
+)
+FetchContent_MakeAvailable(nam_core eigen)
+
+file(GLOB NAM_CORE_SOURCES CONFIGURE_DEPENDS
+    "${nam_core_SOURCE_DIR}/NAM/*.cpp"
+    "${nam_core_SOURCE_DIR}/NAM/*/*.cpp")
+# OBJECT, not STATIC: each architecture registers its config parser from a
+# static initialiser in its own object file. Nothing references those objects,
+# so a static archive would let the linker drop them and every model would fail
+# to load with "No config parser registered". The plugin formats need one more
+# step for the same reason; see the format loop after target_link_libraries(Distortion).
+add_library(nam_core OBJECT ${NAM_CORE_SOURCES})
+set_target_properties(nam_core PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
+    CXX_EXTENSIONS OFF
+    POSITION_INDEPENDENT_CODE ON)   # linked into the VST3 shared module
+# SYSTEM: Sledge builds with JUCE's strict warnings, which third-party headers
+# would otherwise flood.
+target_include_directories(nam_core SYSTEM PUBLIC
+    "${nam_core_SOURCE_DIR}"
+    "${nam_core_SOURCE_DIR}/NAM"
+    "${nam_core_SOURCE_DIR}/Dependencies/nlohmann"
+    "${eigen_SOURCE_DIR}")
+# PUBLIC so every translation unit that sees NAM's headers agrees on them.
+# EIGEN_MPL2_ONLY makes Eigen refuse to compile any of its LGPL-licensed code.
+target_compile_definitions(nam_core PUBLIC NAM_SAMPLE_FLOAT NAM_ENABLE_A2_FAST EIGEN_MPL2_ONLY)
+if(MSVC)
+    target_compile_definitions(nam_core PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_compile_options(nam_core PRIVATE /bigobj)
+endif()
+
+# ============================================================================
 # Auto-generate version header from git at build time
 # ============================================================================
 find_package(Git QUIET)
@@ -94,6 +147,8 @@ set(PLUGIN_SOURCES
     Source/Diagnostics/PingEndpoint.h
     Source/Diagnostics/PingSender.h
     Source/Diagnostics/PingSender.cpp
+    Source/Nam/NamProfile.h
+    Source/Nam/NamProfile.cpp
 )
 
 # Test sources
@@ -163,6 +218,7 @@ target_compile_definitions(Distortion
 target_link_libraries(Distortion
     PRIVATE
         DistortionData
+        nam_core
         juce::juce_audio_basics
         juce::juce_audio_devices
         juce::juce_audio_formats
@@ -181,6 +237,39 @@ target_link_libraries(Distortion
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags
 )
+
+# Distortion itself is JUCE's shared-code static library, so the nam_core objects
+# linked above land inside that archive, and the linker drops the unreferenced
+# ones again when it builds each format: every architecture's registration goes
+# with them. Link the objects straight into every format target as well. With
+# all of them already defined, the archive's copies are never pulled in.
+foreach(format IN LISTS DISTORTION_FORMATS)
+    target_sources(Distortion_${format} PRIVATE $<TARGET_OBJECTS:nam_core>)
+endforeach()
+
+# ============================================================================
+# Optional ASIO devices for the Standalone (Windows, opt-in)
+# ============================================================================
+# Off unless DISTORTION_ASIO_SDK_DIR points at Steinberg's ASIO SDK (the folder
+# holding common/iasiodrv.h). The SDK is never committed. Steinberg offers it
+# under GPLv3 (Sledge's own licence) or its proprietary agreement; publishing an
+# ASIO build under the GPLv3 option also means following Steinberg's ASIO
+# trademark and logo guidelines, which ship with the SDK.
+set(DISTORTION_ASIO_SDK_DIR "" CACHE PATH
+    "ASIO SDK root containing common/iasiodrv.h; empty builds without ASIO")
+if(DISTORTION_ASIO_SDK_DIR)
+    if(NOT WIN32)
+        message(FATAL_ERROR "DISTORTION_ASIO_SDK_DIR is Windows-only")
+    endif()
+    if(NOT EXISTS "${DISTORTION_ASIO_SDK_DIR}/common/iasiodrv.h")
+        message(FATAL_ERROR "No common/iasiodrv.h under DISTORTION_ASIO_SDK_DIR: ${DISTORTION_ASIO_SDK_DIR}")
+    endif()
+    # juce_audio_devices compiles into the shared code, so the VST3 carries the
+    # ASIO backend too; only the Standalone ever opens a device with it.
+    target_compile_definitions(Distortion PUBLIC JUCE_ASIO=1)
+    target_include_directories(Distortion SYSTEM PRIVATE "${DISTORTION_ASIO_SDK_DIR}/common")
+    message(STATUS "ASIO enabled from ${DISTORTION_ASIO_SDK_DIR}")
+endif()
 
 # ============================================================================
 # Post-build: Fix invalid JSON in VST3 moduleinfo.json
@@ -267,11 +356,14 @@ target_compile_definitions(DistortionTests
         JUCE_STANDALONE_APPLICATION=1
         DISTORTION_RT_GUARD=1
         DISTORTION_UNIT_TEST=1
+        # NAM Core's own example models serve as profile fixtures (MIT, see THIRD-PARTY-NOTICES).
+        DISTORTION_NAM_TEST_MODELS_DIR="${nam_core_SOURCE_DIR}/example_models"
 )
 
 target_link_libraries(DistortionTests
     PRIVATE
         DistortionData
+        nam_core
         juce::juce_audio_basics
         juce::juce_audio_devices
         juce::juce_audio_formats
@@ -333,6 +425,7 @@ target_compile_definitions(DistortionRender
 target_link_libraries(DistortionRender
     PRIVATE
         DistortionData
+        nam_core
         juce::juce_audio_basics
         juce::juce_audio_devices
         juce::juce_audio_formats
@@ -390,6 +483,7 @@ target_compile_definitions(DistortionUiSnapshot
 target_link_libraries(DistortionUiSnapshot
     PRIVATE
         DistortionData
+        nam_core
         juce::juce_audio_basics
         juce::juce_audio_devices
         juce::juce_audio_formats
@@ -441,6 +535,7 @@ target_compile_definitions(DistortionSoak
 target_link_libraries(DistortionSoak
     PRIVATE
         DistortionData
+        nam_core
         juce::juce_audio_basics
         juce::juce_audio_devices
         juce::juce_audio_formats

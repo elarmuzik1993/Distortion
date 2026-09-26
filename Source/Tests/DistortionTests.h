@@ -1057,6 +1057,15 @@ public:
     }
 };
 
+// NAM profile (prototype): loading, the 1x switch, processing, the lock-free
+// swap, session recall and failure handling. Uses NAM Core's example models.
+class NamProfileTests : public juce::UnitTest
+{
+public:
+    NamProfileTests() : UnitTest("NAM Profile", TestCategories::DSP) {}
+    void runTest() override;
+};
+
 // Force static test registration
 inline void registerAllTests()
 {
@@ -1114,6 +1123,7 @@ inline void registerAllTests()
     static DiagPingSenderTest diagPingSenderTest;
     static DiagProcessorTest diagProcessorTest;
     static SettingsPersistenceTest settingsPersistenceTest;
+    static NamProfileTests namProfileTests;
 }
 
 #endif // JUCE_DEBUG

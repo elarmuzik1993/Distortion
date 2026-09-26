@@ -20,6 +20,7 @@
 #include "Diagnostics/ReportSender.h"
 #include "Diagnostics/CurlTransport.h"
 #include "Diagnostics/PingSender.h"
+#include "Nam/NamProfile.h"
 
 //==============================================================================
 // DSP Constants - Centralized configuration for audio processing algorithms
@@ -202,6 +203,7 @@ class PluginProcessor : public juce::AudioProcessor,
     friend class RTCleanOversamplingTest;
     friend class CoefficientPropagationTest;
     friend class ProcessBlockDecompTest;
+    friend class NamProfileTests;
 #endif
 
 public:
@@ -300,6 +302,34 @@ public:
 
     // Sub Guard filter order enum (public for method signatures)
     enum class SubGuardFilterOrder { LR12, LR18, LR24 };
+
+    //==============================================================================
+    // NAM profile (prototype). A loaded .nam model replaces the built-in clip type
+    // as the distortion stage. While one is loaded the chain runs without
+    // oversampling, because a model only sounds right at the rate it was trained at.
+    struct ProfileStatus
+    {
+        juce::String name;                // loaded profile, empty when none
+        juce::String path;                // requested file (kept if loading failed)
+        juce::String error;               // last load error, empty if none
+        double expectedSampleRate = 0.0;  // the rate the profile was trained at
+        bool loading = false;
+    };
+
+    // Message thread. Loads on a background thread; the audio thread picks the
+    // profile up at the start of a block once it is ready.
+    void loadProfileAsync(const juce::File& file);
+    // Loads and publishes on the calling thread (never the audio thread). For
+    // offline tools and tests. Returns false and records the error on failure.
+    bool loadProfileBlocking(const juce::File& file);
+    void clearProfile();
+    ProfileStatus getProfileStatus() const;
+    bool isProfileLoaded() const;
+    // True when a profile is loaded and the host runs at a different rate from
+    // the one it was trained at, so it sounds slightly off (no resampling yet).
+    bool profileSampleRateMismatch() const;
+
+    static constexpr const char* profilePathAttribute = "namProfilePath";
 
 private:
     // --- Bug reporting (USE-53) ---
@@ -637,6 +667,15 @@ private:
     float applyDistortionStage(float inputSample, int channel,
                                float currentGain, float sampleDrive,
                                float sampleMixAmount, float sampleDistortionParam);
+    // Per-sample input gain, drive, mix and distortion amount, including LFO
+    // modulation (which advances lfoPhase). Shared by every distortion loop so
+    // they all modulate identically.
+    struct SampleControls { float gain, drive, mix, distortionParam; };
+    SampleControls advanceSampleControls(float lfoPhaseIncrement) noexcept;
+    // Runs the active NAM profile over the given channel buffers in place of the
+    // built-in clip type. Returns false (touching nothing) when no profile can
+    // run this block, so the caller falls back to applyDistortionStage.
+    bool applyProfileStage(float* const* channels) noexcept;
     void applyAutoGainAndISP(juce::AudioBuffer<float>& buffer);
     void applyLA2A();
     // Stereo-linked soft safety limiter at -0.5dBFS. Must run as the LAST gain stage
@@ -655,6 +694,34 @@ private:
     void updateSampleRateDependentCoefficients(double sampleRate);
     float generateLFOWaveform(float phase, int waveformType);  // Generate LFO waveforms
     void resetDSPState();  // Thread-safe DSP state reset (called from audio thread)
+
+    // --- NAM profile handoff -----------------------------------------------------
+    // A loader thread builds a profile and publishes it to pendingProfile; the
+    // audio thread takes it at block start and parks the one it replaces in
+    // retiredProfile; the message-thread timer frees that. The audio thread only
+    // swaps once retiredProfile has been collected, so it never frees anything.
+    std::atomic<NamProfile*> pendingProfile { nullptr };
+    std::atomic<NamProfile*> retiredProfile { nullptr };
+    NamProfile* activeProfile = nullptr;             // audio thread (and prepareToPlay)
+    std::atomic<bool> profileWanted { false };       // a profile is loaded: run at 1x
+    std::atomic<bool> pendingProfileStale { false }; // pending was prepared for another rate/size
+    std::atomic<int> profileRequestId { 0 };         // newer loads and clears supersede older ones
+    std::atomic<double> profileHostSampleRate { 0.0 };
+    std::atomic<int> profileHostBlockSize { 0 };
+    double profilePreparedRate = 0.0;                // what prepareToPlay last set, audio-readable
+    int profilePreparedBlock = 0;
+    // Model inputs, model outputs and the per-sample mix, sized in prepareToPlay.
+    juce::AudioBuffer<float> profileScratch;
+    mutable juce::CriticalSection profileStatusLock;
+    ProfileStatus profileStatus;
+    juce::ThreadPool profileLoader { 1 };
+
+    int beginProfileRequest(const juce::File& file);  // records the request, returns its id
+    bool loadProfileNow(const juce::File& file, int requestId);
+    void publishProfile(NamProfile* profile);        // takes ownership
+    void takePendingProfile() noexcept;              // audio thread, block start
+    void collectRetiredProfile();                    // message thread
+    void refreshPendingProfile();                    // message thread
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginProcessor)
 };

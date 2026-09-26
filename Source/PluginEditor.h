@@ -2384,6 +2384,13 @@ private:
     juce::TextButton cleanBoostButton;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> cleanBoostAttachment;
 
+    // NAM profile (prototype). Sits in the clip-type column's label slot and opens
+    // a menu to load or clear a .nam profile, which replaces the clip type. Shows
+    // the profile's name while one is loaded; amber when it needs attention.
+    juce::TextButton profileButton;
+    std::unique_ptr<juce::FileChooser> profileChooser;
+    juce::String shownProfileState;   // what the button last showed; the 60 Hz tick only repaints on change
+
     // Custom button class for randomize with right-click menu
     class RandomizeButton : public juce::TextButton
     {
@@ -2509,6 +2516,8 @@ private:
     void rebuildScaledTextureIfNeeded();
     void advanceExtremeFade();
     void updateMonoIndicator();
+    void showProfileMenu();
+    void updateProfileIndicator();
     void loadSettings();
     void saveSettings();
    #if defined (DISTORTION_UI_SNAPSHOT) && DISTORTION_UI_SNAPSHOT

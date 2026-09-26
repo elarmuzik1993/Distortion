@@ -207,8 +207,11 @@ int renderToFile(const Args& args)
     const float drive   = args.num("drive", 0.0f);
     const float mix     = args.num("mix", 100.0f);
     const float seconds = args.num("seconds", 3.0f);
+    const auto profilePath = args.str("profile", "");
 
-    double sr = kSampleRate;
+    // NAM profiles are trained at 48 kHz, so synthetic input is generated there
+    // when one is used; a WAV input keeps its own rate.
+    double sr = profilePath.isNotEmpty() ? 48000.0 : kSampleRate;
     juce::AudioBuffer<float> input;
 
     if (inPath.isNotEmpty())
@@ -222,7 +225,7 @@ int renderToFile(const Args& args)
     }
     else
     {
-        const int numSamples = static_cast<int>(seconds * kSampleRate);
+        const int numSamples = static_cast<int>(seconds * sr);
         juce::Random rng(1);
         if (signal == "noise")      input = generateWhiteNoise(numSamples, 0.25f, rng);
         else if (signal == "sweep") input = generateSineSweep(numSamples, sr, 0.5f, 20.0, 20000.0);
@@ -237,6 +240,21 @@ int renderToFile(const Args& args)
     setParam(proc.parameters, "subGuardFreq", (args.str("subguard", "") == "off") ? 0.0f : sgFreq);
     setParam(proc.parameters, "distortionAmount", drive);
     setParam(proc.parameters, "distMix", mix);
+
+    if (profilePath.isNotEmpty())
+    {
+        if (! proc.loadProfileBlocking(juce::File::getCurrentWorkingDirectory().getChildFile(profilePath)))
+        {
+            std::cerr << "Profile failed to load: " << proc.getProfileStatus().error << "\n";
+            return 1;
+        }
+        // Preparing again applies the 1x switch a host would get from the
+        // message-thread timer, and the profile runs from the first block.
+        proc.prepareToPlay(sr, kBlockSize);
+        if (proc.profileSampleRateMismatch())
+            std::cerr << "Warning: profile trained at " << proc.getProfileStatus().expectedSampleRate
+                      << " Hz, rendering at " << sr << " Hz\n";
+    }
 
     // Input filter: --mode hp|lp|bp, --filterfreq <Hz>
     const auto mode = args.str("mode", "hp");
@@ -258,7 +276,9 @@ int renderToFile(const Args& args)
               << static_cast<int>(sr) << " Hz -> " << outFile.getFullPathName() << "\n";
     std::cout << "  signal=" << (inPath.isNotEmpty() ? inPath : signal)
               << "  subguard=" << (sgFreq > 0.0f ? juce::String((int) sgFreq) + "Hz" : juce::String("off"))
-              << "  drive=" << drive << "  mix=" << mix << "\n";
+              << "  drive=" << drive << "  mix=" << mix
+              << (profilePath.isNotEmpty() ? "  profile=" + proc.getProfileStatus().name : juce::String())
+              << "\n";
     return 0;
 }
 } // namespace
@@ -279,7 +299,8 @@ int main(int argc, char* argv[])
             "  --subguard <Hz|off>                   Sub Guard crossover frequency\n"
             "  --drive <0-100>  --mix <0-100>        distortion amount / wet mix\n"
             "  --seconds <n>                         length of synthetic input (default 3)\n"
-            "  --out <file.wav>                      output path (default render.wav)\n\n"
+            "  --out <file.wav>                      output path (default render.wav)\n"
+            "  --profile <file.nam>                  run a NAM profile instead of the clip type\n\n"
             "  Automated flatness/shaping checks live in DistortionTests (run via CI).\n";
         return 0;
     }

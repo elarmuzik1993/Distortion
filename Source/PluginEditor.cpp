@@ -324,6 +324,14 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     cleanBoostAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
         audioProcessor.parameters, "cleanBoost", cleanBoostButton);
 
+    addAndMakeVisible(profileButton);
+    profileButton.setButtonText("PROFILE");
+    profileButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF1A1A1A));
+    profileButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xFFFF0044));
+    profileButton.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFFFF0044));
+    profileButton.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+    profileButton.onClick = [this]() { showProfileMenu(); };
+
     // Setup preset selector
     addAndMakeVisible(presetSelector);
     presetSelector.setLookAndFeel(&comboBoxLookAndFeel);  // Apply neon red styling
@@ -1196,6 +1204,10 @@ void PluginEditor::resized()
     clipTypeLock.setBounds(currentX + comboXOffset + comboWidth - S(12) - S(2), comboY, S(12), S(12));
     extremeButton.setBounds(currentX + comboXOffset, extremeY, comboWidth, clipButtonH);
     cleanBoostButton.setBounds(currentX + comboXOffset, boostY, comboWidth, clipButtonH);
+    // The column's label slot, centred like the pills above it.
+    profileButton.setBounds(currentX + comboXOffset,
+                            rowY + knobSize + lockInset + (labelHeight - clipButtonH) / 2,
+                            comboWidth, clipButtonH);
     currentX += clipTypeColumnWidth + controlSpacing;
 
     // Tone
@@ -1420,6 +1432,80 @@ void PluginEditor::timerCallback()
     advanceExtremeFade();
 
     updateMonoIndicator();
+    updateProfileIndicator();
+}
+
+void PluginEditor::showProfileMenu()
+{
+    const auto status = audioProcessor.getProfileStatus();
+    const bool loaded = status.name.isNotEmpty();
+
+    juce::PopupMenu menu;
+    if (loaded)
+    {
+        menu.addSectionHeader("Profile: " + status.name);
+        if (audioProcessor.profileSampleRateMismatch())
+            menu.addItem("Trained at " + juce::String(status.expectedSampleRate / 1000.0, 1)
+                         + " kHz; this session runs at "
+                         + juce::String(audioProcessor.getSampleRate() / 1000.0, 1)
+                         + " kHz, so it sounds slightly off", false, false, nullptr);
+        menu.addSeparator();
+    }
+    else if (status.loading)
+    {
+        menu.addItem("Loading " + juce::File(status.path).getFileName() + "...", false, false, nullptr);
+        menu.addSeparator();
+    }
+    if (status.error.isNotEmpty())
+    {
+        menu.addItem(status.error, false, false, nullptr);
+        menu.addSeparator();
+    }
+
+    menu.addItem("Load profile...", [this]()
+    {
+        const auto startDir = juce::File(audioProcessor.getProfileStatus().path).getParentDirectory();
+        profileChooser = std::make_unique<juce::FileChooser>(
+            "Load a NAM profile",
+            startDir.isDirectory() ? startDir
+                                   : juce::File::getSpecialLocation(juce::File::userHomeDirectory),
+            "*.nam");
+        profileChooser->launchAsync(juce::FileBrowserComponent::openMode
+                                        | juce::FileBrowserComponent::canSelectFiles,
+            [this](const juce::FileChooser& chooser)
+            {
+                const auto file = chooser.getResult();
+                if (file.existsAsFile())
+                    audioProcessor.loadProfileAsync(file);
+            });
+    });
+    menu.addItem("Clear profile", loaded || status.path.isNotEmpty(), false,
+                 [this]() { audioProcessor.clearProfile(); });
+
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&profileButton));
+}
+
+void PluginEditor::updateProfileIndicator()
+{
+    const auto status = audioProcessor.getProfileStatus();
+    const bool loaded = status.name.isNotEmpty();
+    const bool needsAttention = status.error.isNotEmpty() || audioProcessor.profileSampleRateMismatch();
+
+    const juce::String state = status.name + "|" + juce::String(int(status.loading))
+                             + "|" + juce::String(int(needsAttention));
+    if (state == shownProfileState)
+        return;
+    shownProfileState = state;
+
+    const auto accent = needsAttention ? juce::Colour(0xFFFFAA00) : juce::Colour(0xFFFF0044);
+    profileButton.setButtonText(loaded ? status.name : (status.loading ? "LOADING" : "PROFILE"));
+    profileButton.setColour(juce::TextButton::buttonOnColourId, accent);
+    profileButton.setColour(juce::TextButton::textColourOffId, accent);
+    profileButton.setToggleState(loaded, juce::dontSendNotification);
+
+    // The profile replaces the clip type, so the clip-type controls step back.
+    clipTypeComboBox.setEnabled(! loaded);
+    clipTypeComboBox.setAlpha(loaded ? 0.4f : 1.0f);
 }
 
 void PluginEditor::updateMonoIndicator()
