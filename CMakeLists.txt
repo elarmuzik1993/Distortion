@@ -248,6 +248,30 @@ foreach(format IN LISTS DISTORTION_FORMATS)
 endforeach()
 
 # ============================================================================
+# Optional ASIO devices for the Standalone (Windows, opt-in)
+# ============================================================================
+# Off unless DISTORTION_ASIO_SDK_DIR points at Steinberg's ASIO SDK (the folder
+# holding common/iasiodrv.h). The SDK is never committed. Steinberg offers it
+# under GPLv3 (Sledge's own licence) or its proprietary agreement; publishing an
+# ASIO build under the GPLv3 option also means following Steinberg's ASIO
+# trademark and logo guidelines, which ship with the SDK.
+set(DISTORTION_ASIO_SDK_DIR "" CACHE PATH
+    "ASIO SDK root containing common/iasiodrv.h; empty builds without ASIO")
+if(DISTORTION_ASIO_SDK_DIR)
+    if(NOT WIN32)
+        message(FATAL_ERROR "DISTORTION_ASIO_SDK_DIR is Windows-only")
+    endif()
+    if(NOT EXISTS "${DISTORTION_ASIO_SDK_DIR}/common/iasiodrv.h")
+        message(FATAL_ERROR "No common/iasiodrv.h under DISTORTION_ASIO_SDK_DIR: ${DISTORTION_ASIO_SDK_DIR}")
+    endif()
+    # juce_audio_devices compiles into the shared code, so the VST3 carries the
+    # ASIO backend too; only the Standalone ever opens a device with it.
+    target_compile_definitions(Distortion PUBLIC JUCE_ASIO=1)
+    target_include_directories(Distortion SYSTEM PRIVATE "${DISTORTION_ASIO_SDK_DIR}/common")
+    message(STATUS "ASIO enabled from ${DISTORTION_ASIO_SDK_DIR}")
+endif()
+
+# ============================================================================
 # Post-build: Fix invalid JSON in VST3 moduleinfo.json
 # JUCE generates JSON with trailing commas which breaks some DAWs
 # ============================================================================
