@@ -2214,9 +2214,9 @@ bool PluginProcessor::isInputFilterActive() const
 {
     switch (pb_filterMode)
     {
-        case 1:  return pb_modulatedHighPassFreq < 19000.0f;  // Low Pass: cutting highs
-        case 2:  return true;                                 // Band Pass: always cuts
-        default: return pb_modulatedHighPassFreq > 25.0f;     // High Pass: cutting lows
+        case 1:  return pb_modulatedHighPassFreq < DSPConstants::LOWPASS_TRANSPARENT_MIN_FREQ;  // Low Pass: cutting highs
+        case 2:  return true;                                                                   // Band Pass: always cuts
+        default: return pb_modulatedHighPassFreq > DSPConstants::HIPASS_TRANSPARENT_MAX_FREQ;   // High Pass: cutting lows
     }
 }
 

@@ -3,6 +3,7 @@
 #include "DistortionTests.h"
 #include "../CyclingComboBox.h"
 #include "../FactoryPresets.h"
+#include "../FilterModeSwitch.h"
 #include "../RTAllocationGuard.h"
 #include <atomic>
 #include <iostream>
@@ -5016,6 +5017,57 @@ void InputFilterModeTest::runTest()
         expect((e.mid - e.low) > 10.0f && (e.mid - e.high) > 10.0f,
                "Band Pass did not attenuate both sides (low=" + juce::String(e.low, 1)
                + " mid=" + juce::String(e.mid, 1) + " high=" + juce::String(e.high, 1) + " dB)");
+    }
+
+    beginTest("Switching mode moves a cutoff left at the old mode's default to the new one's");
+    {
+        using namespace FilterModeSwitch;
+        expectEquals(cutoffAfterSwitch(highPass, lowPass, 20.0f), 20000.0f);
+        expectEquals(cutoffAfterSwitch(lowPass, bandPass, 20000.0f), 1000.0f);
+        expectEquals(cutoffAfterSwitch(bandPass, highPass, 1000.0f), 20.0f);
+        expectEquals(cutoffAfterSwitch(lowPass, highPass, 19500.0f), 20.0f);   // anywhere flat counts
+        expectEquals(cutoffAfterSwitch(highPass, bandPass, 20.0f), 1000.0f);
+
+        // A cutoff the user chose stays put.
+        expectEquals(cutoffAfterSwitch(highPass, lowPass, 150.0f), 150.0f);
+        expectEquals(cutoffAfterSwitch(lowPass, highPass, 5000.0f), 5000.0f);
+        expectEquals(cutoffAfterSwitch(bandPass, lowPass, 800.0f), 800.0f);
+        expectEquals(cutoffAfterSwitch(lowPass, lowPass, 20000.0f), 20000.0f);
+
+        // Clicking through all three modes lands back on the transparent high-pass.
+        float hz = DSPConstants::DEFAULT_HIPASS_FREQ;
+        hz = cutoffAfterSwitch(highPass, lowPass, hz);
+        hz = cutoffAfterSwitch(lowPass, bandPass, hz);
+        hz = cutoffAfterSwitch(bandPass, highPass, hz);
+        expectEquals(hz, DSPConstants::DEFAULT_HIPASS_FREQ);
+    }
+
+    beginTest("Only a user's mode switch moves the cutoff; presets and automation do not");
+    {
+        PluginProcessor proc;
+        auto& mode = *proc.parameters.getParameter("filterMode");
+        auto& cutoff = *proc.parameters.getParameter("highPassFreq");
+        auto cutoffHz = [&] { return cutoff.convertFrom0to1(cutoff.getValue()); };
+        auto modeValue = [&](int m) { return mode.convertTo0to1(static_cast<float>(m)); };
+
+        FilterModeSwitch::Listener listener(mode, cutoff);
+        juce::ComboBox box;
+        box.addItemList({ "High Pass", "Low Pass", "Band Pass" }, 1);
+        juce::AudioProcessorValueTreeState::ComboBoxAttachment attachment(proc.parameters, "filterMode", box);
+
+        // A pick in the plugin window: the attachment wraps it in a gesture.
+        box.setSelectedItemIndex(FilterModeSwitch::lowPass, juce::sendNotificationSync);
+        expectWithinAbsoluteError(cutoffHz(), 20000.0f, 0.5f);
+
+        // Automation or a preset: no gesture, so the cutoff it sets is kept.
+        cutoff.setValueNotifyingHost(cutoff.convertTo0to1(20000.0f));
+        mode.setValueNotifyingHost(modeValue(FilterModeSwitch::highPass));
+        expectWithinAbsoluteError(cutoffHz(), 20000.0f, 0.5f);
+
+        // A cutoff the user set survives their own mode switch.
+        cutoff.setValueNotifyingHost(cutoff.convertTo0to1(150.0f));
+        box.setSelectedItemIndex(FilterModeSwitch::bandPass, juce::sendNotificationSync);
+        expectWithinAbsoluteError(cutoffHz(), 150.0f, 0.5f);
     }
 }
 
