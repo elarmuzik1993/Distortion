@@ -1436,6 +1436,73 @@ void PluginProcessor::updateLatencyPlan(double sampleRate, int blockSize)
     prepareDelay(bypassLatencyDelay, baseSpec, bypassLatencySamples);
 }
 
+void PluginProcessor::copyMonoInputAcrossChannels(juce::AudioBuffer<float>& buffer) noexcept
+{
+    // See processBlock: the output-only channels hold undefined data (or, with Mono
+    // Input on, the silent second interface input).
+    const bool monoInput = monoInputParam && monoInputParam->load() > 0.5f;
+    const int firstToOverwrite = monoInput ? 1
+                                           : juce::jmax(1, getTotalNumInputChannels());
+    for (int ch = firstToOverwrite; ch < buffer.getNumChannels(); ++ch)
+        buffer.copyFrom(ch, 0, buffer, 0, 0, buffer.getNumSamples());
+}
+
+void PluginProcessor::applyBypassLatency(juce::AudioBuffer<float>& buffer) noexcept
+{
+    // ========== LATENCY COMPENSATION (Bypass path) ==========
+    // The active path is delayed by its own path latency, then padded up to the
+    // reported reserve; this branch skips the oversampler, so it must impose that
+    // same path latency here to stay aligned with the host's PDC and avoid a
+    // timing jump when the bypass<->active threshold is crossed. None
+    // interpolation -> the samples pass through unchanged, only time-shifted.
+    // When latency is zero (oversampling off) the branch stays a truly
+    // bit-clean passthrough.
+    if (bypassLatencySamples > 0)
+    {
+        const int numSamp = buffer.getNumSamples();
+        const int numCh   = buffer.getNumChannels();
+        for (int sample = 0; sample < numSamp; ++sample)
+            for (int channel = 0; channel < numCh; ++channel)
+            {
+                bypassLatencyDelay.pushSample(channel, buffer.getSample(channel, sample));
+                buffer.setSample(channel, sample, bypassLatencyDelay.popSample(channel));
+            }
+    }
+
+    // Shares the active path's pad line, fed every block by whichever path runs,
+    // so a crossing between the two never replays a stale line's leftover tail.
+    // Together with the delay above this reaches the same reserve, R, as the
+    // active path.
+    if (outputPadDelay > 0)
+        delayInPlace(outputPadLine, buffer.getArrayOfWritePointers(),
+                     buffer.getNumChannels(), buffer.getNumSamples());
+}
+
+void PluginProcessor::processBlockBypassed(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
+{
+    RT_ASSERT_SCOPE();
+    juce::ignoreUnused(midiMessages);
+    juce::ScopedNoDenormals noDenormals;
+
+    if (buffer.getNumSamples() == 0 || buffer.getNumChannels() == 0)
+        return;
+
+    // A duck requested before the host bypassed us still has to finish, so the
+    // fade runs here too; closed means silence until the rebuild, as in processBlock.
+    updateDuckState();
+    if (duckState == DuckState::closed)
+    {
+        buffer.clear();
+        return;
+    }
+
+    // None of the chain runs, but the host still compensates for the reported
+    // latency, so the signal takes the internal bypass branch's latency tail.
+    copyMonoInputAcrossChannels(buffer);
+    applyBypassLatency(buffer);
+    applyDuckGain(buffer);
+}
+
 void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
     RT_ASSERT_SCOPE();
@@ -1472,13 +1539,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // With Mono Input on, the same copy is applied across every channel: there the
     // host did write channel 1, it just holds silence because nothing is plugged
     // into the second interface input.
-    {
-        const bool monoInput = monoInputParam && monoInputParam->load() > 0.5f;
-        const int firstToOverwrite = monoInput ? 1
-                                               : juce::jmax(1, getTotalNumInputChannels());
-        for (int ch = firstToOverwrite; ch < buffer.getNumChannels(); ++ch)
-            buffer.copyFrom(ch, 0, buffer, 0, 0, buffer.getNumSamples());
-    }
+    copyMonoInputAcrossChannels(buffer);
 
     // Mono-source detection. Advisory only - it lights the Mono Input control and
     // never touches the audio. Requires one channel to carry signal while the
@@ -1846,34 +1907,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             }
         }
 
-        // ========== LATENCY COMPENSATION (Bypass path) ==========
-        // The active path is delayed by its own path latency, then padded up to the
-        // reported reserve; this branch skips the oversampler, so it must impose that
-        // same path latency here to stay aligned with the host's PDC and avoid a
-        // timing jump when the bypass<->active threshold is crossed. None
-        // interpolation -> the samples pass through unchanged, only time-shifted.
-        // When latency is zero (oversampling off) the branch stays a truly
-        // bit-clean passthrough.
-        if (bypassLatencySamples > 0)
-        {
-            const int numSamp = buffer.getNumSamples();
-            const int numCh   = buffer.getNumChannels();
-            for (int sample = 0; sample < numSamp; ++sample)
-                for (int channel = 0; channel < numCh; ++channel)
-                {
-                    bypassLatencyDelay.pushSample(channel, buffer.getSample(channel, sample));
-                    buffer.setSample(channel, sample, bypassLatencyDelay.popSample(channel));
-                }
-        }
-
-        // Shares the active path's pad line, fed every block by whichever path runs,
-        // so a crossing between the two never replays a stale line's leftover tail.
-        // Together with the delay above this reaches the same reserve, R, as the
-        // active path.
-        if (outputPadDelay > 0)
-            delayInPlace(outputPadLine, buffer.getArrayOfWritePointers(),
-                         buffer.getNumChannels(), buffer.getNumSamples());
-
+        applyBypassLatency(buffer);
         applyDuckGain(buffer);   // last, as on the active path
         return;  // Skip all DSP processing
     }

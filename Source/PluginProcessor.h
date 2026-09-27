@@ -230,6 +230,9 @@ public:
 #endif
 
     void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    // Host bypass: none of the chain runs, but the audio still arrives the reported
+    // latency late, as the host's delay compensation expects.
+    void processBlockBypassed(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     //==============================================================================
     // Bug reporting (USE-53)
@@ -485,6 +488,10 @@ private:
     // time-shifted. Sized/updated in rebuildOversampling (message thread).
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> bypassLatencyDelay;
     int bypassLatencySamples = 0;
+    // The bypass branches' latency tail: bypassLatencyDelay, then the shared pad.
+    void applyBypassLatency(juce::AudioBuffer<float>& buffer) noexcept;
+    // Mono in, stereo out: copies the input across the output-only channels.
+    void copyMonoInputAcrossChannels(juce::AudioBuffer<float>& buffer) noexcept;
 
     // --- Latency: one figure reported whatever runs ------------------------------
     // R is the larger of the user's oversampler latency and the island delay a

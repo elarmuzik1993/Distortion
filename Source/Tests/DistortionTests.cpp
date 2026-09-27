@@ -6290,6 +6290,39 @@ void NamProfileTests::runTest()
         expect(settle(processor), "The switch completes");
         expect(processor.profileMode, "Profile mode is on");
     }
+
+    beginTest("Host bypass keeps the reported latency");
+    {
+        // The host compensates for the reported latency whether or not it has
+        // bypassed us, so the bypassed signal must arrive exactly that late.
+        for (const double rate : { 44100.0, 96000.0 })
+        {
+            PluginProcessor processor;
+            prepareForProfileTest(processor, rate, 512);   // built-in clip type
+            const int latency = processor.getLatencySamples();
+
+            std::vector<float> out;
+            juce::MidiBuffer midi;
+            for (int b = 0; b < 4; ++b)
+            {
+                juce::AudioBuffer<float> buffer(2, 512);
+                buffer.clear();
+                if (b == 0)
+                {
+                    buffer.setSample(0, 0, 0.25f);
+                    buffer.setSample(1, 0, 0.25f);
+                }
+                processor.processBlockBypassed(buffer, midi);
+                appendChannel0(out, buffer);
+            }
+
+            const auto peak = std::distance(out.begin(), std::max_element(out.begin(), out.end(),
+                [](float a, float b) { return std::abs(a) < std::abs(b); }));
+            expect(latency > 0, "A latency is reported at " + juce::String(rate));
+            expectEquals(static_cast<int>(peak), latency, "Bypassed impulse lands at the reported latency, "
+                                                          + juce::String(rate) + " Hz");
+        }
+    }
 }
 
 #endif // JUCE_DEBUG
