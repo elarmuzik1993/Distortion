@@ -29,9 +29,6 @@ public:
                                             juce::String& errorOut);
     // "This profile can't run at 44.056 kHz"
     static juce::String unsupportedRateMessage(double hostRate);
-    // A profile with no models: handing it to the audio thread clears the
-    // active profile through the same path a new one arrives by.
-    static std::unique_ptr<NamProfile> makeEmpty() { return std::unique_ptr<NamProfile>(new NamProfile()); }
     ~NamProfile();
 
     // Prepares every island and model for a new host rate or block size. Allocates.

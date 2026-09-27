@@ -302,7 +302,7 @@ PluginProcessor::PluginProcessor()
     drainTimer = std::move (t);
    #endif
 
-    startTimer(50);
+    startTimer(DSPConstants::PROFILE_TIMER_MS);
 }
 
 PluginProcessor::~PluginProcessor()
@@ -317,10 +317,13 @@ PluginProcessor::~PluginProcessor()
     pingSender.reset();     // joins the background thread (bounded)
     parameters.removeParameterListener("linearPhaseDry", this);
 
-    // No loader may publish once the slots below are freed.
+    // No loader may stage once the slots below are freed.
     profileLoader.removeAllJobs(true, 10000);
+    delete stagedProfile.exchange(nullptr);
     delete pendingProfile.exchange(nullptr);
     delete retiredProfile.exchange(nullptr);
+    delete incomingProfile;
+    incomingProfile = nullptr;
     delete activeProfile;
     activeProfile = nullptr;
 }
@@ -753,6 +756,10 @@ void PluginProcessor::changeProgramName(int index, const juce::String& newName)
 //==============================================================================
 void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
+    // Held for the whole prepare: the timer installs profiles and rebuilds the
+    // oversampler under the same lock, so the two never interleave.
+    const juce::ScopedLock callbackLockGuard(getCallbackLock());
+
     // Store sample rate for LFO calculations
     currentSampleRate = static_cast<float>(sampleRate);
     lfoPhase = 0.0f;  // Reset LFO phase
@@ -763,6 +770,11 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // below has to be wide enough for what actually gets processed.
     const int numChannels = std::max(1, std::max(getTotalNumInputChannels(),
                                                  getTotalNumOutputChannels()));
+
+    // NAM profiles: bring every one we hold up to these settings and finish any
+    // pending switch, so the oversampler below is built for the final mode.
+    prepareProfilesForHost(sampleRate, samplesPerBlock);
+    profileScratch.setSize(2 * numChannels + 1, samplesPerBlock, false, false, true);
 
     // Output gain is applied AFTER downsampling at normal sample rate
     smoothedOutputGain.reset(sampleRate, DSPConstants::GAIN_SMOOTH_TIME_S);
@@ -994,20 +1006,6 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     highBandBufferB.setSize(numChannels, worstCaseOversampledBlockSize, false, false, true);
     dryBuffer.setSize(numChannels, samplesPerBlock + 64, false, false, true);
 
-    // NAM profile: record the rate and block size profiles must be prepared for,
-    // and bring the active one up to them. Processing is stopped here, so the
-    // audio-thread-owned activeProfile may be touched. A pending profile prepared
-    // for other settings is caught at swap time and refreshed by the timer.
-    profileHostSampleRate.store(sampleRate);
-    profileHostBlockSize.store(samplesPerBlock);
-    profilePreparedRate = sampleRate;
-    profilePreparedBlock = samplesPerBlock;
-    profileScratch.setSize(2 * numChannels + 1, samplesPerBlock, false, false, true);
-    if (activeProfile != nullptr && activeProfile->getNumChannels() > 0
-        && (! juce::exactlyEqual(activeProfile->getPreparedSampleRate(), sampleRate)
-            || activeProfile->getPreparedBlockSize() != samplesPerBlock))
-        activeProfile->prepare(sampleRate, samplesPerBlock);
-
     sink.reset();   // start each prepared session with clean anomaly counters
 }
 
@@ -1175,8 +1173,10 @@ void PluginProcessor::applyLA2ACompression(juce::AudioBuffer<float>& buffer,
 
 void PluginProcessor::requestOversamplingRebuild(int stages)
 {
-    requestedOversamplingStages.store(stages, std::memory_order_release);
-    triggerAsyncUpdate();
+    // The editor re-sends the saved setting every time it opens; only a real change
+    // rebuilds, and the rebuild is ducked so it no longer clicks.
+    if (requestedOversamplingStages.exchange(stages, std::memory_order_acq_rel) != stages)
+        requestDuck();
 }
 
 void PluginProcessor::parameterChanged(const juce::String& parameterID, float /*newValue*/)
@@ -1192,35 +1192,31 @@ void PluginProcessor::parameterChanged(const juce::String& parameterID, float /*
 
 void PluginProcessor::timerCallback()
 {
-    // Message-thread poll: pick up a deferred oversampler rebuild requested from
-    // the audio thread by parameterChanged(). exchange() ensures we only rebuild
-    // once per request even if multiple changes arrived since the last tick.
-    if (oversamplingRebuildPending.exchange(false, std::memory_order_acq_rel))
-        handleAsyncUpdate();
-
+    // Message-thread housekeeping for NAM profiles and every runtime rebuild.
     collectRetiredProfile();
-    if (pendingProfileStale.exchange(false, std::memory_order_acq_rel))
-        refreshPendingProfile();
+    refreshStagedProfile();
+    routeStagedProfile();
+    if (pendingNeedsDuck.exchange(false, std::memory_order_acq_rel))
+        requestDuck();
+    // parameterChanged() flags a linear-phase change from any thread (often the
+    // audio thread); its rebuild is ducked like every other one.
+    if (oversamplingRebuildPending.exchange(false, std::memory_order_acq_rel))
+        requestDuck();
+    serviceDuck();
 }
 
 void PluginProcessor::handleAsyncUpdate()
 {
-    const double sampleRate = getSampleRate();
-    const int samplesPerBlock = getBlockSize();
-    if (sampleRate <= 0.0 || samplesPerBlock <= 0)
-        return;
-
-    const juce::ScopedLock callbackLockGuard(getCallbackLock());
-    rebuildOversampling(sampleRate, samplesPerBlock);
+    // Performs whatever switch is requested at once, without waiting for the audio
+    // thread to fade out. Tests and tools use it to apply a rebuild directly.
+    performSwitch();
 }
 
 void PluginProcessor::rebuildOversampling(double sampleRate, int samplesPerBlock)
 {
-    // A NAM profile only sounds right at the rate it was trained at, so while one
-    // is loaded the chain runs at the host rate (1x). The user's setting returns
-    // when the profile is cleared.
-    const int stages = profileWanted.load(std::memory_order_acquire)
-        ? 0 : requestedOversamplingStages.load(std::memory_order_acquire);
+    // Profile mode runs the chain at 1x: the profile's island converts to the
+    // model's rate itself. The user's setting returns when the profile is cleared.
+    const int stages = profileMode ? 0 : requestedOversamplingStages.load(std::memory_order_acquire);
     const bool linearPhase = linearPhaseDryParam && (linearPhaseDryParam->load() > 0.5f);
     // Widest layout, matching prepareToPlay - see the note there. An oversampler
     // built for 1 channel would be handed 2 under mono-in / stereo-out.
@@ -1406,6 +1402,14 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Early return for empty buffers
     if (buffer.getNumSamples() == 0 || buffer.getNumChannels() == 0)
         return;
+
+    updateDuckState();
+    if (duckState == DuckState::closed)
+    {
+        // Faded out and waiting for the rebuild: silence, and none of the chain runs.
+        buffer.clear();
+        return;
+    }
 
     takePendingProfile();
 
@@ -1812,6 +1816,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                 }
         }
 
+        applyDuckGain(buffer);   // last, as on the active path
         return;  // Skip all DSP processing
     }
 
@@ -1995,6 +2000,9 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             pushSampleToScope(leftSample, rightSample);
         }
     }
+
+    // Last: the fade around a rebuild (see updateDuckState).
+    applyDuckGain(buffer);
 }
 
 void PluginProcessor::applyFinalLimiter(juce::AudioBuffer<float>& buffer)
@@ -2283,9 +2291,11 @@ bool PluginProcessor::loadProfileNow(const juce::File& file, int requestId)
     constexpr int numChannels = 2;
 
     // Prepared for what the host last asked for; before the first prepareToPlay,
-    // for NAM's native 48 kHz. A mismatch is caught at swap time and refreshed.
-    const double sampleRate = profileHostSampleRate.load() > 0.0 ? profileHostSampleRate.load() : 48000.0;
-    const int maxBlockSize = profileHostBlockSize.load() > 0 ? profileHostBlockSize.load() : 512;
+    // for NAM's native 48 kHz. The timer re-prepares it if the host moves on.
+    const double hostRate = profileHostSampleRate.load();
+    const int hostBlock = profileHostBlockSize.load();
+    const double sampleRate = hostRate > 0.0 ? hostRate : 48000.0;
+    const int maxBlockSize = hostBlock > 0 ? hostBlock : 512;
 
     juce::String error;
     auto profile = NamProfile::load(file, numChannels, sampleRate, maxBlockSize, error);
@@ -2306,22 +2316,28 @@ bool PluginProcessor::loadProfileNow(const juce::File& file, int requestId)
     profileStatus.expectedSampleRate = profile->getExpectedSampleRate();
     profileStatus.error = {};
 
-    publishProfile(profile.release());
-    // Entering profile mode switches the chain to 1x. Swapping one profile for
-    // another needs no rebuild, which would reset the DSP state for nothing.
-    if (! profileWanted.exchange(true, std::memory_order_acq_rel))
-        oversamplingRebuildPending.store(true, std::memory_order_release);
+    // The timer decides how it goes in: a crossfade, or a duck and a rebuild. It
+    // supersedes an older load still waiting here, and any clear before it.
+    clearRequested.store(false, std::memory_order_release);
+    delete stagedProfile.exchange(profile.release(), std::memory_order_acq_rel);
     return true;
 }
 
 void PluginProcessor::clearProfile()
 {
     const juce::ScopedLock sl(profileStatusLock);
-    ++profileRequestId;   // an in-flight load must not publish after this
+    ++profileRequestId;   // an in-flight load must not stage after this
     profileStatus = {};
-    publishProfile(NamProfile::makeEmpty().release());
-    if (profileWanted.exchange(false, std::memory_order_acq_rel))
-        oversamplingRebuildPending.store(true, std::memory_order_release);   // back to the user's setting
+    delete stagedProfile.exchange(nullptr, std::memory_order_acq_rel);
+    delete pendingProfile.exchange(nullptr, std::memory_order_acq_rel);
+
+    // Leaving profile mode rebuilds the oversampler, so it goes through a duck.
+    // With no profile installed there is nothing left to undo.
+    if (profileModeInstalled.load(std::memory_order_acquire))
+    {
+        clearRequested.store(true, std::memory_order_release);
+        requestDuck();
+    }
 }
 
 PluginProcessor::ProfileStatus PluginProcessor::getProfileStatus() const
@@ -2344,40 +2360,50 @@ bool PluginProcessor::profileSampleRateMismatch() const
         && std::abs(hostRate - status.expectedSampleRate) > 1.0;
 }
 
-void PluginProcessor::publishProfile(NamProfile* profile)
+bool PluginProcessor::isProfileSwitchIdle() const
 {
-    // Whoever exchanges a pointer out of the slot owns it; an older profile the
-    // audio thread never picked up is freed here, off the audio thread.
-    delete pendingProfile.exchange(profile, std::memory_order_acq_rel);
+    return stagedProfile.load() == nullptr && pendingProfile.load() == nullptr
+        && incomingProfile == nullptr && ! duckRequested.load() && duckState == DuckState::open;
+}
+
+bool PluginProcessor::isPreparedForHost(const NamProfile& profile) const
+{
+    return juce::exactlyEqual(profile.getPreparedSampleRate(), profileHostSampleRate.load())
+        && profile.getPreparedBlockSize() >= profileHostBlockSize.load();
+}
+
+bool PluginProcessor::canCrossfadeTo(const NamProfile& next) const noexcept
+{
+    return profileMode && activeProfile != nullptr && next.isPrepared()
+        && next.getLatencySamples() == activeProfile->getLatencySamples()
+        && juce::exactlyEqual(next.getPreparedSampleRate(), profilePreparedRate)
+        && next.getPreparedBlockSize() >= profilePreparedBlock;
 }
 
 void PluginProcessor::takePendingProfile() noexcept
 {
-    // The replaced profile can only be parked once the timer has collected the
-    // previous one, so a swap waits a tick rather than freeing anything here.
-    if (retiredProfile.load(std::memory_order_acquire) != nullptr)
+    // One swap at a time, never during a duck, and only with somewhere to park the
+    // profile it replaces.
+    if (duckState != DuckState::open || duckRequested.load(std::memory_order_acquire)
+        || retiredProfile.load(std::memory_order_acquire) != nullptr)
         return;
 
     auto* next = pendingProfile.exchange(nullptr, std::memory_order_acq_rel);
     if (next == nullptr)
         return;
 
-    // Prepared for other settings (prepareToPlay ran while it was loading): hand
-    // it back for the timer to re-prepare. If a newer one arrived meanwhile,
-    // this one is superseded and goes out through the retired slot instead.
-    if (next->getNumChannels() > 0
-        && (! juce::exactlyEqual(next->getPreparedSampleRate(), profilePreparedRate)
-            || next->getPreparedBlockSize() < profilePreparedBlock))
+    if (! canCrossfadeTo(*next))
     {
+        // The mode or the host settings changed after the timer routed it: hand it
+        // back, and the timer installs it with a duck instead.
         NamProfile* expected = nullptr;
         if (! pendingProfile.compare_exchange_strong(expected, next, std::memory_order_acq_rel))
-            retiredProfile.store(next, std::memory_order_release);
-        pendingProfileStale.store(true, std::memory_order_release);
+            retiredProfile.store(next, std::memory_order_release);   // a newer one replaced it
+        pendingNeedsDuck.store(true, std::memory_order_release);
         return;
     }
 
-    if (activeProfile != nullptr)
-        retiredProfile.store(activeProfile, std::memory_order_release);
+    retiredProfile.store(activeProfile, std::memory_order_release);
     activeProfile = next;
 }
 
@@ -2386,18 +2412,281 @@ void PluginProcessor::collectRetiredProfile()
     delete retiredProfile.exchange(nullptr, std::memory_order_acq_rel);
 }
 
-void PluginProcessor::refreshPendingProfile()
+void PluginProcessor::refreshStagedProfile()
 {
-    auto* profile = pendingProfile.exchange(nullptr, std::memory_order_acq_rel);
-    if (profile == nullptr)
+    const double rate = profileHostSampleRate.load();
+    const int block = profileHostBlockSize.load();
+    if (rate <= 0.0 || block <= 0)
         return;
 
-    if (profile->getNumChannels() > 0)
-        profile->prepare(profileHostSampleRate.load(), profileHostBlockSize.load());
+    auto* staged = stagedProfile.exchange(nullptr, std::memory_order_acq_rel);
+    if (staged == nullptr)
+        return;
+
+    // A load that read the host settings before prepareToPlay changed them. Bring
+    // it up to date here, outside the callback lock.
+    if (! isPreparedForHost(*staged) && ! staged->prepare(rate, block))
+    {
+        {
+            const juce::ScopedLock sl(profileStatusLock);
+            profileStatus.name = {};   // the path stays, so the session remembers it
+            profileStatus.error = NamProfile::unsupportedRateMessage(rate);
+        }
+        delete staged;
+        return;
+    }
 
     NamProfile* expected = nullptr;
-    if (! pendingProfile.compare_exchange_strong(expected, profile, std::memory_order_acq_rel))
-        delete profile;   // a newer profile was published while this one was re-prepared
+    if (! stagedProfile.compare_exchange_strong(expected, staged, std::memory_order_acq_rel))
+        delete staged;   // a newer load was staged meanwhile
+}
+
+void PluginProcessor::routeStagedProfile()
+{
+    // A duck already on its way installs whatever is staged.
+    if (duckRequested.load(std::memory_order_acquire))
+        return;
+
+    auto* staged = stagedProfile.exchange(nullptr, std::memory_order_acq_rel);
+    if (staged == nullptr)
+        return;
+
+    const bool ready = isPreparedForHost(*staged);
+    if (ready && profileModeInstalled.load(std::memory_order_acquire)
+        && staged->getLatencySamples() == installedIslandDelay.load(std::memory_order_acquire))
+    {
+        // Same island delay: the audio thread blends into it. A target it hasn't
+        // taken yet is superseded.
+        delete pendingProfile.exchange(staged, std::memory_order_acq_rel);
+        return;
+    }
+
+    // Entering profile mode, or a different delay: it goes in with a rebuild.
+    NamProfile* expected = nullptr;
+    if (! stagedProfile.compare_exchange_strong(expected, staged, std::memory_order_acq_rel))
+    {
+        delete staged;   // a newer load was staged meanwhile; the next tick routes it
+        return;
+    }
+    if (ready)
+        requestDuck();
+}
+
+void PluginProcessor::requestDuck()
+{
+    if (! duckRequested.exchange(true, std::memory_order_acq_rel))
+        duckRequestedAtMs.store(juce::Time::getMillisecondCounterHiRes(), std::memory_order_release);
+    // Poll quickly while the audio thread fades out. Timer calls belong on the
+    // message thread; from anywhere else the next regular tick picks this up.
+    if (juce::MessageManager::existsAndIsCurrentThread())
+        startTimer(DSPConstants::DUCK_POLL_MS);
+}
+
+void PluginProcessor::serviceDuck()
+{
+    if (! duckRequested.load(std::memory_order_acquire))
+        return;
+
+    // The audio thread normally reports silence within a block or two. If it
+    // doesn't (transport stopped, plugin suspended), nothing is playing, so the
+    // rebuild goes ahead anyway.
+    const double sampleRate = getSampleRate();
+    const double blockMs = sampleRate > 0.0 ? 1000.0 * getBlockSize() / sampleRate : 0.0;
+    const double timeoutMs = juce::jmax(static_cast<double>(DSPConstants::DUCK_TIMEOUT_MS), 3.0 * blockMs);
+    const bool timedOut = juce::Time::getMillisecondCounterHiRes()
+                        - duckRequestedAtMs.load(std::memory_order_acquire) >= timeoutMs;
+    if (duckReady.load(std::memory_order_acquire) || timedOut)
+        performSwitch();
+}
+
+void PluginProcessor::performSwitch()
+{
+    std::vector<NamProfile*> toFree;
+    {
+        const juce::ScopedLock callbackLockGuard(getCallbackLock());
+        installRequestedProfile(toFree);
+        const double sampleRate = getSampleRate();
+        const int blockSize = getBlockSize();
+        if (sampleRate > 0.0 && blockSize > 0)
+            rebuildOversampling(sampleRate, blockSize);
+        duckRequested.store(false, std::memory_order_release);
+        duckReady.store(false, std::memory_order_release);
+        rebuildGeneration.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    // Freed outside the lock, so the audio thread waits only for the rebuild itself.
+    for (auto* profile : toFree)
+        delete profile;
+    if (juce::MessageManager::existsAndIsCurrentThread())
+        startTimer(DSPConstants::PROFILE_TIMER_MS);
+}
+
+void PluginProcessor::installRequestedProfile(std::vector<NamProfile*>& toFree)
+{
+    // Newest intent wins: a finished load, then a clear, then a blend target the
+    // audio thread hasn't taken, then the profile it was fading in.
+    NamProfile* next = nullptr;
+    bool change = false;
+
+    if (auto* staged = stagedProfile.exchange(nullptr, std::memory_order_acq_rel))
+    {
+        if (isPreparedForHost(*staged))
+        {
+            next = staged;
+            change = true;
+        }
+        else
+        {
+            // Prepared for settings the host has since left: the timer re-prepares
+            // it outside the lock and routes it again.
+            NamProfile* expected = nullptr;
+            if (! stagedProfile.compare_exchange_strong(expected, staged, std::memory_order_acq_rel))
+                toFree.push_back(staged);   // a newer load arrived meanwhile
+        }
+    }
+    if (clearRequested.exchange(false, std::memory_order_acq_rel))
+        change = true;   // with nothing newer staged, next stays nullptr: no profile
+    if (auto* pending = pendingProfile.exchange(nullptr, std::memory_order_acq_rel))
+    {
+        if (change)
+        {
+            toFree.push_back(pending);
+        }
+        else
+        {
+            next = pending;
+            change = true;
+        }
+    }
+    if (incomingProfile != nullptr)
+    {
+        if (change)
+        {
+            toFree.push_back(incomingProfile);
+        }
+        else
+        {
+            next = incomingProfile;
+            change = true;
+        }
+        incomingProfile = nullptr;
+    }
+    if (auto* retired = retiredProfile.exchange(nullptr, std::memory_order_acq_rel))
+        toFree.push_back(retired);
+
+    if (change)
+    {
+        if (activeProfile != nullptr)
+            toFree.push_back(activeProfile);
+        activeProfile = next;
+    }
+
+    profileMode = activeProfile != nullptr && activeProfile->isPrepared()
+               && activeProfile->getNumChannels() > 0;
+    profileModeInstalled.store(profileMode, std::memory_order_release);
+    installedIslandDelay.store(profileMode ? activeProfile->getLatencySamples() : 0,
+                               std::memory_order_release);
+}
+
+void PluginProcessor::prepareProfilesForHost(double sampleRate, int samplesPerBlock)
+{
+    // Called from prepareToPlay under the callback lock, with processing stopped:
+    // audio-thread state may be touched and a model may be prewarmed here.
+    profileHostSampleRate.store(sampleRate);
+    profileHostBlockSize.store(samplesPerBlock);
+    profilePreparedRate = sampleRate;
+    profilePreparedBlock = samplesPerBlock;
+
+    std::vector<NamProfile*> toFree;
+    bool unsupported = false;
+    const auto bringUp = [&](NamProfile* profile) -> NamProfile*
+    {
+        if (profile == nullptr || isPreparedForHost(*profile) || profile->prepare(sampleRate, samplesPerBlock))
+            return profile;
+        unsupported = true;   // the host moved to a rate this profile can't run at
+        toFree.push_back(profile);
+        return nullptr;
+    };
+    const auto bringUpSlot = [&](std::atomic<NamProfile*>& slot)
+    {
+        if (auto* profile = bringUp(slot.exchange(nullptr, std::memory_order_acq_rel)))
+        {
+            NamProfile* expected = nullptr;
+            if (! slot.compare_exchange_strong(expected, profile, std::memory_order_acq_rel))
+                toFree.push_back(profile);   // a newer one arrived meanwhile
+        }
+    };
+    bringUpSlot(stagedProfile);
+    bringUpSlot(pendingProfile);
+    incomingProfile = bringUp(incomingProfile);
+    activeProfile = bringUp(activeProfile);
+    if (unsupported)
+    {
+        const juce::ScopedLock sl(profileStatusLock);
+        profileStatus.name = {};   // the path stays, so the session remembers it
+        profileStatus.error = NamProfile::unsupportedRateMessage(sampleRate);
+    }
+
+    // Finish any pending switch the way the timer would, except that nothing fades.
+    installRequestedProfile(toFree);
+    duckRequested.store(false, std::memory_order_release);
+    duckReady.store(false, std::memory_order_release);
+    duckState = DuckState::open;
+    duckGain = 1.0f;
+    seenRebuildGeneration = rebuildGeneration.load(std::memory_order_acquire);
+    duckStep = static_cast<float>(1.0 / (DSPConstants::DUCK_FADE_TIME_S * sampleRate));
+
+    for (auto* profile : toFree)
+        delete profile;
+}
+
+void PluginProcessor::updateDuckState() noexcept
+{
+    const int generation = rebuildGeneration.load(std::memory_order_acquire);
+    if (generation != seenRebuildGeneration)
+    {
+        seenRebuildGeneration = generation;
+        // A rebuild finished. Fade back in only if this thread had started fading
+        // out; one that ran while audio wasn't flowing leaves the level alone.
+        if (duckState == DuckState::closing || duckState == DuckState::closed)
+        {
+            duckState = DuckState::opening;
+            duckGain = 0.0f;
+        }
+    }
+    if (duckState == DuckState::open && duckRequested.load(std::memory_order_acquire))
+        duckState = DuckState::closing;
+}
+
+void PluginProcessor::applyDuckGain(juce::AudioBuffer<float>& buffer) noexcept
+{
+    if (duckState == DuckState::open)
+        return;   // unity: the output stays bit-exact
+
+    const bool closing = duckState == DuckState::closing;
+    const int numSamples = buffer.getNumSamples();
+    float gain = duckGain;
+    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+    {
+        gain = duckGain;
+        auto* data = buffer.getWritePointer(ch);
+        for (int i = 0; i < numSamples; ++i)
+        {
+            gain = closing ? juce::jmax(0.0f, gain - duckStep) : juce::jmin(1.0f, gain + duckStep);
+            data[i] *= gain;
+        }
+    }
+    duckGain = gain;
+
+    if (closing && duckGain <= 0.0f)
+    {
+        duckState = DuckState::closed;
+        duckReady.store(true, std::memory_order_release);
+    }
+    else if (! closing && duckGain >= 1.0f)
+    {
+        duckState = DuckState::open;
+    }
 }
 
 // =============================================================================
@@ -2587,10 +2876,9 @@ bool PluginProcessor::applyProfileStage(float* const* channels) noexcept
     const int numSamples = static_cast<int>(pb_numSamples);
     const int numChannels = static_cast<int>(pb_numChannels);
 
-    // Only at 1x: the model runs at the rate it was prepared for. Right after a
-    // profile loads, the oversampler rebuild is still pending for a tick; the
-    // built-in clip type covers those few blocks.
-    if (profile == nullptr || profile->getNumChannels() == 0 || ! profile->isPrepared() || oversamplingFactor != 1
+    // Profile mode is only on once the rebuild to 1x has run, so the island sees
+    // the host rate it was prepared for.
+    if (! profileMode || profile == nullptr || ! profile->isPrepared() || oversamplingFactor != 1
         || numChannels < 1 || numChannels > 2
         || numSamples > profileScratch.getNumSamples()
         || profileScratch.getNumChannels() < 2 * numChannels + 1)
