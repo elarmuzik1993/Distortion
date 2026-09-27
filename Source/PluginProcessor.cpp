@@ -2443,6 +2443,7 @@ bool PluginProcessor::loadProfileNow(const juce::File& file, int requestId)
     // The timer decides how it goes in: a crossfade, or a duck and a rebuild. It
     // supersedes an older load still waiting here, and any clear before it.
     clearRequested.store(false, std::memory_order_release);
+    profile->setRequestId(requestId);
     delete stagedProfile.exchange(profile.release(), std::memory_order_acq_rel);
     return true;
 }
@@ -2548,20 +2549,28 @@ void PluginProcessor::refreshStagedProfile()
 
     // A load that read the host settings before prepareToPlay changed them. Bring
     // it up to date here, outside the callback lock.
-    if (! isPreparedForHost(*staged) && ! staged->prepare(rate, block))
-    {
-        {
-            const juce::ScopedLock sl(profileStatusLock);
-            profileStatus.name = {};   // the path stays, so the session remembers it
-            profileStatus.error = NamProfile::unsupportedRateMessage(rate);
-        }
-        delete staged;
-        return;
-    }
+    const bool usable = isPreparedForHost(*staged) || staged->prepare(rate, block);
 
-    NamProfile* expected = nullptr;
-    if (! stagedProfile.compare_exchange_strong(expected, staged, std::memory_order_acq_rel))
-        delete staged;   // a newer load was staged meanwhile
+    {
+        // A clear or a newer load while it was out of the slot supersedes it. Both
+        // bump the request id under this lock, so an empty slot alone can't tell.
+        const juce::ScopedLock sl(profileStatusLock);
+        if (staged->getRequestId() == profileRequestId.load())
+        {
+            if (! usable)
+            {
+                profileStatus.name = {};   // the path stays, so the session remembers it
+                profileStatus.error = NamProfile::unsupportedRateMessage(rate);
+            }
+            else
+            {
+                NamProfile* expected = nullptr;
+                if (stagedProfile.compare_exchange_strong(expected, staged, std::memory_order_acq_rel))
+                    return;
+            }
+        }
+    }
+    delete staged;
 }
 
 void PluginProcessor::routeStagedProfile()
@@ -2569,6 +2578,10 @@ void PluginProcessor::routeStagedProfile()
     // A duck already on its way installs whatever is staged.
     if (duckRequested.load(std::memory_order_acquire))
         return;
+
+    // Held while the profile is out of the slot, so a clear can't run in between
+    // and then see it come back.
+    const juce::ScopedLock sl(profileStatusLock);
 
     auto* staged = stagedProfile.exchange(nullptr, std::memory_order_acq_rel);
     if (staged == nullptr)
@@ -2640,13 +2653,16 @@ void PluginProcessor::performSwitch()
     std::vector<NamProfile*> toFree;
     {
         const juce::ScopedLock callbackLockGuard(getCallbackLock());
+        // Lowered before the requests are read, so a clear arriving from another
+        // thread after that finds no duck pending and asks for its own; lowered
+        // afterwards, it would wipe that clear's duck and leave it unserved.
+        duckRequested.store(false, std::memory_order_release);
+        duckReady.store(false, std::memory_order_release);
         installRequestedProfile(toFree);
         const double sampleRate = getSampleRate();
         const int hostBlockSize = getBlockSize();
         if (sampleRate > 0.0 && hostBlockSize > 0)
             rebuildOversampling(sampleRate, hostBlockSize);
-        duckRequested.store(false, std::memory_order_release);
-        duckReady.store(false, std::memory_order_release);
         rebuildGeneration.fetch_add(1, std::memory_order_acq_rel);
     }
 
@@ -2659,6 +2675,11 @@ void PluginProcessor::performSwitch()
 
 void PluginProcessor::installRequestedProfile(std::vector<NamProfile*>& toFree)
 {
+    // Callers hold the callback lock. This lock, taken after it, makes a clear from
+    // another thread land wholly before or after: it either empties the slots read
+    // below, or sees the profileModeInstalled written at the end.
+    const juce::ScopedLock sl(profileStatusLock);
+
     // Newest intent wins: a finished load, then a clear, then a blend target the
     // audio thread hasn't taken, then the profile it was fading in.
     NamProfile* next = nullptr;
@@ -2777,12 +2798,13 @@ void PluginProcessor::prepareProfilesForHost(double sampleRate, int samplesPerBl
 
     // Finish any pending switch the way the timer would, except that nothing fades.
     // prepareToPlay rebuilds with the current settings next, so a flag still asking
-    // for a rebuild is stale and must not duck on the next tick.
-    installRequestedProfile(toFree);
+    // for a rebuild is stale and must not duck on the next tick. The flags drop
+    // first, as in performSwitch, so a clear arriving meanwhile keeps its duck.
     duckRequested.store(false, std::memory_order_release);
     duckReady.store(false, std::memory_order_release);
     pendingNeedsDuck.store(false, std::memory_order_release);
     oversamplingRebuildPending.store(false, std::memory_order_release);
+    installRequestedProfile(toFree);
     // No duck is pending now, so the timer can drop back from its quick poll.
     // Timer calls belong on the message thread (see requestDuck).
     if (juce::MessageManager::existsAndIsCurrentThread()

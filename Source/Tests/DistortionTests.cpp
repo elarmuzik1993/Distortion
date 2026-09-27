@@ -5790,6 +5790,7 @@ void NamProfileTests::runTest()
         juce::String error;
         auto stale = NamProfile::load(namTestModel("wavenet.nam"), 2, 48000.0, 512, error);
         expect(stale != nullptr, error);
+        stale->setRequestId(processor.profileRequestId.load());   // as a real load tags it
         processor.stagedProfile.store(stale.release());
         expect(settle(processor), "The switch completes");
         expect(processor.activeProfile != nullptr, "The profile is installed");
@@ -5905,6 +5906,7 @@ void NamProfileTests::runTest()
         juce::String error;
         auto stale = NamProfile::load(namTestModel("lstm.nam"), 2, 48000.0, 512, error);
         expect(stale != nullptr, error);
+        stale->setRequestId(processor.profileRequestId.load());   // as a real load tags it
         processor.pendingProfile.store(stale.release());
         expect(settle(processor), "The switch completes");
         expect(processor.activeProfile != nullptr && processor.activeProfile->getName() == "lstm",
@@ -6551,6 +6553,73 @@ void NamProfileTests::runTest()
                    "The older profile is freed " + what);
             for (auto* profile : toFree)
                 delete profile;
+        }
+    }
+
+    // Spins until `done` holds, for at most two seconds. The races below fire the
+    // clear the moment the other thread is inside its window.
+    const auto spinUntil = [](const std::function<bool()>& done)
+    {
+        const auto deadline = juce::Time::getMillisecondCounter() + 2000;
+        while (! done() && juce::Time::getMillisecondCounter() < deadline)
+            std::this_thread::yield();
+        return done();
+    };
+
+    beginTest("A clear while the timer re-prepares a staged profile keeps it cleared");
+    {
+        int caughtInWindow = 0;
+        for (int round = 0; round < 5; ++round)
+        {
+            PluginProcessor processor;
+            prepareForProfileTest(processor, 48000.0, 512);
+            // Prepared for 44.1 kHz, so the timer takes it out of its slot and
+            // prewarms it again before putting it back.
+            const auto model = namTestModel("wavenet.nam");
+            juce::String error;
+            auto stale = NamProfile::load(model, 2, 44100.0, 512, error);
+            expect(stale != nullptr, error);
+            stale->setRequestId(processor.beginProfileRequest(model));
+            processor.stagedProfile.store(stale.release());
+
+            std::atomic<bool> refreshed { false };
+            std::thread timer([&] { processor.refreshStagedProfile(); refreshed = true; });
+            // A descheduled spin can miss the whole window; the round then only
+            // checks the end state, and the count below makes sure most don't.
+            spinUntil([&] { return processor.stagedProfile.load() == nullptr || refreshed.load(); });
+            if (! refreshed.load())
+                ++caughtInWindow;
+            processor.clearProfile();   // as setStateInformation on a host thread would
+            timer.join();
+
+            expect(processor.stagedProfile.load() == nullptr, "The cleared profile isn't staged again");
+            expect(settle(processor), "Nothing left to switch");
+            expect(processor.activeProfile == nullptr && ! processor.profileMode, "No profile runs");
+        }
+        expect(caughtInWindow > 0, "At least one clear landed while the profile was out of its slot");
+    }
+
+    beginTest("A clear during a switch into profile mode is served, not lost");
+    {
+        for (int round = 0; round < 5; ++round)
+        {
+            PluginProcessor processor;
+            prepareForProfileTest(processor, 48000.0, 512);
+            expect(processor.loadProfileBlocking(namTestModel("wavenet.nam")), "Loads");
+            processor.timerCallback();   // routes it: entering profile mode asks for a duck
+            expect(processor.duckRequested.load(), "A duck is pending");
+
+            // The clear lands once the switch has installed the profile, while the
+            // switch is still rebuilding and its duck flag is still up.
+            std::thread timer([&] { processor.performSwitch(); });
+            expect(spinUntil([&] { return processor.profileModeInstalled.load(); }),
+                   "The switch installed the profile");
+            processor.clearProfile();
+            timer.join();
+
+            expect(settle(processor), "The clear's own switch completes");
+            expect(processor.activeProfile == nullptr && ! processor.profileMode,
+                   "The clear won: no profile runs");
         }
     }
 }

@@ -60,6 +60,11 @@ public:
     float getOutputGain() const noexcept { return outputGain; }
     const juce::File& getFile() const noexcept { return file; }
     juce::String getName() const { return file.getFileNameWithoutExtension(); }
+    // The load request that produced this profile. The processor keeps a profile
+    // only while this is still its newest request, so a clear or a newer load
+    // supersedes one that was out of its slot at the time.
+    int getRequestId() const noexcept { return requestId; }
+    void setRequestId(int id) noexcept { requestId = id; }
 
 private:
     NamProfile();   // defined where nam::DSP is complete
@@ -73,6 +78,7 @@ private:
     double settleSeconds = 0.0;
     float outputGain = 1.0f;
     bool ready = false;
+    int requestId = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(NamProfile)
 };
