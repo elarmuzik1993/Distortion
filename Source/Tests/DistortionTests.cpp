@@ -5900,10 +5900,95 @@ void NamProfileTests::runTest()
         expect(processor.incomingProfile != nullptr, "lstm is on its way in");
 
         processor.loadProfileBlocking(namTestModel("slimmable_container.nam"));
-        expect(settle(processor), "Both swaps complete");
+        processor.timerCallback();
+        expect(! processor.duckRequested.load(), "The newcomer is routed for a blend, not a duck");
+
+        processSine(processor, 1);
+        expect(processor.incomingProfile != nullptr && processor.incomingProfile->getName() == "lstm",
+               "The swap in flight keeps going");
+        expect(processor.pendingProfile.load() != nullptr
+               && processor.pendingProfile.load()->getName() == "slimmable_container",
+               "The newcomer waits");
+        expect(processor.activeProfile != nullptr && processor.activeProfile->getName() == "wavenet",
+               "wavenet is still active while lstm is mid-swap");
+
+        // Same shape as settle(), but recording each distinct active profile along
+        // the way: the newest must win only after lstm has had its turn as active.
+        std::vector<juce::String> activeNames;
+        bool idle = false;
+        for (int round = 0; round < 400; ++round)
+        {
+            processor.timerCallback();
+            if (processor.isProfileSwitchIdle())
+            {
+                idle = true;
+                break;
+            }
+            processSine(processor, 1);
+            if (processor.activeProfile != nullptr
+                && (activeNames.empty() || activeNames.back() != processor.activeProfile->getName()))
+                activeNames.push_back(processor.activeProfile->getName());
+        }
+        expect(idle, "Both swaps complete");
+
+        int lstmIndex = -1, slimIndex = -1;
+        for (size_t i = 0; i < activeNames.size(); ++i)
+        {
+            if (lstmIndex < 0 && activeNames[i] == "lstm")
+                lstmIndex = static_cast<int>(i);
+            if (slimIndex < 0 && activeNames[i] == "slimmable_container")
+                slimIndex = static_cast<int>(i);
+        }
+        expect(lstmIndex >= 0 && slimIndex >= 0 && lstmIndex < slimIndex,
+               "lstm becomes active before slimmable_container");
+
         expect(processor.activeProfile != nullptr
                && processor.activeProfile->getName() == "slimmable_container", "The newest profile wins");
         expect(processor.retiredProfile.load() == nullptr, "Nothing is left to free");
+    }
+
+    beginTest("A swap lasts its warm-up plus 30 ms, however the host splits its blocks");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        processor.loadProfileBlocking(namTestModel("wavenet.nam"));
+        expect(settle(processor), "First profile in");
+
+        processor.loadProfileBlocking(namTestModel("lstm.nam"));
+        processor.timerCallback();   // routed: lstm sits in pendingProfile
+
+        juce::MidiBuffer midi;
+        ContinuousSine sine;
+        int blockCount = 0;
+        double lstmSettleSeconds = 0.0;
+        bool completed = false;
+        for (int i = 0; i < 20000; ++i)
+        {
+            auto buffer = sine.next(1);
+            processor.processBlock(buffer, midi);
+            ++blockCount;
+
+            if (i == 0)
+            {
+                expect(processor.incomingProfile != nullptr, "The first sample takes lstm");
+                if (processor.incomingProfile != nullptr)
+                    lstmSettleSeconds = processor.incomingProfile->getSettleSeconds();
+            }
+
+            if (processor.incomingProfile == nullptr)
+            {
+                completed = true;
+                break;
+            }
+        }
+        expect(completed, "The swap finished within the safety cap");
+
+        const int warmupSamples = static_cast<int>(std::ceil(
+            juce::jmin(lstmSettleSeconds, DSPConstants::PROFILE_WARMUP_MAX_S) * 48000.0));
+        const int fadeSamples = static_cast<int>(std::lround(DSPConstants::PROFILE_CROSSFADE_TIME_S * 48000.0));
+        expectEquals(blockCount, warmupSamples + fadeSamples,
+                     "The swap lasts exactly its warm-up plus its fade, sample for sample");
+        expect(processor.activeProfile != nullptr && processor.activeProfile->getName() == "lstm", "lstm is active");
     }
 }
 
