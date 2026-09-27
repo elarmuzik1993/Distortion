@@ -1017,6 +1017,8 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 
     // The dry path for the global mix is phase-aligned by routing it through the matched
     // dryOversampling instance (built in rebuildOversampling), not a fractional delay.
+    // In profile mode the chain runs at 1x and no oversampler is built; the dry is
+    // delayed by the island delay D instead (globalDryDelayLine, updateLatencyPlan).
 
     lowBandBuffer.setSize(numChannels, worstCaseOversampledBlockSize, false, false, true);
     highBandBuffer.setSize(numChannels, worstCaseOversampledBlockSize, false, false, true);
@@ -1403,7 +1405,7 @@ int PluginProcessor::oversamplerLatencyForUserSetting() const
     return static_cast<int>(std::lround(probe.getLatencyInSamples()));
 }
 
-void PluginProcessor::updateLatencyPlan(double sampleRate, int blockSize)
+void PluginProcessor::updateLatencyPlan(double sampleRate, int hostBlockSize)
 {
     const int numChannels = std::max(1, std::max(getTotalNumInputChannels(), getTotalNumOutputChannels()));
     const int builtInLatency = oversampling ? static_cast<int>(std::lround(oversampling->getLatencyInSamples())) : 0;
@@ -1420,7 +1422,7 @@ void PluginProcessor::updateLatencyPlan(double sampleRate, int blockSize)
 
     juce::dsp::ProcessSpec baseSpec;
     baseSpec.sampleRate = sampleRate;
-    baseSpec.maximumBlockSize = static_cast<juce::uint32>(juce::jmax(1, blockSize));
+    baseSpec.maximumBlockSize = static_cast<juce::uint32>(juce::jmax(1, hostBlockSize));
     baseSpec.numChannels = static_cast<juce::uint32>(numChannels);
     prepareDelay(outputPadLine, baseSpec, outputPadDelay);
     prepareDelay(globalDryDelayLine, baseSpec, islandDelay);
@@ -1450,13 +1452,13 @@ void PluginProcessor::copyMonoInputAcrossChannels(juce::AudioBuffer<float>& buff
 void PluginProcessor::applyBypassLatency(juce::AudioBuffer<float>& buffer) noexcept
 {
     // ========== LATENCY COMPENSATION (Bypass path) ==========
-    // The active path is delayed by its own path latency, then padded up to the
-    // reported reserve; this branch skips the oversampler, so it must impose that
-    // same path latency here to stay aligned with the host's PDC and avoid a
-    // timing jump when the bypass<->active threshold is crossed. None
-    // interpolation -> the samples pass through unchanged, only time-shifted.
-    // When latency is zero (oversampling off) the branch stays a truly
-    // bit-clean passthrough.
+    // The active path is delayed by its own path latency (the oversampler's, or the
+    // island delay in profile mode), then padded up to the reported reserve. A
+    // bypass branch skips the chain, so it imposes that same path latency here,
+    // then the shared pad below: R in total, which keeps it aligned with the
+    // host's PDC and avoids a timing jump when the bypass<->active threshold is
+    // crossed. None interpolation -> the samples pass through unchanged, only
+    // time-shifted. The branch is a bit-clean passthrough only when R is 0.
     if (bypassLatencySamples > 0)
     {
         const int numSamp = buffer.getNumSamples();
@@ -2578,8 +2580,13 @@ void PluginProcessor::routeStagedProfile()
 
 void PluginProcessor::requestDuck()
 {
-    if (! duckRequested.exchange(true, std::memory_order_acq_rel))
+    // The timestamp goes in before the flag is raised, so serviceDuck on another
+    // thread can never pair the new flag with an old time and time out at once.
+    if (! duckRequested.load(std::memory_order_acquire))
+    {
         duckRequestedAtMs.store(juce::Time::getMillisecondCounterHiRes(), std::memory_order_release);
+        duckRequested.store(true, std::memory_order_release);
+    }
     // Poll quickly while the audio thread fades out. Timer calls belong on the
     // message thread; from anywhere else the next regular tick picks this up.
     if (juce::MessageManager::existsAndIsCurrentThread())
@@ -2618,9 +2625,9 @@ void PluginProcessor::performSwitch()
         const juce::ScopedLock callbackLockGuard(getCallbackLock());
         installRequestedProfile(toFree);
         const double sampleRate = getSampleRate();
-        const int blockSize = getBlockSize();
-        if (sampleRate > 0.0 && blockSize > 0)
-            rebuildOversampling(sampleRate, blockSize);
+        const int hostBlockSize = getBlockSize();
+        if (sampleRate > 0.0 && hostBlockSize > 0)
+            rebuildOversampling(sampleRate, hostBlockSize);
         duckRequested.store(false, std::memory_order_release);
         duckReady.store(false, std::memory_order_release);
         rebuildGeneration.fetch_add(1, std::memory_order_acq_rel);
@@ -2750,9 +2757,18 @@ void PluginProcessor::prepareProfilesForHost(double sampleRate, int samplesPerBl
     }
 
     // Finish any pending switch the way the timer would, except that nothing fades.
+    // prepareToPlay rebuilds with the current settings next, so a flag still asking
+    // for a rebuild is stale and must not duck on the next tick.
     installRequestedProfile(toFree);
     duckRequested.store(false, std::memory_order_release);
     duckReady.store(false, std::memory_order_release);
+    pendingNeedsDuck.store(false, std::memory_order_release);
+    oversamplingRebuildPending.store(false, std::memory_order_release);
+    // No duck is pending now, so the timer can drop back from its quick poll.
+    // Timer calls belong on the message thread (see requestDuck).
+    if (juce::MessageManager::existsAndIsCurrentThread()
+        && getTimerInterval() == DSPConstants::DUCK_POLL_MS)
+        startTimer(DSPConstants::PROFILE_TIMER_MS);
     duckState = DuckState::open;
     duckGain = 1.0f;
     seenRebuildGeneration = rebuildGeneration.load(std::memory_order_acquire);

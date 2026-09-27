@@ -481,11 +481,14 @@ private:
     // frequency, for both the IIR and FIR (linear-phase) oversampling modes.
     std::unique_ptr<juce::dsp::Oversampling<float>> dryOversampling;
 
-    // Re-imposes the reported oversampler latency onto the cheap true-bypass branch
-    // (which skips the oversampler). Without it the host's PDC plays the bypassed
-    // signal early, and crossing the bypass<->active threshold jumps in time. None
-    // interpolation makes it a pure integer delay — bit-transparent, only
-    // time-shifted. Sized/updated in rebuildOversampling (message thread).
+    // Re-imposes the active path's own latency (the oversampler's, or the island
+    // delay in profile mode) onto the cheap bypass branches, which skip the chain;
+    // the shared outputPadLine then adds the rest, so bypassed audio arrives R late
+    // in total. Without it the host's PDC plays the bypassed signal early, and
+    // crossing the bypass<->active threshold jumps in time. None interpolation
+    // makes it a pure integer delay: bit-transparent, only time-shifted, and the
+    // whole branch bit-clean only when R is 0. Sized in updateLatencyPlan (message
+    // thread, under the callback lock).
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> bypassLatencyDelay;
     int bypassLatencySamples = 0;
     // The bypass branches' latency tail: bypassLatencyDelay, then the shared pad.
@@ -506,7 +509,7 @@ private:
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> globalDryDelayLine;
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> subGuardLowDelayLine;
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> distMixDryDelayLine;
-    void updateLatencyPlan(double sampleRate, int blockSize);   // message thread, under the callback lock
+    void updateLatencyPlan(double sampleRate, int hostBlockSize);   // message thread, under the callback lock
     int oversamplerLatencyForUserSetting() const;
 
     juce::SmoothedValue<float> smoothedOutputGain;  // Only output gain uses SmoothedValue (normal rate)
@@ -523,17 +526,21 @@ private:
     int currentOversamplingStages = 2;  // Track current stages for comparison
     bool currentLinearPhase = false;   // Track filter type for needsRebuild check
     void rebuildOversampling(double sampleRate, int samplesPerBlock);
+    // Performs any requested switch at once, without a duck. Nothing calls
+    // triggerAsyncUpdate any more; tests and tools call this directly.
     void handleAsyncUpdate() override;
 
-    // Drains oversamplingRebuildPending on the message thread (see below).
+    // Message-thread housekeeping: routes loaded profiles, turns the rebuild flags
+    // below into duck requests, and has performSwitch do the (allocating) rebuild
+    // under the callback lock once the audio thread has faded out.
     void timerCallback() override;
 
     // Set by parameterChanged() to request a deferred oversampler rebuild.
     // parameterChanged() may run on the audio thread (host automation), and
     // posting to the system message queue (triggerAsyncUpdate / postMessage)
     // is not realtime-safe — on Linux it takes a lock and write()s the wake
-    // pipe. So the audio thread only flips this wait-free flag; a message-thread
-    // timer polls it and performs the (allocating) rebuild.
+    // pipe. So the audio thread only flips this wait-free flag; the message-thread
+    // timer turns it into a duck request, and performSwitch rebuilds.
     std::atomic<bool> oversamplingRebuildPending{ false };
 
     // APVTS listener: linearPhaseDry changes the oversampler filter type, so a
@@ -741,7 +748,7 @@ private:
     std::atomic<NamProfile*> pendingProfile { nullptr };  // message thread -> audio thread
     std::atomic<NamProfile*> retiredProfile { nullptr };  // audio thread -> message thread
     NamProfile* activeProfile = nullptr;      // audio thread, or under the callback lock
-    NamProfile* incomingProfile = nullptr;    // audio thread: a profile fading in (Task 4)
+    NamProfile* incomingProfile = nullptr;    // a profile fading in; audio thread, or under the callback lock
     bool profileMode = false;                 // chain at 1x running activeProfile; under the callback lock
     std::atomic<bool> profileModeInstalled { false };   // profileMode, for the message thread
     std::atomic<int> installedIslandDelay { 0 };        // the active profile's island delay, likewise
@@ -752,13 +759,13 @@ private:
     std::atomic<int> profileHostBlockSize { 0 };
     double profilePreparedRate = 0.0;                   // what prepareToPlay last set, audio-readable
     int profilePreparedBlock = 0;
-    // Model inputs, model outputs and the per-sample mix, sized in prepareToPlay.
+    // Sized in prepareToPlay. Channels: model input, active output, incoming output
+    // (two each), the per-sample mix, then the delayed dry half (two).
     juce::AudioBuffer<float> profileScratch;
-    // profileScratch channels: model input, active output, incoming output (two
-    // each), the per-sample mix, then the delayed dry half (two).
     static constexpr int scratchModelIn = 0, scratchActiveOut = 2, scratchIncomingOut = 4,
                          scratchMix = 6, scratchDry = 7, profileScratchChannels = 9;
-    // Profile-to-profile swap, audio thread: a silent warm-up, then a linear blend.
+    // Profile-to-profile swap: a silent warm-up, then a linear blend. Audio thread,
+    // or under the callback lock (installRequestedProfile resets them).
     int swapWarmupRemaining = 0;
     int swapFadePosition = 0;
     int swapFadeLength = 1;
