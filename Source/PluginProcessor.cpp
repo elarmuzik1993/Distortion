@@ -2423,14 +2423,6 @@ bool PluginProcessor::isProfileLoaded() const
     return profileStatus.name.isNotEmpty();
 }
 
-bool PluginProcessor::profileSampleRateMismatch() const
-{
-    const auto status = getProfileStatus();
-    const double hostRate = profileHostSampleRate.load();
-    return status.name.isNotEmpty() && hostRate > 0.0
-        && std::abs(hostRate - status.expectedSampleRate) > 1.0;
-}
-
 bool PluginProcessor::isProfileSwitchIdle() const
 {
     return stagedProfile.load() == nullptr && pendingProfile.load() == nullptr

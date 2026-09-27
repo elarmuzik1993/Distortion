@@ -209,9 +209,10 @@ int renderToFile(const Args& args)
     const float seconds = args.num("seconds", 3.0f);
     const auto profilePath = args.str("profile", "");
 
-    // NAM profiles are trained at 48 kHz, so synthetic input is generated there
-    // when one is used; a WAV input keeps its own rate.
-    double sr = profilePath.isNotEmpty() ? 48000.0 : kSampleRate;
+    // Synthetic input is generated at --rate (default 44.1 kHz, or 48 kHz with a
+    // profile); a WAV input keeps its own rate.
+    double sr = args.has("rate") ? static_cast<double>(args.num("rate", 44100.0f))
+                                 : (profilePath.isNotEmpty() ? 48000.0 : kSampleRate);
     juce::AudioBuffer<float> input;
 
     if (inPath.isNotEmpty())
@@ -251,9 +252,6 @@ int renderToFile(const Args& args)
         // Preparing again applies the 1x switch a host would get from the
         // message-thread timer, and the profile runs from the first block.
         proc.prepareToPlay(sr, kBlockSize);
-        if (proc.profileSampleRateMismatch())
-            std::cerr << "Warning: profile trained at " << proc.getProfileStatus().expectedSampleRate
-                      << " Hz, rendering at " << sr << " Hz\n";
     }
 
     // Input filter: --mode hp|lp|bp, --filterfreq <Hz>
@@ -299,6 +297,7 @@ int main(int argc, char* argv[])
             "  --subguard <Hz|off>                   Sub Guard crossover frequency\n"
             "  --drive <0-100>  --mix <0-100>        distortion amount / wet mix\n"
             "  --seconds <n>                         length of synthetic input (default 3)\n"
+            "  --rate <Hz>                           sample rate of synthetic input (default 44100; 48000 with --profile)\n"
             "  --out <file.wav>                      output path (default render.wav)\n"
             "  --profile <file.nam>                  run a NAM profile instead of the clip type\n\n"
             "  Automated flatness/shaping checks live in DistortionTests (run via CI).\n";

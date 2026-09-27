@@ -1444,11 +1444,6 @@ void PluginEditor::showProfileMenu()
     if (loaded)
     {
         menu.addSectionHeader("Profile: " + status.name);
-        if (audioProcessor.profileSampleRateMismatch())
-            menu.addItem("Trained at " + juce::String(status.expectedSampleRate / 1000.0, 1)
-                         + " kHz; this session runs at "
-                         + juce::String(audioProcessor.getSampleRate() / 1000.0, 1)
-                         + " kHz, so it sounds slightly off", false, false, nullptr);
         menu.addSeparator();
     }
     else if (status.loading)
@@ -1489,7 +1484,7 @@ void PluginEditor::updateProfileIndicator()
 {
     const auto status = audioProcessor.getProfileStatus();
     const bool loaded = status.name.isNotEmpty();
-    const bool needsAttention = status.error.isNotEmpty() || audioProcessor.profileSampleRateMismatch();
+    const bool needsAttention = status.error.isNotEmpty();
 
     const juce::String state = status.name + "|" + juce::String(int(status.loading))
                              + "|" + juce::String(int(needsAttention));

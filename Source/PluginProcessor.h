@@ -336,9 +336,6 @@ public:
     void clearProfile();
     ProfileStatus getProfileStatus() const;
     bool isProfileLoaded() const;
-    // True when a profile is loaded and the host runs at a different rate from
-    // the one it was trained at, so it sounds slightly off (no resampling yet).
-    bool profileSampleRateMismatch() const;
     // True when no profile switch is in flight: nothing staged or pending, no
     // crossfade, no duck. Reads audio-thread state, so tools and tests call it
     // between processBlock calls.
