@@ -5399,6 +5399,76 @@ namespace
         return 0;
        #endif
     }
+
+    // Everything that colours level off, and Distortion Amount at the 0 dB point of
+    // a profile's input-gain curve (-24 dB + 0.36 dB per %), so an identity model
+    // passes the signal at unity.
+    void configureUnityChain(PluginProcessor& processor)
+    {
+        setParameter(processor.parameters, "distortionAmount", 200.0f / 3.0f);
+        setParameter(processor.parameters, "inputGain", 50.0f);
+        setParameter(processor.parameters, "outputGain", 50.0f);
+        setParameter(processor.parameters, "autoGainEnabled", 0.0f);
+        setParameter(processor.parameters, "compEnabled", 0.0f);
+        setParameter(processor.parameters, "extremeEnabled", 0.0f);
+        setParameter(processor.parameters, "cleanBoost", 0.0f);
+        setParameter(processor.parameters, "waveshaperMix", 0.0f);
+        setParameter(processor.parameters, "tone", 20000.0f);
+        setParameter(processor.parameters, "highPassFreq", 20.0f);
+        setParameter(processor.parameters, "lfoEnabled", 0.0f);
+        setParameter(processor.parameters, "subGuardFreq", 0.0f);
+    }
+
+    // Runs a mono signal through both channels in 512-sample blocks; returns channel 0.
+    std::vector<float> renderThrough(PluginProcessor& processor, const std::vector<float>& signal)
+    {
+        constexpr int blockSize = 512;
+        std::vector<float> out;
+        juce::MidiBuffer midi;
+        for (size_t done = 0; done + static_cast<size_t>(blockSize) <= signal.size(); done += static_cast<size_t>(blockSize))
+        {
+            juce::AudioBuffer<float> buffer(2, blockSize);
+            for (int ch = 0; ch < 2; ++ch)
+                buffer.copyFrom(ch, 0, signal.data() + done, blockSize);
+            processor.processBlock(buffer, midi);
+            appendChannel0(out, buffer);
+        }
+        return out;
+    }
+
+    // White noise low-passed at 8 kHz: inside the island's band at every rate.
+    std::vector<float> lowPassedNoise(double sampleRate, double seconds, float amplitude)
+    {
+        std::vector<float> x(static_cast<size_t>(std::lround(sampleRate * seconds)));
+        juce::Random random(5);
+        for (auto& s : x)
+            s = amplitude * (random.nextFloat() * 2.0f - 1.0f);
+        juce::IIRFilter lowPass;
+        lowPass.setCoefficients(juce::IIRCoefficients::makeLowPass(sampleRate, 8000.0));
+        lowPass.processSamples(x.data(), static_cast<int>(x.size()));
+        return x;
+    }
+
+    // The lag, within +/- maxLag samples, at which b lines up best with a.
+    int bestLag(const std::vector<float>& a, const std::vector<float>& b, size_t from, int maxLag)
+    {
+        const auto room = static_cast<size_t>(maxLag);
+        const size_t end = juce::jmin(a.size(), b.size());
+        int best = 0;
+        double bestScore = -1.0e300;
+        for (int lag = -maxLag; lag <= maxLag; ++lag)
+        {
+            double score = 0.0;
+            for (size_t i = juce::jmax(from, room); i + room < end; ++i)
+                score += static_cast<double>(a[i]) * static_cast<double>(b[static_cast<size_t>(static_cast<int64_t>(i) + lag)]);
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = lag;
+            }
+        }
+        return best;
+    }
 }
 
 void NamProfileTests::runTest()
@@ -5989,6 +6059,134 @@ void NamProfileTests::runTest()
         expectEquals(blockCount, warmupSamples + fadeSamples,
                      "The swap lasts exactly its warm-up plus its fade, sample for sample");
         expect(processor.activeProfile != nullptr && processor.activeProfile->getName() == "lstm", "lstm is active");
+    }
+
+    beginTest("The reported latency is the reserve, whatever loads, swaps or clears");
+    {
+        for (const double rate : { 44100.0, 48000.0, 96000.0 })
+        {
+            for (const bool linearPhase : { false, true })
+            {
+                PluginProcessor processor;
+                setParameter(processor.parameters, "linearPhaseDry", linearPhase ? 1.0f : 0.0f);
+                prepareForProfileTest(processor, rate, 512);
+
+                const juce::dsp::Oversampling<float> probe(1, 2,
+                    linearPhase ? juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple
+                                : juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, false, false);
+                const int expected = juce::jmax(static_cast<int>(std::lround(probe.getLatencyInSamples())),
+                                                ResamplingIsland::latencyFor(rate, 48000.0));
+                const auto label = juce::String(rate) + (linearPhase ? " Hz, linear phase" : " Hz, IIR");
+
+                expect(settle(processor), "Settled, " + label);
+                expectEquals(processor.getLatencySamples(), expected, "Built-in clip type, " + label);
+                processor.loadProfileBlocking(namTestModel("wavenet.nam"));
+                expect(settle(processor), "Loaded, " + label);
+                expectEquals(processor.getLatencySamples(), expected, "Profile loaded, " + label);
+                processor.loadProfileBlocking(namTestModel("lstm.nam"));
+                expect(settle(processor), "Swapped, " + label);
+                expectEquals(processor.getLatencySamples(), expected, "Profile swapped, " + label);
+                processor.clearProfile();
+                expect(settle(processor), "Cleared, " + label);
+                expectEquals(processor.getLatencySamples(), expected, "Profile cleared, " + label);
+            }
+        }
+    }
+
+    beginTest("At 48 kHz the built-in path keeps its old latency and adds no pad");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor, 48000.0, 512);
+        expectEquals(processor.getLatencySamples(), 3, "The default 4x oversampler's own latency, measured before this change");
+        expectEquals(processor.outputPadDelay, 0);
+    }
+
+    beginTest("A model trained at another rate raises the reported latency only while loaded");
+    {
+        TempNam at44(linearModelJson("1.0", 1, 44100));
+        PluginProcessor processor;
+        prepareForProfileTest(processor, 48000.0, 512);
+        const int normal = processor.getLatencySamples();
+
+        processor.loadProfileBlocking(namTestModel("wavenet.nam"));
+        expect(settle(processor), "48 kHz profile in");
+        expectEquals(processor.getLatencySamples(), normal, "A 48 kHz model at 48 kHz fits the reserve");
+
+        processor.loadProfileBlocking(at44.file);
+        processor.timerCallback();
+        expect(processor.duckRequested.load(), "A different island delay goes in with a duck, not a blend");
+        expect(settle(processor), "44.1 kHz profile in");
+        expectEquals(processor.getLatencySamples(), ResamplingIsland::latencyFor(48000.0, 44100.0),
+                     "Its island delay is reported while it is loaded");
+
+        processor.clearProfile();
+        expect(settle(processor), "Cleared");
+        expectEquals(processor.getLatencySamples(), normal, "Back to the reserve once it is gone");
+    }
+
+    beginTest("Dry and wet line up through the island");
+    {
+        // An identity model: the dry and wet halves of either mix carry the same
+        // signal, so any misalignment shows up directly.
+        TempNam identity(linearModelJson("1.0", 1, 48000));
+        for (const double rate : { 44100.0, 96000.0 })
+        {
+            const auto render = [&](float distMix, float globalMix, const std::vector<float>& signal)
+            {
+                PluginProcessor processor;
+                prepareForProfileTest(processor, rate, 512);
+                configureUnityChain(processor);
+                setParameter(processor.parameters, "distMix", distMix);
+                setParameter(processor.parameters, "globalMix", globalMix);
+                processor.loadProfileBlocking(identity.file);
+                expect(settle(processor), "Identity profile in");
+                return renderThrough(processor, signal);
+            };
+
+            const auto noise = lowPassedNoise(rate, 1.0, 0.05f);
+            const auto from = static_cast<size_t>(rate * 0.25);
+            const auto wet = render(100.0f, 100.0f, noise);
+            expectEquals(bestLag(wet, render(0.0f, 100.0f, noise), from, 64), 0,
+                         "Distortion Mix dry half vs wet at " + juce::String(rate));
+            expectEquals(bestLag(wet, render(100.0f, 0.0f, noise), from, 64), 0,
+                         "Global Mix dry vs wet at " + juce::String(rate));
+
+            // A one-sample slip would cost about 2 dB at 10 kHz and 44.1 kHz; the
+            // island's own passband ripple is far below 0.1 dB.
+            const auto tone = sineAt(10000.0, rate, 1.0, 0.05f);
+            const auto level = [&](const std::vector<float>& x)
+            {
+                return toneAmplitude(x, static_cast<size_t>(rate * 0.5), static_cast<size_t>(rate * 0.4), 10000.0, rate);
+            };
+            const double full = level(render(100.0f, 100.0f, tone));
+            expectWithinAbsoluteError(toDb(level(render(50.0f, 100.0f, tone)) / full), 0.0, 0.1,
+                                      "50% Distortion Mix at 10 kHz, " + juce::String(rate));
+            expectWithinAbsoluteError(toDb(level(render(100.0f, 50.0f, tone)) / full), 0.0, 0.1,
+                                      "50% global Mix at 10 kHz, " + juce::String(rate));
+        }
+    }
+
+    beginTest("Sub Guard stays flat through its crossover with a profile loaded");
+    {
+        TempNam identity(linearModelJson("1.0", 1, 48000));
+        for (const double rate : { 44100.0, 96000.0 })
+        {
+            // 200 Hz is the most demanding crossover: a low band left D samples early
+            // would dip the sum there by about 0.5 dB.
+            const auto levelAt200 = [&](float subGuard)
+            {
+                PluginProcessor processor;
+                prepareForProfileTest(processor, rate, 512);
+                configureUnityChain(processor);
+                setParameter(processor.parameters, "subGuardFreq", subGuard);
+                processor.loadProfileBlocking(identity.file);
+                expect(settle(processor), "Identity profile in");
+                const auto out = renderThrough(processor, sineAt(200.0, rate, 1.0, 0.05f));
+                return toneAmplitude(out, static_cast<size_t>(rate * 0.5), static_cast<size_t>(rate * 0.4), 200.0, rate);
+            };
+            expectWithinAbsoluteError(toDb(levelAt200(200.0f) / levelAt200(0.0f)), 0.0, 0.2,
+                                      "Crossover at 200 Hz, " + juce::String(rate) + " Hz host");
+        }
     }
 }
 

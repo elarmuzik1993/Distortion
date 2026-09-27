@@ -489,6 +489,22 @@ private:
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> bypassLatencyDelay;
     int bypassLatencySamples = 0;
 
+    // --- Latency: one figure reported whatever runs ------------------------------
+    // R is the larger of the user's oversampler latency and the island delay a
+    // 48 kHz model needs at this host rate. Every path pads up to R, and the three
+    // signals that go around a profile's island wait its delay. Written on the
+    // message thread under the callback lock (prepareToPlay, rebuilds); read by the
+    // audio thread.
+    int reservedLatency = 0;
+    int islandDelay = 0;       // the installed profile's island delay; 0 in built-in mode
+    int outputPadDelay = 0;    // R minus the active path's own latency
+    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> outputPadLine;
+    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> globalDryDelayLine;
+    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> subGuardLowDelayLine;
+    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> distMixDryDelayLine;
+    void updateLatencyPlan(double sampleRate, int blockSize);   // message thread, under the callback lock
+    int oversamplerLatencyForUserSetting() const;
+
     juce::SmoothedValue<float> smoothedOutputGain;  // Only output gain uses SmoothedValue (normal rate)
     juce::SmoothedValue<float> smoothedGlobalMix;
 

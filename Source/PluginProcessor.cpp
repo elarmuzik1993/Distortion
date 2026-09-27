@@ -193,6 +193,28 @@ namespace
         std::function<void()> action;
         void timerCallback() override { stopTimer(); if (action) action(); }
     };
+
+    using IntegerDelay = juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None>;
+
+    // Sizes a pure integer delay. Message thread: it allocates.
+    void prepareDelay(IntegerDelay& line, const juce::dsp::ProcessSpec& spec, int delaySamples)
+    {
+        line.prepare(spec);
+        line.setMaximumDelayInSamples(juce::jmax(1, delaySamples));
+        line.setDelay(static_cast<float>(delaySamples));
+        line.reset();
+    }
+
+    // Delays each channel in place by the line's delay. Audio thread: no allocation.
+    void delayInPlace(IntegerDelay& line, float* const* channels, int numChannels, int numSamples) noexcept
+    {
+        for (int ch = 0; ch < numChannels; ++ch)
+            for (int i = 0; i < numSamples; ++i)
+            {
+                line.pushSample(ch, channels[ch][i]);
+                channels[ch][i] = line.popSample(ch);
+            }
+    }
 }
 
 //==============================================================================
@@ -990,12 +1012,8 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // 1. Internal filter latency compensation
     // 2. Sample rate (44.1kHz vs 48kHz have different characteristics)
     // 3. Block size alignment requirements
-    const float oversamplingLatencyFractional = oversampling
-        ? oversampling->getLatencyInSamples() : 0.0f;
-
-    // Report latency to host for proper delay compensation. Round to nearest sample
-    // (truncating loses up to ~1 sample of PDC accuracy vs other tracks).
-    setLatencySamples(static_cast<int>(std::lround(oversamplingLatencyFractional)));
+    // The latency reported to the host comes from rebuildOversampling above
+    // (updateLatencyPlan): the reserve, not only the oversampler's figure.
 
     // The dry path for the global mix is phase-aligned by routing it through the matched
     // dryOversampling instance (built in rebuildOversampling), not a fractional delay.
@@ -1362,32 +1380,57 @@ void PluginProcessor::rebuildOversampling(double sampleRate, int samplesPerBlock
     lowBandBufferB.setSize(numChannels, oversampledBlockSize, false, false, true);
     highBandBufferB.setSize(numChannels, oversampledBlockSize, false, false, true);
 
-    // Report updated latency (round to nearest sample for accurate host PDC)
-    setLatencySamples(oversampling
-        ? static_cast<int>(std::lround(oversampling->getLatencyInSamples())) : 0);
-
-    // The dry global-mix path is phase-aligned via the matched dryOversampling instance
-    // (rebuilt above), so it inherits the same latency automatically — no manual delay.
-
-    // Re-impose that same reported latency on the true-bypass branch, which skips
-    // the oversampler entirely. A plain integer delay at the base rate keeps the
-    // bypassed signal bit-transparent (only time-shifted) while staying aligned
-    // with the host's PDC and with the active path. Allocated here on the message
-    // thread; the audio-thread bypass branch only pushes/pops samples.
-    bypassLatencySamples = getLatencySamples();
-    {
-        juce::dsp::ProcessSpec baseSpec;
-        baseSpec.sampleRate = sr;
-        baseSpec.maximumBlockSize = static_cast<juce::uint32>(currentBlockSize);
-        baseSpec.numChannels = static_cast<juce::uint32>(numChannels);
-        bypassLatencyDelay.prepare(baseSpec);
-        bypassLatencyDelay.setMaximumDelayInSamples(juce::jmax(1, bypassLatencySamples));
-        bypassLatencyDelay.setDelay(static_cast<float>(bypassLatencySamples));
-        bypassLatencyDelay.reset();
-    }
+    // Latency: one reported figure, every path padded up to it (the bypass branch
+    // included), and the dry paths around a profile's island delayed to match.
+    updateLatencyPlan(sr, currentBlockSize);
 
     // Reset all DSP state
     resetDSPState();
+}
+
+int PluginProcessor::oversamplerLatencyForUserSetting() const
+{
+    // What the user's Oversampling setting would add, even while a profile keeps the
+    // chain at 1x and that oversampler isn't built.
+    const int stages = requestedOversamplingStages.load(std::memory_order_acquire);
+    if (stages <= 0)
+        return 0;
+    const bool linearPhase = linearPhaseDryParam && linearPhaseDryParam->load() > 0.5f;
+    const juce::dsp::Oversampling<float> probe(1, static_cast<size_t>(stages),
+        linearPhase ? juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple
+                    : juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR,
+        false, false);
+    return static_cast<int>(std::lround(probe.getLatencyInSamples()));
+}
+
+void PluginProcessor::updateLatencyPlan(double sampleRate, int blockSize)
+{
+    const int numChannels = std::max(1, std::max(getTotalNumInputChannels(), getTotalNumOutputChannels()));
+    const int builtInLatency = oversampling ? static_cast<int>(std::lround(oversampling->getLatencyInSamples())) : 0;
+    const int userOversamplerLatency = profileMode ? oversamplerLatencyForUserSetting() : builtInLatency;
+    const int reserve = juce::jmax(userOversamplerLatency,
+        ResamplingIsland::latencyFor(sampleRate, DSPConstants::PROFILE_RESERVE_MODEL_RATE));
+
+    islandDelay = profileMode ? activeProfile->getLatencySamples() : 0;
+    const int pathLatency = profileMode ? islandDelay : builtInLatency;
+    // A model trained at another rate can need more than the reserve; the host then
+    // sees the larger figure while that profile is loaded.
+    reservedLatency = juce::jmax(reserve, pathLatency);
+    outputPadDelay = reservedLatency - pathLatency;
+
+    juce::dsp::ProcessSpec baseSpec;
+    baseSpec.sampleRate = sampleRate;
+    baseSpec.maximumBlockSize = static_cast<juce::uint32>(juce::jmax(1, blockSize));
+    baseSpec.numChannels = static_cast<juce::uint32>(numChannels);
+    prepareDelay(outputPadLine, baseSpec, outputPadDelay);
+    prepareDelay(globalDryDelayLine, baseSpec, islandDelay);
+    prepareDelay(subGuardLowDelayLine, baseSpec, islandDelay);
+    prepareDelay(distMixDryDelayLine, baseSpec, islandDelay);
+
+    setLatencySamples(reservedLatency);
+    // The true-bypass branch skips everything above, so it imposes the whole figure.
+    bypassLatencySamples = reservedLatency;
+    prepareDelay(bypassLatencyDelay, baseSpec, bypassLatencySamples);
 }
 
 void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
@@ -1726,7 +1769,10 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // 100% wet, when the blend is skipped — so the active path can keep its dry
     // allpass/FIR history phase-locked to the wet path (see GLOBAL MIX below); that
     // round-trip needs the current dry block captured here.
-    if ((needsGlobalMix || dryOversampling) && dryFits)
+    // At 1x a profile's island is the wet path's whole latency and no dry
+    // oversampler exists; the dry is then delayed in step every active block.
+    const bool profileDryDelay = profileMode && islandDelay > 0;
+    if ((needsGlobalMix || dryOversampling || profileDryDelay) && dryFits)
     {
         for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
             dryBuffer.copyFrom(ch, 0, buffer, ch, 0, buffer.getNumSamples());
@@ -1942,6 +1988,13 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         dryOversampling->processSamplesUp(dryBlock);     // fills the internal oversampled buffer
         dryOversampling->processSamplesDown(dryBlock);   // identity round-trip: matched phase + latency
     }
+    else if (profileDryDelay && dryFits)
+    {
+        // Delay the dry by the island's D every active block, so the line's history
+        // tracks the wet path the way the dry oversampler's does.
+        delayInPlace(globalDryDelayLine, dryBuffer.getArrayOfWritePointers(),
+                     buffer.getNumChannels(), buffer.getNumSamples());
+    }
 
     if (needsGlobalMix)
     {
@@ -2000,6 +2053,12 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             pushSampleToScope(leftSample, rightSample);
         }
     }
+
+    // Pad the active path out to the reported latency: zero at 48 kHz with a
+    // built-in clip type, where the oversampler's own latency is the whole figure.
+    if (outputPadDelay > 0)
+        delayInPlace(outputPadLine, buffer.getArrayOfWritePointers(),
+                     buffer.getNumChannels(), buffer.getNumSamples());
 
     // Last: the fade around a rebuild (see updateDuckState).
     applyDuckGain(buffer);
@@ -2926,6 +2985,17 @@ bool PluginProcessor::applyProfileStage(float* const* channels) noexcept
             modelIn[ch][i] = channels[ch][i] * inputGain;
     }
 
+    // The dry half of the Distortion Mix blend waits the island's D, so the blend
+    // never comb-filters (D is 0 when the host runs at the trained rate).
+    std::array<float*, 2> dry {};
+    for (int ch = 0; ch < numChannels; ++ch)
+    {
+        dry[static_cast<size_t>(ch)] = profileScratch.getWritePointer(scratchDry + ch);
+        std::copy(channels[ch], channels[ch] + numSamples, dry[static_cast<size_t>(ch)]);
+    }
+    if (islandDelay > 0)
+        delayInPlace(distMixDryDelayLine, dry.data(), numChannels, numSamples);
+
     // A profile on its way in runs on the same input: silently until it has settled,
     // then blended in linearly. The two outputs are correlated, so a linear blend
     // keeps the level where an equal-power one would bump it.
@@ -2963,7 +3033,7 @@ bool PluginProcessor::applyProfileStage(float* const* channels) noexcept
             float wet = activeOut[ch][i] * activeGain * (1.0f - weight);
             if (incoming != nullptr)
                 wet += incomingOut[ch][i] * incomingGain * weight;
-            channels[ch][i] = channels[ch][i] * (1.0f - mix[i]) + wet * mix[i];
+            channels[ch][i] = dry[ch][i] * (1.0f - mix[i]) + wet * mix[i];
         }
     }
 
@@ -3031,6 +3101,7 @@ bool PluginProcessor::applySubGuardSplit()
     {
         currentSubGuardOrder = targetOrder;
         sgCrossfadeActive = false;
+        subGuardLowDelayLine.reset();   // no stale low band from the last time Sub Guard ran
     }
     sgWasActive = true;
 
@@ -3137,6 +3208,12 @@ bool PluginProcessor::applySubGuardSplit()
             currentSubGuardOrder = sgToOrder;
         }
     }
+
+    // A profile's island delays the high band by its D; the clean low band waits the
+    // same D, so the recombine, the subtract and the re-add below all line up.
+    if (profileMode && islandDelay > 0)
+        delayInPlace(subGuardLowDelayLine, lowBandBuffer.getArrayOfWritePointers(),
+                     static_cast<int>(pb_numChannels), static_cast<int>(pb_numSamples));
 
     // ========== AUTO-GAIN: Measure high-band input RMS (post-crossover, pre-distortion) ==========
     // Matches the band the output RMS is measured on (high band only, after the clean low
@@ -3751,6 +3828,10 @@ void PluginProcessor::resetDSPState()
 
     // Clear the bypass latency-compensation delay so it doesn't replay stale tails
     bypassLatencyDelay.reset();
+    outputPadLine.reset();
+    globalDryDelayLine.reset();
+    subGuardLowDelayLine.reset();
+    distMixDryDelayLine.reset();
 
     // Abort any in-flight Sub Guard order crossfade; the next active block re-seeds
     // the order from the current frequency (OFF->ON snap path).
