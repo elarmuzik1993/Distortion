@@ -5021,6 +5021,244 @@ void InputFilterModeTest::runTest()
 
 
 //==============================================================================
+// Resampling island: a model at its trained rate inside any host rate
+//==============================================================================
+
+namespace
+{
+    constexpr double kTwoPi = juce::MathConstants<double>::twoPi;
+
+    std::vector<float> sineAt(double frequency, double sampleRate, double seconds, float amplitude)
+    {
+        std::vector<float> x(static_cast<size_t>(std::lround(sampleRate * seconds)));
+        for (size_t i = 0; i < x.size(); ++i)
+            x[i] = amplitude * static_cast<float>(std::sin(kTwoPi * frequency * static_cast<double>(i) / sampleRate));
+        return x;
+    }
+
+    std::vector<float> multitoneAt(const std::vector<double>& frequencies, double sampleRate,
+                                   double seconds, float amplitudeEach)
+    {
+        std::vector<float> x(static_cast<size_t>(std::lround(sampleRate * seconds)), 0.0f);
+        for (size_t i = 0; i < x.size(); ++i)
+            for (size_t f = 0; f < frequencies.size(); ++f)
+                x[i] += amplitudeEach * static_cast<float>(std::sin(kTwoPi * frequencies[f] * static_cast<double>(i) / sampleRate
+                                                                    + 0.7 * static_cast<double>(f)));   // spread the phases
+        return x;
+    }
+
+    // Amplitude of the component at `frequency` in x[start, start + length): a
+    // Hann-windowed single-bin DFT, exact for a steady tone.
+    double toneAmplitude(const std::vector<float>& x, size_t start, size_t length,
+                         double frequency, double sampleRate)
+    {
+        double re = 0.0, im = 0.0;
+        for (size_t i = 0; i < length; ++i)
+        {
+            const double window = 0.5 - 0.5 * std::cos(kTwoPi * static_cast<double>(i) / static_cast<double>(length - 1));
+            const double phase = kTwoPi * frequency * static_cast<double>(i) / sampleRate;
+            re += static_cast<double>(x[start + i]) * window * std::cos(phase);
+            im -= static_cast<double>(x[start + i]) * window * std::sin(phase);
+        }
+        return 4.0 * std::sqrt(re * re + im * im) / static_cast<double>(length);
+    }
+
+    double toDb(double ratio) { return 20.0 * std::log10(juce::jmax(ratio, 1.0e-12)); }
+
+    size_t indexOfPeak(const std::vector<float>& x)
+    {
+        size_t best = 0;
+        for (size_t i = 1; i < x.size(); ++i)
+            if (std::abs(x[i]) > std::abs(x[best]))
+                best = i;
+        return best;
+    }
+
+    // Runs `input` through the island in host blocks of `blockSize`, with `modelFn`
+    // standing in for the model.
+    template <typename ModelFn>
+    std::vector<float> runIsland(ResamplingIsland& island, const std::vector<float>& input,
+                                 int blockSize, ModelFn&& modelFn)
+    {
+        std::vector<float> out(input.size());
+        for (size_t done = 0; done < input.size();)
+        {
+            const int n = static_cast<int>(std::min<size_t>(static_cast<size_t>(blockSize), input.size() - done));
+            island.process(input.data() + done, out.data() + done, n, modelFn);
+            done += static_cast<size_t>(n);
+        }
+        return out;
+    }
+
+    const auto passThroughModel = [](const float* in, float* out, int n)
+    {
+        std::copy(in, in + n, out);
+    };
+}
+
+void ResamplingIslandTests::runTest()
+{
+    beginTest("The delay is a whole number of host samples, fixed per rate pair");
+    {
+        expectEquals(ResamplingIsland::latencyFor(48000.0, 48000.0), 0);
+        expectEquals(ResamplingIsland::latencyFor(44100.0, 48000.0), 25);
+        expectEquals(ResamplingIsland::latencyFor(88200.0, 48000.0), 46);
+        expectEquals(ResamplingIsland::latencyFor(96000.0, 48000.0), 48);
+        expectEquals(ResamplingIsland::latencyFor(192000.0, 48000.0), 96);
+        expectEquals(ResamplingIsland::latencyFor(32000.0, 48000.0), 24);
+    }
+
+    beginTest("Every standard rate is supported; one needing too many phases is refused");
+    {
+        for (const double rate : { 8000.0, 11025.0, 16000.0, 22050.0, 32000.0, 44100.0, 48000.0,
+                                   64000.0, 88200.0, 96000.0, 176400.0, 192000.0, 352800.0, 384000.0 })
+            expect(ResamplingIsland::supports(rate, 48000.0), "Supports " + juce::String(rate));
+
+        // 44 056 Hz against 48 kHz reduces to 5507 / 6000: far past 1024 phases.
+        expect(! ResamplingIsland::supports(44056.0, 48000.0), "44.056 kHz is refused");
+        expectEquals(ResamplingIsland::latencyFor(44056.0, 48000.0), -1);
+        ResamplingIsland island;
+        expect(! island.prepare(44056.0, 48000.0, 512), "prepare refuses it too");
+        expect(! island.isPrepared(), "and leaves the island unprepared");
+    }
+
+    beginTest("Equal rates pass audio straight through with no delay");
+    {
+        ResamplingIsland island;
+        expect(island.prepare(48000.0, 48000.0, 256), "prepares");
+        expect(island.isPassThrough(), "is a pass-through");
+        expectEquals(island.getLatencySamples(), 0);
+        expectEquals(island.getMaxModelBlock(), 256);
+
+        const auto input = sineAt(997.0, 48000.0, 0.1, 0.5f);
+        int largestCall = 0;
+        const auto doubled = runIsland(island, input, 1000, [&](const float* in, float* out, int n)
+        {
+            largestCall = juce::jmax(largestCall, n);
+            for (int i = 0; i < n; ++i)
+                out[i] = 2.0f * in[i];
+        });
+        bool exact = true;
+        for (size_t i = 0; i < input.size(); ++i)
+            exact = exact && doubled[i] == 2.0f * input[i];
+        expect(exact, "Every sample went straight through the model");
+        expect(largestCall <= 256, "Host blocks larger than prepared are chunked");
+    }
+
+    beginTest("An impulse comes out exactly D samples late");
+    {
+        for (const double rate : { 44100.0, 88200.0, 96000.0, 192000.0, 32000.0 })
+        {
+            ResamplingIsland island;
+            expect(island.prepare(rate, 48000.0, 512), "prepares at " + juce::String(rate));
+            expectEquals(island.getLatencySamples(), ResamplingIsland::latencyFor(rate, 48000.0));
+
+            std::vector<float> input(4096, 0.0f);
+            input[1000] = 1.0f;
+            const auto out = runIsland(island, input, 512, passThroughModel);
+            expectEquals(static_cast<int>(indexOfPeak(out)), 1000 + island.getLatencySamples(),
+                         "Peak position at " + juce::String(rate));
+            // Only the band below the model's Nyquist survives the round trip, so an
+            // impulse at 96 or 192 kHz peaks near 0.5 or 0.25 by construction.
+            expect(std::abs(out[indexOfPeak(out)]) > 0.8f * static_cast<float>(juce::jmin(1.0, 48000.0 / rate)),
+                   "The impulse survives at " + juce::String(rate));
+        }
+    }
+
+    beginTest("The response is flat within 0.5 dB from 20 Hz to 18 kHz");
+    {
+        for (const double rate : { 44100.0, 88200.0, 96000.0, 192000.0 })
+        {
+            for (const double frequency : { 20.0, 100.0, 1000.0, 5000.0, 10000.0, 15000.0, 18000.0 })
+            {
+                ResamplingIsland island;
+                island.prepare(rate, 48000.0, 512);
+                const auto out = runIsland(island, sineAt(frequency, rate, 1.0, 0.5f), 512, passThroughModel);
+                const auto half = static_cast<size_t>(rate * 0.5);
+                expectWithinAbsoluteError(toDb(toneAmplitude(out, half, half, frequency, rate) / 0.5), 0.0, 0.5,
+                                          juce::String(frequency) + " Hz at " + juce::String(rate) + " Hz");
+            }
+        }
+    }
+
+    beginTest("Content above the lower Nyquist is filtered, not folded back");
+    {
+        // On the way in: 30 kHz into a 96 kHz island would fold to 18 kHz at 48 kHz.
+        ResamplingIsland in96;
+        in96.prepare(96000.0, 48000.0, 512);
+        const auto out96 = runIsland(in96, sineAt(30000.0, 96000.0, 1.0, 0.5f), 512, passThroughModel);
+        expect(toDb(toneAmplitude(out96, 48000, 48000, 18000.0, 96000.0) / 0.5) <= -40.0, "No 18 kHz fold at 96 kHz");
+        expect(toDb(toneAmplitude(out96, 48000, 48000, 30000.0, 96000.0) / 0.5) <= -40.0, "30 kHz does not pass");
+
+        // On the way out: a 20 kHz model output would fold to 12 kHz in a 32 kHz host.
+        // At 44.1 kHz anything that folds lands above 20 kHz, so that rate can't show it.
+        const auto toneModel = [](double frequency)
+        {
+            return [frequency, phase = 0.0](const float*, float* out, int n) mutable
+            {
+                for (int i = 0; i < n; ++i)
+                {
+                    out[i] = 0.5f * static_cast<float>(std::sin(phase));
+                    phase += kTwoPi * frequency / 48000.0;
+                }
+            };
+        };
+        const std::vector<float> silence(32000, 0.0f);
+        ResamplingIsland out32;
+        out32.prepare(32000.0, 48000.0, 512);
+        const auto folded = runIsland(out32, silence, 512, toneModel(20000.0));
+        expect(toDb(toneAmplitude(folded, 16000, 16000, 12000.0, 32000.0) / 0.5) <= -40.0, "No 12 kHz fold at 32 kHz");
+
+        ResamplingIsland pass32;
+        pass32.prepare(32000.0, 48000.0, 512);
+        const auto passed = runIsland(pass32, silence, 512, toneModel(10000.0));
+        expectWithinAbsoluteError(toDb(toneAmplitude(passed, 16000, 16000, 10000.0, 32000.0) / 0.5), 0.0, 0.5,
+                                  "10 kHz passes at 32 kHz");
+    }
+
+    beginTest("The output does not depend on how the host splits its blocks");
+    {
+        juce::Random random(11);
+        std::vector<float> noise(20000);
+        for (auto& s : noise)
+            s = random.nextFloat() - 0.5f;
+
+        for (const double rate : { 44100.0, 96000.0 })
+        {
+            ResamplingIsland reference;
+            reference.prepare(rate, 48000.0, 512);
+            const auto expected = runIsland(reference, noise, 512, passThroughModel);
+
+            for (const int blockSize : { 1, 37, 256, 2000 })
+            {
+                ResamplingIsland island;
+                island.prepare(rate, 48000.0, 512);   // 2000 exceeds it: chunked inside
+                int largestCall = 0;
+                const auto out = runIsland(island, noise, blockSize, [&](const float* in, float* o, int n)
+                {
+                    largestCall = juce::jmax(largestCall, n);
+                    std::copy(in, in + n, o);
+                });
+                expect(out == expected, "Blocks of " + juce::String(blockSize) + " at " + juce::String(rate));
+                expect(largestCall <= island.getMaxModelBlock(), "The model never gets more than it was prepared for");
+            }
+        }
+    }
+
+    beginTest("reset() clears the history and keeps the delay");
+    {
+        ResamplingIsland island;
+        island.prepare(44100.0, 48000.0, 512);
+        std::vector<float> impulse(2048, 0.0f);
+        impulse[100] = 1.0f;
+        const auto first = runIsland(island, impulse, 512, passThroughModel);
+        island.reset();
+        const auto second = runIsland(island, impulse, 512, passThroughModel);
+        expect(first == second, "The same input gives the same output after a reset");
+    }
+}
+
+//==============================================================================
 // NAM profile (prototype)
 //==============================================================================
 

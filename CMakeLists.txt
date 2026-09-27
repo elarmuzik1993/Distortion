@@ -149,6 +149,8 @@ set(PLUGIN_SOURCES
     Source/Diagnostics/PingSender.cpp
     Source/Nam/NamProfile.h
     Source/Nam/NamProfile.cpp
+    Source/Nam/ResamplingIsland.h
+    Source/Nam/ResamplingIsland.cpp
 )
 
 # Test sources
