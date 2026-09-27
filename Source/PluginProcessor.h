@@ -734,6 +734,14 @@ private:
     int profilePreparedBlock = 0;
     // Model inputs, model outputs and the per-sample mix, sized in prepareToPlay.
     juce::AudioBuffer<float> profileScratch;
+    // profileScratch channels: model input, active output, incoming output (two
+    // each), the per-sample mix, then the delayed dry half (two).
+    static constexpr int scratchModelIn = 0, scratchActiveOut = 2, scratchIncomingOut = 4,
+                         scratchMix = 6, scratchDry = 7, profileScratchChannels = 9;
+    // Profile-to-profile swap, audio thread: a silent warm-up, then a linear blend.
+    int swapWarmupRemaining = 0;
+    int swapFadePosition = 0;
+    int swapFadeLength = 1;
     mutable juce::CriticalSection profileStatusLock;
     ProfileStatus profileStatus;
     juce::ThreadPool profileLoader { 1 };

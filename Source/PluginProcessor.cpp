@@ -774,7 +774,7 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // NAM profiles: bring every one we hold up to these settings and finish any
     // pending switch, so the oversampler below is built for the final mode.
     prepareProfilesForHost(sampleRate, samplesPerBlock);
-    profileScratch.setSize(2 * numChannels + 1, samplesPerBlock, false, false, true);
+    profileScratch.setSize(profileScratchChannels, samplesPerBlock, false, false, true);
 
     // Output gain is applied AFTER downsampling at normal sample rate
     smoothedOutputGain.reset(sampleRate, DSPConstants::GAIN_SMOOTH_TIME_S);
@@ -2384,7 +2384,8 @@ void PluginProcessor::takePendingProfile() noexcept
 {
     // One swap at a time, never during a duck, and only with somewhere to park the
     // profile it replaces.
-    if (duckState != DuckState::open || duckRequested.load(std::memory_order_acquire)
+    if (incomingProfile != nullptr || duckState != DuckState::open
+        || duckRequested.load(std::memory_order_acquire)
         || retiredProfile.load(std::memory_order_acquire) != nullptr)
         return;
 
@@ -2403,8 +2404,14 @@ void PluginProcessor::takePendingProfile() noexcept
         return;
     }
 
-    retiredProfile.store(activeProfile, std::memory_order_release);
-    activeProfile = next;
+    // The new profile runs beside the current one: silently until it has settled
+    // on the real input, then blended in by applyProfileStage.
+    incomingProfile = next;
+    swapWarmupRemaining = static_cast<int>(std::ceil(
+        juce::jmin(next->getSettleSeconds(), DSPConstants::PROFILE_WARMUP_MAX_S) * profilePreparedRate));
+    swapFadeLength = juce::jmax(1, static_cast<int>(std::lround(
+        DSPConstants::PROFILE_CROSSFADE_TIME_S * profilePreparedRate)));
+    swapFadePosition = 0;
 }
 
 void PluginProcessor::collectRetiredProfile()
@@ -2594,6 +2601,8 @@ void PluginProcessor::installRequestedProfile(std::vector<NamProfile*>& toFree)
     profileModeInstalled.store(profileMode, std::memory_order_release);
     installedIslandDelay.store(profileMode ? activeProfile->getLatencySamples() : 0,
                                std::memory_order_release);
+    swapWarmupRemaining = 0;
+    swapFadePosition = 0;
 }
 
 void PluginProcessor::prepareProfilesForHost(double sampleRate, int samplesPerBlock)
@@ -2887,19 +2896,22 @@ bool PluginProcessor::applyProfileStage(float* const* channels) noexcept
     // Profile mode is only on once the rebuild to 1x has run, so the island sees
     // the host rate it was prepared for.
     if (! profileMode || profile == nullptr || ! profile->isPrepared() || oversamplingFactor != 1
-        || numChannels < 1 || numChannels > 2
+        || numChannels < 1 || numChannels > 2 || numChannels > profile->getNumChannels()
         || numSamples > profileScratch.getNumSamples()
-        || profileScratch.getNumChannels() < 2 * numChannels + 1)
+        || profileScratch.getNumChannels() < profileScratchChannels)
         return false;
 
     std::array<float*, 2> modelIn {};
-    std::array<float*, 2> modelOut {};
+    std::array<float*, 2> activeOut {};
+    std::array<float*, 2> incomingOut {};
     for (int ch = 0; ch < numChannels; ++ch)
     {
-        modelIn[static_cast<size_t>(ch)]  = profileScratch.getWritePointer(ch);
-        modelOut[static_cast<size_t>(ch)] = profileScratch.getWritePointer(numChannels + ch);
+        const auto idx = static_cast<size_t>(ch);
+        modelIn[idx]     = profileScratch.getWritePointer(scratchModelIn + ch);
+        activeOut[idx]   = profileScratch.getWritePointer(scratchActiveOut + ch);
+        incomingOut[idx] = profileScratch.getWritePointer(scratchIncomingOut + ch);
     }
-    float* mix = profileScratch.getWritePointer(2 * numChannels);
+    float* mix = profileScratch.getWritePointer(scratchMix);
     const float lfoPhaseIncrement = pb_lfoPhaseIncrement / static_cast<float>(oversamplingFactor);
 
     for (int i = 0; i < numSamples; ++i)
@@ -2914,15 +2926,58 @@ bool PluginProcessor::applyProfileStage(float* const* channels) noexcept
             modelIn[ch][i] = channels[ch][i] * inputGain;
     }
 
-    const float outputGain = profile->getOutputGain();
-    for (int ch = 0; ch < juce::jmin(numChannels, profile->getNumChannels()); ++ch)
+    // A profile on its way in runs on the same input: silently until it has settled,
+    // then blended in linearly. The two outputs are correlated, so a linear blend
+    // keeps the level where an equal-power one would bump it.
+    auto* incoming = incomingProfile;
+    for (int ch = 0; ch < numChannels; ++ch)
     {
         const auto idx = static_cast<size_t>(ch);
-        profile->process(ch, modelIn[idx], modelOut[idx], numSamples);
+        profile->process(ch, modelIn[idx], activeOut[idx], numSamples);
+        if (incoming != nullptr)
+            incoming->process(ch, modelIn[idx], incomingOut[idx], numSamples);
+    }
 
-        float* data = channels[ch];
-        for (int i = 0; i < numSamples; ++i)
-            data[i] = data[i] * (1.0f - mix[i]) + modelOut[idx][i] * outputGain * mix[i];
+    const float activeGain = profile->getOutputGain();
+    const float incomingGain = incoming != nullptr ? incoming->getOutputGain() : 0.0f;
+    int warmup = swapWarmupRemaining;
+    int fadePosition = swapFadePosition;
+    for (int i = 0; i < numSamples; ++i)
+    {
+        float weight = 0.0f;   // the incoming profile's share
+        if (incoming != nullptr)
+        {
+            if (warmup > 0)
+            {
+                --warmup;
+            }
+            else
+            {
+                if (fadePosition < swapFadeLength)
+                    ++fadePosition;
+                weight = static_cast<float>(fadePosition) / static_cast<float>(swapFadeLength);
+            }
+        }
+        for (size_t ch = 0; ch < static_cast<size_t>(numChannels); ++ch)
+        {
+            float wet = activeOut[ch][i] * activeGain * (1.0f - weight);
+            if (incoming != nullptr)
+                wet += incomingOut[ch][i] * incomingGain * weight;
+            channels[ch][i] = channels[ch][i] * (1.0f - mix[i]) + wet * mix[i];
+        }
+    }
+
+    if (incoming != nullptr)
+    {
+        swapWarmupRemaining = warmup;
+        swapFadePosition = fadePosition;
+        if (warmup == 0 && fadePosition >= swapFadeLength)
+        {
+            // Fully faded in: the outgoing profile goes to the timer to be freed.
+            retiredProfile.store(activeProfile, std::memory_order_release);
+            activeProfile = incoming;
+            incomingProfile = nullptr;
+        }
     }
     return true;
 }

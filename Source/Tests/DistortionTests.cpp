@@ -5842,6 +5842,69 @@ void NamProfileTests::runTest()
         if (processor.activeProfile != nullptr)
             expectWithinAbsoluteError(processor.activeProfile->getPreparedSampleRate(), 96000.0, 0.5);
     }
+
+    beginTest("Swapping profiles crossfades without a click, a duck or an allocation");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        processor.loadProfileBlocking(namTestModel("wavenet.nam"));
+        expect(settle(processor), "First profile in");
+
+        ContinuousSine sine;
+        int allocations = 0;
+        bool ducked = false;
+        const auto run = [&](int blocks, std::vector<float>& captured)
+        {
+            for (int b = 0; b < blocks; ++b)
+            {
+                auto buffer = sine.next(512);
+                allocations += allocationsDuring(processor, buffer);
+                appendChannel0(captured, buffer);
+                ducked = ducked || processor.duckState != PluginProcessor::DuckState::open;
+            }
+        };
+
+        std::vector<float> before, swapping, after;
+        run(40, before);
+        processor.loadProfileBlocking(namTestModel("lstm.nam"));
+        for (int round = 0; round < 100; ++round)
+        {
+            processor.timerCallback();
+            if (processor.isProfileSwitchIdle())
+                break;
+            run(1, swapping);
+        }
+        run(40, after);
+
+        expect(processor.activeProfile != nullptr && processor.activeProfile->getName() == "lstm", "lstm is active");
+        expect(! ducked, "A swap between two 48 kHz profiles never ducks");
+        expectEquals(allocations, 0, "No allocation on the audio thread across the swap");
+        expect(swapping.size() >= static_cast<size_t>(std::lround(DSPConstants::PROFILE_CROSSFADE_TIME_S * 48000.0)),
+               "The blend took at least its 30 ms");
+        const float steady = juce::jmax(largestStep(before, 512 * 20), largestStep(after, 512 * 20));
+        swapping.insert(swapping.begin(), before.back());
+        swapping.push_back(after.front());
+        expect(largestStep(swapping) <= 1.5f * steady, "No click across the swap");
+    }
+
+    beginTest("A profile arriving mid-swap waits its turn");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        processor.loadProfileBlocking(namTestModel("wavenet.nam"));
+        expect(settle(processor), "First profile in");
+
+        processor.loadProfileBlocking(namTestModel("lstm.nam"));
+        processor.timerCallback();      // routed for a crossfade
+        processSine(processor, 1);      // taken: lstm starts on its way in
+        expect(processor.incomingProfile != nullptr, "lstm is on its way in");
+
+        processor.loadProfileBlocking(namTestModel("slimmable_container.nam"));
+        expect(settle(processor), "Both swaps complete");
+        expect(processor.activeProfile != nullptr
+               && processor.activeProfile->getName() == "slimmable_container", "The newest profile wins");
+        expect(processor.retiredProfile.load() == nullptr, "Nothing is left to free");
+    }
 }
 
 #endif // JUCE_DEBUG
