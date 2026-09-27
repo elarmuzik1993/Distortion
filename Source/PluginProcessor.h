@@ -716,9 +716,11 @@ private:
     SampleControls advanceSampleControls(float lfoPhaseIncrement) noexcept;
     // Runs the active NAM profile over the given channel buffers in place of the
     // built-in clip type. Returns false (touching nothing) when no profile can
-    // run this block, so the caller falls back to applyDistortionStage.
+    // run this block, so the caller falls back to applyDistortionStage. A block
+    // longer than the scratch runs in pieces, through applyProfileChunk.
     bool applyProfileStage(float* const* channels) noexcept;
-    bool canRunProfileStage(int numChannels, int numSamples) const noexcept;
+    void applyProfileChunk(float* const* channels, int numChannels, int numSamples) noexcept;
+    bool canRunProfileStage(int numChannels) const noexcept;
     // Keeps the profile's island, model and dry delays running through true bypass.
     void feedProfileWhileBypassed(const juce::AudioBuffer<float>& buffer) noexcept;
     // Ends a swap once the incoming profile has fully faded in.

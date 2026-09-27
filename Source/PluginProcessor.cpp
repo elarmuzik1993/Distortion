@@ -3023,14 +3023,15 @@ namespace
     }
 }
 
-bool PluginProcessor::canRunProfileStage(int numChannels, int numSamples) const noexcept
+bool PluginProcessor::canRunProfileStage(int numChannels) const noexcept
 {
     // Profile mode is only on once the rebuild to 1x has run, so the island sees
-    // the host rate it was prepared for.
+    // the host rate it was prepared for. Block length is no bar: callers run a
+    // block longer than the scratch in pieces.
     const auto* profile = activeProfile;
     return profileMode && profile != nullptr && profile->isPrepared() && oversamplingFactor == 1
         && numChannels >= 1 && numChannels <= 2 && numChannels <= profile->getNumChannels()
-        && numSamples <= profileScratch.getNumSamples()
+        && profileScratch.getNumSamples() > 0
         && profileScratch.getNumChannels() >= profileScratchChannels;
 }
 
@@ -3052,69 +3053,93 @@ void PluginProcessor::feedProfileWhileBypassed(const juce::AudioBuffer<float>& b
     // outputs discarded, as applyProfileStage's own sub-threshold stretch does.
     const int numSamples = buffer.getNumSamples();
     const int numChannels = buffer.getNumChannels();
-    if (! canRunProfileStage(numChannels, numSamples))
+    if (! canRunProfileStage(numChannels))
         return;
 
     // Below the bypass threshold the model hears the input at the bottom of its
     // input-gain curve, as it would on the active path.
     const float inputGain = inputGainRamp.peek()
         * juce::Decibels::decibelsToGain(profileInputGainDb(0.0f));
-    auto* incoming = incomingProfile;
-    for (int ch = 0; ch < numChannels; ++ch)
+    // The global dry line takes the captured dry, which exists only when it fits.
+    const bool feedGlobalDry = numSamples <= dryBuffer.getNumSamples()
+                            && numChannels <= dryBuffer.getNumChannels();
+    const int chunk = profileScratch.getNumSamples();
+    for (int done = 0; done < numSamples; done += chunk)
     {
-        float* modelIn = profileScratch.getWritePointer(scratchModelIn + ch);
-        float* out = profileScratch.getWritePointer(scratchActiveOut + ch);
-        const float* in = buffer.getReadPointer(ch);
-        for (int i = 0; i < numSamples; ++i)
-            modelIn[i] = in[i] * inputGain;
-        activeProfile->process(ch, modelIn, out, numSamples);
-        if (incoming != nullptr)
-            incoming->process(ch, modelIn, out, numSamples);
-    }
-
-    // A swap under way keeps its clock, so it can't stall until bypass ends.
-    if (incoming != nullptr)
-    {
-        const int warm = juce::jmin(swapWarmupRemaining, numSamples);
-        swapWarmupRemaining -= warm;
-        swapFadePosition = juce::jmin(swapFadeLength, swapFadePosition + numSamples - warm);
-        retireOutgoingProfileIfFaded();
-    }
-
-    if (islandDelay <= 0)
-        return;
-
-    // The Distortion Mix dry line takes the stage input and the global dry line the
-    // captured dry, both through a scratch copy so the bypass output is untouched.
-    std::array<float*, 2> dry {};
-    for (int ch = 0; ch < numChannels; ++ch)
-    {
-        dry[static_cast<size_t>(ch)] = profileScratch.getWritePointer(scratchDry + ch);
-        std::copy(buffer.getReadPointer(ch), buffer.getReadPointer(ch) + numSamples,
-                  dry[static_cast<size_t>(ch)]);
-    }
-    delayInPlace(distMixDryDelayLine, dry.data(), numChannels, numSamples);
-    if (numSamples <= dryBuffer.getNumSamples() && numChannels <= dryBuffer.getNumChannels())
-    {
+        const int n = juce::jmin(chunk, numSamples - done);
+        auto* incoming = incomingProfile;
         for (int ch = 0; ch < numChannels; ++ch)
-            std::copy(dryBuffer.getReadPointer(ch), dryBuffer.getReadPointer(ch) + numSamples,
-                      dry[static_cast<size_t>(ch)]);
-        delayInPlace(globalDryDelayLine, dry.data(), numChannels, numSamples);
+        {
+            float* modelIn = profileScratch.getWritePointer(scratchModelIn + ch);
+            float* out = profileScratch.getWritePointer(scratchActiveOut + ch);
+            const float* in = buffer.getReadPointer(ch) + done;
+            for (int i = 0; i < n; ++i)
+                modelIn[i] = in[i] * inputGain;
+            activeProfile->process(ch, modelIn, out, n);
+            if (incoming != nullptr)
+                incoming->process(ch, modelIn, out, n);
+        }
+
+        // A swap under way keeps its clock, so it can't stall until bypass ends.
+        if (incoming != nullptr)
+        {
+            const int warm = juce::jmin(swapWarmupRemaining, n);
+            swapWarmupRemaining -= warm;
+            swapFadePosition = juce::jmin(swapFadeLength, swapFadePosition + n - warm);
+            retireOutgoingProfileIfFaded();
+        }
+
+        if (islandDelay <= 0)
+            continue;
+
+        // The Distortion Mix dry line takes the stage input and the global dry line
+        // the captured dry, both through a scratch copy so the bypass output is untouched.
+        std::array<float*, 2> dry {};
+        for (int ch = 0; ch < numChannels; ++ch)
+        {
+            dry[static_cast<size_t>(ch)] = profileScratch.getWritePointer(scratchDry + ch);
+            std::copy_n(buffer.getReadPointer(ch) + done, n, dry[static_cast<size_t>(ch)]);
+        }
+        delayInPlace(distMixDryDelayLine, dry.data(), numChannels, n);
+        if (feedGlobalDry)
+        {
+            for (int ch = 0; ch < numChannels; ++ch)
+                std::copy_n(dryBuffer.getReadPointer(ch) + done, n, dry[static_cast<size_t>(ch)]);
+            delayInPlace(globalDryDelayLine, dry.data(), numChannels, n);
+        }
     }
 
     // No low band is split off while bypassed, so its line restarts from silence,
     // as it does when Sub Guard switches on.
-    subGuardLowDelayLine.reset();
+    if (islandDelay > 0)
+        subGuardLowDelayLine.reset();
 }
 
 bool PluginProcessor::applyProfileStage(float* const* channels) noexcept
 {
-    auto* profile = activeProfile;
     const int numSamples = static_cast<int>(pb_numSamples);
     const int numChannels = static_cast<int>(pb_numChannels);
-
-    if (! canRunProfileStage(numChannels, numSamples))
+    if (! canRunProfileStage(numChannels))
         return false;
+
+    // A host can hand over a block longer than it prepared for. The profile runs
+    // on it in pieces the scratch holds, rather than dropping to the built-in clip
+    // type, whose zero latency would put the wet path D ahead of the dry and low
+    // band that still wait the island's D.
+    const int chunk = profileScratch.getNumSamples();
+    for (int done = 0; done < numSamples; done += chunk)
+    {
+        std::array<float*, 2> piece {};
+        for (int ch = 0; ch < numChannels; ++ch)
+            piece[static_cast<size_t>(ch)] = channels[ch] + done;
+        applyProfileChunk(piece.data(), numChannels, juce::jmin(chunk, numSamples - done));
+    }
+    return true;
+}
+
+void PluginProcessor::applyProfileChunk(float* const* channels, int numChannels, int numSamples) noexcept
+{
+    auto* profile = activeProfile;
 
     std::array<float*, 2> modelIn {};
     std::array<float*, 2> activeOut {};
@@ -3199,7 +3224,6 @@ bool PluginProcessor::applyProfileStage(float* const* channels) noexcept
         swapFadePosition = fadePosition;
         retireOutgoingProfileIfFaded();
     }
-    return true;
 }
 
 bool PluginProcessor::applySubGuardSplit()

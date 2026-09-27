@@ -6427,6 +6427,51 @@ void NamProfileTests::runTest()
                          "Impulse peak at 2048 + the reported latency, " + juce::String(rate) + " Hz");
         }
     }
+
+    beginTest("A block longer than the host prepared for still runs the profile, in step");
+    {
+        // Prepared for 512, handed 768: the profile runs in pieces instead of the
+        // built-in clip type taking over at zero latency, D ahead of the dry and the
+        // Sub Guard low band. Either way the output matches a 512-sample render.
+        TempNam identity(linearModelJson("1.0", 1, 48000));
+        const auto noise = lowPassedNoise(44100.0, 0.5, 0.05f);   // 22050 samples
+        for (const float subGuard : { 0.0f, 80.0f })
+        {
+            const auto render = [&](int blockSize)
+            {
+                PluginProcessor processor;
+                prepareForProfileTest(processor, 44100.0, 512);
+                configureUnityChain(processor);
+                setParameter(processor.parameters, "subGuardFreq", subGuard);
+                processor.loadProfileBlocking(identity.file);
+                expect(settle(processor), "Identity profile in");
+                expect(processor.islandDelay > 0, "44.1 kHz runs the island with a delay");
+
+                std::vector<float> out;
+                juce::MidiBuffer midi;
+                for (size_t done = 0; done + static_cast<size_t>(blockSize) <= noise.size();
+                     done += static_cast<size_t>(blockSize))
+                {
+                    juce::AudioBuffer<float> buffer(2, blockSize);
+                    for (int ch = 0; ch < 2; ++ch)
+                        buffer.copyFrom(ch, 0, noise.data() + done, blockSize);
+                    processor.processBlock(buffer, midi);
+                    appendChannel0(out, buffer);
+                }
+                return out;
+            };
+
+            const auto prepared = render(512);
+            const auto oversized = render(768);
+            const size_t from = 4410;   // past the first blocks' settling
+            const size_t to = juce::jmin(prepared.size(), oversized.size());
+            float largest = 0.0f;
+            for (size_t i = from; i < to; ++i)
+                largest = juce::jmax(largest, std::abs(prepared[i] - oversized[i]));
+            expect(largest < 1.0e-4f, "768-sample blocks match 512-sample ones, Sub Guard "
+                                      + juce::String(subGuard) + ": largest difference " + juce::String(largest, 8));
+        }
+    }
 }
 
 #endif // JUCE_DEBUG
