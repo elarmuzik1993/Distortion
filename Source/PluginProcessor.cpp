@@ -3982,6 +3982,14 @@ void PluginProcessor::resetDSPState()
     globalDryDelayLine.reset();
     subGuardLowDelayLine.reset();
     distMixDryDelayLine.reset();
+    // The profiles' islands restart with the dry lines above, so the wet and dry
+    // halves come back in step instead of the island replaying pre-reset audio.
+    // prepareProfilesForHost skips a profile already prepared for these settings,
+    // so this is the only reset that one gets.
+    if (activeProfile != nullptr)
+        activeProfile->reset();
+    if (incomingProfile != nullptr)
+        incomingProfile->reset();
 
     // Abort any in-flight Sub Guard order crossfade; the next active block re-seeds
     // the order from the current frequency (OFF->ON snap path).

@@ -121,6 +121,12 @@ bool NamProfile::prepare(double hostRate, int maxHostBlock)
     return true;
 }
 
+void NamProfile::reset() noexcept
+{
+    for (auto& island : islands)
+        island.reset();
+}
+
 void NamProfile::process(int channel, const float* input, float* output, int numSamples) noexcept
 {
     auto& model = *models[static_cast<size_t>(channel)];

@@ -40,6 +40,11 @@ public:
     // input and output may not alias. The output is getLatencySamples() behind.
     void process(int channel, const float* input, float* output, int numSamples) noexcept;
 
+    // Clears the islands' signal history so no audio from before the reset comes
+    // back out. The models keep their state: NAM's own reset allocates and
+    // prewarms, so it can't run on the audio thread. Audio thread; no allocation.
+    void reset() noexcept;
+
     bool isPrepared() const noexcept { return ready; }
 
     int getNumChannels() const noexcept { return static_cast<int>(models.size()); }

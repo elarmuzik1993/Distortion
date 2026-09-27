@@ -6327,6 +6327,23 @@ void NamProfileTests::runTest()
         expect(checked, "The active path resumed within the loop's block budget");
     }
 
+    beginTest("A state reset clears the island along with the dry delays");
+    {
+        // A preset or session load mid-playback resets the DSP without a duck; the
+        // island restarting with the dry lines is what keeps the two halves in step.
+        TempNam identity(linearModelJson("1.0", 1, 48000));
+        PluginProcessor processor;
+        loudToneThroughIsland(processor, identity.file);
+
+        processor.stateNeedsReset.store(true);
+        juce::AudioBuffer<float> silence(2, 512);
+        silence.clear();
+        juce::MidiBuffer midi;
+        processor.processBlock(silence, midi);
+        const float largest = largestAbs(silence);
+        expect(largest < 1.0e-3f, "Nothing from before the reset comes out: largest=" + juce::String(largest, 8));
+    }
+
     beginTest("An offline render never ducks to silence");
     {
         // A bounce runs faster than the timer: a duck that waits for its tick would
