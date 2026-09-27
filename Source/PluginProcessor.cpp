@@ -2557,6 +2557,14 @@ void PluginProcessor::serviceDuck()
     if (! duckRequested.load(std::memory_order_acquire))
         return;
 
+    // An offline render doesn't duck (see updateDuckState): rebuild straight away,
+    // as every rebuild did before the duck existed.
+    if (isNonRealtime())
+    {
+        performSwitch();
+        return;
+    }
+
     // The audio thread normally reports silence within a block or two. If it
     // doesn't (transport stopped, plugin suspended), nothing is playing, so the
     // rebuild goes ahead anyway.
@@ -2733,6 +2741,19 @@ void PluginProcessor::updateDuckState() noexcept
             duckState = DuckState::opening;
             duckGain = 0.0f;
         }
+    }
+    if (isNonRealtime())
+    {
+        // An offline render runs faster than the timer that performs the rebuild,
+        // so waiting for it in silence would print that silence into the file many
+        // times over. Never duck while bouncing: serviceDuck rebuilds at once
+        // instead, and a duck already under way is abandoned at full level.
+        if (duckState == DuckState::closing || duckState == DuckState::closed)
+        {
+            duckState = DuckState::open;
+            duckGain = 1.0f;
+        }
+        return;
     }
     if (duckState == DuckState::open && duckRequested.load(std::memory_order_acquire))
         duckState = DuckState::closing;

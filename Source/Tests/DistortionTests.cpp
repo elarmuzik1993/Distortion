@@ -6264,6 +6264,32 @@ void NamProfileTests::runTest()
         }
         expect(checked, "The active path resumed within the loop's block budget");
     }
+
+    beginTest("An offline render never ducks to silence");
+    {
+        // A bounce runs faster than the timer: a duck that waits for its tick would
+        // print that wait into the file as silence, many times over.
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        processor.setNonRealtime(true);
+        expect(processor.loadProfileBlocking(namTestModel("wavenet.nam")), "Loads");
+        processor.timerCallback();   // the switch into profile mode is requested
+
+        ContinuousSine sine;
+        std::vector<float> out;
+        juce::MidiBuffer midi;
+        for (int b = 0; b < 10; ++b)
+        {
+            auto buffer = sine.next(512);
+            processor.processBlock(buffer, midi);
+            appendChannel0(out, buffer);
+        }
+        const int zeros = longestZeroRun(out);
+        expect(zeros <= 8, "No silent gap in the render: longest zero run " + juce::String(zeros));
+
+        expect(settle(processor), "The switch completes");
+        expect(processor.profileMode, "Profile mode is on");
+    }
 }
 
 #endif // JUCE_DEBUG
