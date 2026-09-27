@@ -5792,8 +5792,9 @@ void NamProfileTests::runTest()
         expect(processor.profileMode && processor.activeProfile != nullptr, "Installed after the timeout");
         expectEquals(static_cast<int>(processor.oversamplingFactor), 1);
 
-        juce::AudioBuffer<float> out;
-        processSine(processor, 1, &out);
+        juce::MidiBuffer midi;
+        auto out = generateSineWave(440.0, 48000.0, 64, 0.5f);   // shorter than the 480-sample fade
+        processor.processBlock(out, midi);
         expect(processor.duckState == PluginProcessor::DuckState::open,
                "Playback starts at full level: the audio thread never faded out");
     }
@@ -5819,6 +5820,27 @@ void NamProfileTests::runTest()
         expect(processor.duckRequested.load(), "The flagged rebuild became a duck");
         expect(settle(processor), "The rebuild completes");
         expect(processor.currentLinearPhase, "The oversampler now uses the linear-phase filter");
+    }
+
+    beginTest("A pending profile prepared for settings the host has left is re-prepared before it runs");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor, 96000.0, 512);
+        expect(processor.loadProfileBlocking(namTestModel("wavenet.nam")), "wavenet.nam loads");
+        expect(settle(processor), "The switch into profile mode completes");
+
+        // Stands in for a host that calls prepareToPlay off the message thread while
+        // the timer is inside routeStagedProfile: a profile prepared for 48 kHz lands
+        // in pendingProfile behind its back.
+        juce::String error;
+        auto stale = NamProfile::load(namTestModel("lstm.nam"), 2, 48000.0, 512, error);
+        expect(stale != nullptr, error);
+        processor.pendingProfile.store(stale.release());
+        expect(settle(processor), "The switch completes");
+        expect(processor.activeProfile != nullptr && processor.activeProfile->getName() == "lstm",
+               "lstm is active");
+        if (processor.activeProfile != nullptr)
+            expectWithinAbsoluteError(processor.activeProfile->getPreparedSampleRate(), 96000.0, 0.5);
     }
 }
 
