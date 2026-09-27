@@ -1428,8 +1428,11 @@ void PluginProcessor::updateLatencyPlan(double sampleRate, int blockSize)
     prepareDelay(distMixDryDelayLine, baseSpec, islandDelay);
 
     setLatencySamples(reservedLatency);
-    // The true-bypass branch skips everything above, so it imposes the whole figure.
-    bypassLatencySamples = reservedLatency;
+    // The true-bypass branch skips everything above, so it imposes the path's own
+    // latency itself, then shares the same pad line the active path uses to reach
+    // the full reserve — so a crossing between the two branches never replays
+    // whatever either line held from the last time that path ran.
+    bypassLatencySamples = pathLatency;
     prepareDelay(bypassLatencyDelay, baseSpec, bypassLatencySamples);
 }
 
@@ -1844,12 +1847,13 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         }
 
         // ========== LATENCY COMPENSATION (Bypass path) ==========
-        // The active path is delayed by the oversampler's reported latency; this
-        // branch skips the oversampler, so it must impose the same integer delay
-        // to stay aligned with the host's PDC and avoid a timing jump when the
-        // bypass<->active threshold is crossed. None interpolation -> the samples
-        // pass through unchanged, only time-shifted. When latency is zero
-        // (oversampling off) the branch stays a truly bit-clean passthrough.
+        // The active path is delayed by its own path latency, then padded up to the
+        // reported reserve; this branch skips the oversampler, so it must impose that
+        // same path latency here to stay aligned with the host's PDC and avoid a
+        // timing jump when the bypass<->active threshold is crossed. None
+        // interpolation -> the samples pass through unchanged, only time-shifted.
+        // When latency is zero (oversampling off) the branch stays a truly
+        // bit-clean passthrough.
         if (bypassLatencySamples > 0)
         {
             const int numSamp = buffer.getNumSamples();
@@ -1861,6 +1865,14 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                     buffer.setSample(channel, sample, bypassLatencyDelay.popSample(channel));
                 }
         }
+
+        // Shares the active path's pad line, fed every block by whichever path runs,
+        // so a crossing between the two never replays a stale line's leftover tail.
+        // Together with the delay above this reaches the same reserve, R, as the
+        // active path.
+        if (outputPadDelay > 0)
+            delayInPlace(outputPadLine, buffer.getArrayOfWritePointers(),
+                         buffer.getNumChannels(), buffer.getNumSamples());
 
         applyDuckGain(buffer);   // last, as on the active path
         return;  // Skip all DSP processing

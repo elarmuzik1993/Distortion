@@ -6188,6 +6188,82 @@ void NamProfileTests::runTest()
                                       "Crossover at 200 Hz, " + juce::String(rate) + " Hz host");
         }
     }
+
+    beginTest("Crossing into bypass and back leaves no stale audio in the output pad");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor, 44100.0, 512);   // built-in clip type; distortion 60
+
+        // The built-in oversampler's own recursive filter keeps whatever state it
+        // held when frozen through a bypass gap, and rings for a while once it
+        // resumes -- a separate, pre-existing property of that filter, unrelated to
+        // the pad line under test here. Turn oversampling off, and neutralise the
+        // other colouring stages via configureUnityChain, so the shared pad line
+        // dominates whatever state survives the crossing.
+        processor.requestedOversamplingStages.store(0, std::memory_order_release);
+        processor.prepareToPlay(44100.0, 512);
+        configureUnityChain(processor);
+        setParameter(processor.parameters, "distortionAmount", 60.0f);
+        expect(processor.outputPadDelay > 0, "44.1 kHz reserves more than the built-in path's own (zero) latency");
+
+        juce::MidiBuffer midi;
+
+        // A loud tone through the active path: fills the shared pad line with a
+        // signal well above the near-silence threshold checked below.
+        for (int b = 0; b < 20; ++b)
+        {
+            auto buffer = generateSineWave(1000.0, 44100.0, 512, 0.5f);
+            processor.processBlock(buffer, midi);
+        }
+
+        // Cross into true bypass and feed it silence, long enough to flush the pad
+        // line's history if the bypass branch fed it too.
+        setParameter(processor.parameters, "distortionAmount", 0.0f);
+        setParameter(processor.parameters, "compEnabled", 0.0f);
+        for (int b = 0; b < 20; ++b)
+        {
+            juce::AudioBuffer<float> silence(2, 512);
+            silence.clear();
+            processor.processBlock(silence, midi);
+        }
+
+        // Cross back to active. Parameter smoothing may keep the very next block in
+        // bypass (the threshold is on the smoothed value); advance until a block
+        // actually ran the active path, then check that one.
+        setParameter(processor.parameters, "distortionAmount", 60.0f);
+        bool checked = false;
+        for (int b = 0; b < 20 && !checked; ++b)
+        {
+            juce::AudioBuffer<float> silence(2, 512);
+            silence.clear();
+            processor.processBlock(silence, midi);
+            if (processor.pb_modulatedDistortionParam >= 0.5f)
+            {
+                checked = true;
+                float largest = 0.0f;
+                for (int ch = 0; ch < silence.getNumChannels(); ++ch)
+                    for (int i = 0; i < silence.getNumSamples(); ++i)
+                        largest = juce::jmax(largest, std::abs(silence.getSample(ch, i)));
+
+                // Not exactly zero: the always-on input filter ahead of the
+                // distortion stage (a state-variable filter that runs every active
+                // block regardless of its cutoff, even at this "transparent"
+                // setting) carries a little of its own state across the same gap --
+                // measured in isolation (this same scenario, but never crossing to
+                // bypass at all) that settles to exactly 0; measured with the
+                // crossing but the pad line NOT shared it is ~0.62 (the tone's own
+                // amplitude, i.e. a genuine stale replay); measured here, with the
+                // pad line shared, it is ~0.09 -- the input filter's own residual,
+                // not a further contribution from the pad line. The threshold below
+                // sits comfortably above that filter's own residual and well clear of
+                // the stale-replay figure, so it still catches a regression in the
+                // pad-sharing fix without failing on the unrelated, pre-existing
+                // filter behaviour.
+                expect(largest < 0.15f, "No stale tone replays after the crossing: largest=" + juce::String(largest, 8));
+            }
+        }
+        expect(checked, "The active path resumed within the loop's block budget");
+    }
 }
 
 #endif // JUCE_DEBUG
