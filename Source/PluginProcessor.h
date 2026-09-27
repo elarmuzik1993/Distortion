@@ -718,6 +718,11 @@ private:
     // built-in clip type. Returns false (touching nothing) when no profile can
     // run this block, so the caller falls back to applyDistortionStage.
     bool applyProfileStage(float* const* channels) noexcept;
+    bool canRunProfileStage(int numChannels, int numSamples) const noexcept;
+    // Keeps the profile's island, model and dry delays running through true bypass.
+    void feedProfileWhileBypassed(const juce::AudioBuffer<float>& buffer) noexcept;
+    // Ends a swap once the incoming profile has fully faded in.
+    void retireOutgoingProfileIfFaded() noexcept;
     void applyAutoGainAndISP(juce::AudioBuffer<float>& buffer);
     void applyLA2A();
     // Stereo-linked soft safety limiter at -0.5dBFS. Must run as the LAST gain stage

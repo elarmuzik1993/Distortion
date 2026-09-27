@@ -1859,6 +1859,8 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             applyInputFilter(filterBlock);
         }
 
+        feedProfileWhileBypassed(buffer);   // profile mode only; the output is untouched
+
         for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
         {
             const float currentOutputGain = smoothedOutputGain.getNextValue();
@@ -3021,18 +3023,97 @@ namespace
     }
 }
 
+bool PluginProcessor::canRunProfileStage(int numChannels, int numSamples) const noexcept
+{
+    // Profile mode is only on once the rebuild to 1x has run, so the island sees
+    // the host rate it was prepared for.
+    const auto* profile = activeProfile;
+    return profileMode && profile != nullptr && profile->isPrepared() && oversamplingFactor == 1
+        && numChannels >= 1 && numChannels <= 2 && numChannels <= profile->getNumChannels()
+        && numSamples <= profileScratch.getNumSamples()
+        && profileScratch.getNumChannels() >= profileScratchChannels;
+}
+
+void PluginProcessor::retireOutgoingProfileIfFaded() noexcept
+{
+    if (incomingProfile == nullptr || swapWarmupRemaining > 0 || swapFadePosition < swapFadeLength)
+        return;
+    // Fully faded in: the outgoing profile goes to the timer to be freed.
+    retiredProfile.store(activeProfile, std::memory_order_release);
+    activeProfile = incomingProfile;
+    incomingProfile = nullptr;
+}
+
+void PluginProcessor::feedProfileWhileBypassed(const juce::AudioBuffer<float>& buffer) noexcept
+{
+    // True bypass skips the chain, so without this the island, the model and the
+    // dry delays would freeze and, once the amount comes back up, replay whatever
+    // they held when bypass began. They run on the real input instead, their
+    // outputs discarded, as applyProfileStage's own sub-threshold stretch does.
+    const int numSamples = buffer.getNumSamples();
+    const int numChannels = buffer.getNumChannels();
+    if (! canRunProfileStage(numChannels, numSamples))
+        return;
+
+    // Below the bypass threshold the model hears the input at the bottom of its
+    // input-gain curve, as it would on the active path.
+    const float inputGain = inputGainRamp.peek()
+        * juce::Decibels::decibelsToGain(profileInputGainDb(0.0f));
+    auto* incoming = incomingProfile;
+    for (int ch = 0; ch < numChannels; ++ch)
+    {
+        float* modelIn = profileScratch.getWritePointer(scratchModelIn + ch);
+        float* out = profileScratch.getWritePointer(scratchActiveOut + ch);
+        const float* in = buffer.getReadPointer(ch);
+        for (int i = 0; i < numSamples; ++i)
+            modelIn[i] = in[i] * inputGain;
+        activeProfile->process(ch, modelIn, out, numSamples);
+        if (incoming != nullptr)
+            incoming->process(ch, modelIn, out, numSamples);
+    }
+
+    // A swap under way keeps its clock, so it can't stall until bypass ends.
+    if (incoming != nullptr)
+    {
+        const int warm = juce::jmin(swapWarmupRemaining, numSamples);
+        swapWarmupRemaining -= warm;
+        swapFadePosition = juce::jmin(swapFadeLength, swapFadePosition + numSamples - warm);
+        retireOutgoingProfileIfFaded();
+    }
+
+    if (islandDelay <= 0)
+        return;
+
+    // The Distortion Mix dry line takes the stage input and the global dry line the
+    // captured dry, both through a scratch copy so the bypass output is untouched.
+    std::array<float*, 2> dry {};
+    for (int ch = 0; ch < numChannels; ++ch)
+    {
+        dry[static_cast<size_t>(ch)] = profileScratch.getWritePointer(scratchDry + ch);
+        std::copy(buffer.getReadPointer(ch), buffer.getReadPointer(ch) + numSamples,
+                  dry[static_cast<size_t>(ch)]);
+    }
+    delayInPlace(distMixDryDelayLine, dry.data(), numChannels, numSamples);
+    if (numSamples <= dryBuffer.getNumSamples() && numChannels <= dryBuffer.getNumChannels())
+    {
+        for (int ch = 0; ch < numChannels; ++ch)
+            std::copy(dryBuffer.getReadPointer(ch), dryBuffer.getReadPointer(ch) + numSamples,
+                      dry[static_cast<size_t>(ch)]);
+        delayInPlace(globalDryDelayLine, dry.data(), numChannels, numSamples);
+    }
+
+    // No low band is split off while bypassed, so its line restarts from silence,
+    // as it does when Sub Guard switches on.
+    subGuardLowDelayLine.reset();
+}
+
 bool PluginProcessor::applyProfileStage(float* const* channels) noexcept
 {
     auto* profile = activeProfile;
     const int numSamples = static_cast<int>(pb_numSamples);
     const int numChannels = static_cast<int>(pb_numChannels);
 
-    // Profile mode is only on once the rebuild to 1x has run, so the island sees
-    // the host rate it was prepared for.
-    if (! profileMode || profile == nullptr || ! profile->isPrepared() || oversamplingFactor != 1
-        || numChannels < 1 || numChannels > 2 || numChannels > profile->getNumChannels()
-        || numSamples > profileScratch.getNumSamples()
-        || profileScratch.getNumChannels() < profileScratchChannels)
+    if (! canRunProfileStage(numChannels, numSamples))
         return false;
 
     std::array<float*, 2> modelIn {};
@@ -3116,13 +3197,7 @@ bool PluginProcessor::applyProfileStage(float* const* channels) noexcept
     {
         swapWarmupRemaining = warmup;
         swapFadePosition = fadePosition;
-        if (warmup == 0 && fadePosition >= swapFadeLength)
-        {
-            // Fully faded in: the outgoing profile goes to the timer to be freed.
-            retiredProfile.store(activeProfile, std::memory_order_release);
-            activeProfile = incoming;
-            incomingProfile = nullptr;
-        }
+        retireOutgoingProfileIfFaded();
     }
     return true;
 }

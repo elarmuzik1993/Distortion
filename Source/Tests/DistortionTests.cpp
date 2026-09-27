@@ -6265,6 +6265,68 @@ void NamProfileTests::runTest()
         expect(checked, "The active path resumed within the loop's block budget");
     }
 
+    // A loud tone into a 48 kHz identity profile at 44.1 kHz, where the island and
+    // the dry delays each hold the last D samples they were fed. Returns the
+    // processor ready for whatever the test does next.
+    const auto loudToneThroughIsland = [&](PluginProcessor& processor, const juce::File& model)
+    {
+        prepareForProfileTest(processor, 44100.0, 512);
+        configureUnityChain(processor);
+        processor.loadProfileBlocking(model);
+        expect(settle(processor), "Identity profile in");
+        expect(processor.islandDelay > 0, "44.1 kHz runs the island with a delay");
+        juce::MidiBuffer midi;
+        for (int b = 0; b < 20; ++b)
+        {
+            auto buffer = generateSineWave(1000.0, 44100.0, 512, 0.5f);
+            processor.processBlock(buffer, midi);
+        }
+    };
+    const auto largestAbs = [](const juce::AudioBuffer<float>& buffer)
+    {
+        float largest = 0.0f;
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            for (int i = 0; i < buffer.getNumSamples(); ++i)
+                largest = juce::jmax(largest, std::abs(buffer.getSample(ch, i)));
+        return largest;
+    };
+
+    beginTest("A profile keeps running through true bypass, so resuming replays nothing stale");
+    {
+        TempNam identity(linearModelJson("1.0", 1, 48000));
+        PluginProcessor processor;
+        loudToneThroughIsland(processor, identity.file);
+
+        // Into true bypass, on silence long enough to flush every line fed during it.
+        juce::MidiBuffer midi;
+        setParameter(processor.parameters, "distortionAmount", 0.0f);
+        for (int b = 0; b < 20; ++b)
+        {
+            juce::AudioBuffer<float> silence(2, 512);
+            silence.clear();
+            processor.processBlock(silence, midi);
+        }
+        expect(processor.pb_modulatedDistortionParam < 0.5f, "True bypass is running");
+
+        setParameter(processor.parameters, "distortionAmount", 200.0f / 3.0f);
+        bool checked = false;
+        for (int b = 0; b < 20 && ! checked; ++b)
+        {
+            juce::AudioBuffer<float> silence(2, 512);
+            silence.clear();
+            processor.processBlock(silence, midi);
+            if (processor.pb_modulatedDistortionParam >= 0.5f)
+            {
+                checked = true;
+                // Frozen, the island hands back D samples of the 0.5 tone. What
+                // remains is the input filter's own residual (see the test above).
+                const float largest = largestAbs(silence);
+                expect(largest < 0.15f, "No stale tone after the crossing: largest=" + juce::String(largest, 8));
+            }
+        }
+        expect(checked, "The active path resumed within the loop's block budget");
+    }
+
     beginTest("An offline render never ducks to silence");
     {
         // A bounce runs faster than the timer: a duck that waits for its tick would
