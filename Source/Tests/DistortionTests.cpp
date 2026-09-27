@@ -6323,6 +6323,31 @@ void NamProfileTests::runTest()
                                                           + juce::String(rate) + " Hz");
         }
     }
+
+    beginTest("The output lands exactly at the reported latency with a profile loaded");
+    {
+        // The relative tests line the paths up with each other; this one pins the
+        // whole active path to the figure the host compensates for.
+        TempNam identity(linearModelJson("1.0", 1, 48000));
+        for (const double rate : { 44100.0, 48000.0, 96000.0 })
+        {
+            PluginProcessor processor;
+            prepareForProfileTest(processor, rate, 512);
+            configureUnityChain(processor);
+            processor.loadProfileBlocking(identity.file);
+            expect(settle(processor), "Identity profile in at " + juce::String(rate));
+            expect(processor.profileMode, "Profile mode is on at " + juce::String(rate));
+
+            constexpr size_t impulseAt = 2048;
+            std::vector<float> signal(static_cast<size_t>(rate), 0.0f);
+            signal[impulseAt] = 0.25f;
+            const auto out = renderThrough(processor, signal);
+            const auto peak = std::distance(out.begin(), std::max_element(out.begin(), out.end(),
+                [](float a, float b) { return std::abs(a) < std::abs(b); }));
+            expectEquals(static_cast<int>(peak), static_cast<int>(impulseAt) + processor.getLatencySamples(),
+                         "Impulse peak at 2048 + the reported latency, " + juce::String(rate) + " Hz");
+        }
+    }
 }
 
 #endif // JUCE_DEBUG
