@@ -1480,6 +1480,16 @@ void PluginProcessor::applyBypassLatency(juce::AudioBuffer<float>& buffer) noexc
                      buffer.getNumChannels(), buffer.getNumSamples());
 }
 
+void PluginProcessor::endBlockEarly(juce::AudioBuffer<float>& buffer) noexcept
+{
+    // A block processBlock gives up on still goes out through the bypass branches'
+    // latency tail and then the duck: it lands at the reported latency, the pad line
+    // keeps its history, and a fade under way keeps moving instead of stalling at
+    // full level until the timer's timeout rebuilds unfaded.
+    applyBypassLatency(buffer);
+    applyDuckGain(buffer);
+}
+
 void PluginProcessor::processBlockBypassed(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
     RT_ASSERT_SCOPE();
@@ -1653,6 +1663,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     if (std::isnan(inGainParam) || std::isnan(outGainParam) || std::isnan(distortionParam))
     {
         debugHadNaN.store(true, std::memory_order_relaxed);
+        endBlockEarly(buffer);
         return;  // Skip this block to prevent NaN propagation
     }
     auto highPassFreq = highPassFreqParam->load();
@@ -1924,6 +1935,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // CRITICAL: Check for zero samples (would cause division by zero)
     if (actualOversampledSamples == 0)
     {
+        endBlockEarly(buffer);
         return;
     }
 
@@ -1992,7 +2004,10 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     applyCleanBoostEmphasis();
 
     if (!applySubGuardSplit())
+    {
+        endBlockEarly(buffer);
         return;  // band-split safety check failed — bail entire processBlock
+    }
 
     // Clean Boost de-emphasis: complementary high-shelf cut restoring spectral balance.
     applyCleanBoostDeEmphasis();

@@ -6403,6 +6403,46 @@ void NamProfileTests::runTest()
         }
     }
 
+    beginTest("A block processBlock gives up on keeps the reported latency and the duck");
+    {
+        // A NaN parameter is one of processBlock's early exits; the others share its tail.
+        PluginProcessor processor;
+        prepareForProfileTest(processor, 44100.0, 512);   // built-in clip type
+        const int latency = processor.getLatencySamples();
+        expect(latency > 0, "A latency is reported at 44.1 kHz");
+        const float distortion = processor.distortionAmountParam->load();
+        processor.distortionAmountParam->store(std::numeric_limits<float>::quiet_NaN());
+
+        std::vector<float> out;
+        juce::MidiBuffer midi;
+        for (int b = 0; b < 4; ++b)
+        {
+            juce::AudioBuffer<float> buffer(2, 512);
+            buffer.clear();
+            if (b == 0)
+            {
+                buffer.setSample(0, 0, 0.25f);
+                buffer.setSample(1, 0, 0.25f);
+            }
+            processor.processBlock(buffer, midi);
+            appendChannel0(out, buffer);
+        }
+        const auto peak = std::distance(out.begin(), std::max_element(out.begin(), out.end(),
+            [](float a, float b) { return std::abs(a) < std::abs(b); }));
+        expectEquals(static_cast<int>(peak), latency, "The impulse lands at the reported latency");
+
+        // Without the duck gain the fade would stall at full level until the timeout.
+        processor.requestOversamplingRebuild(1);
+        expect(processor.duckRequested.load(), "A new setting asks for a duck");
+        for (int b = 0; b < 8 && processor.duckState != PluginProcessor::DuckState::closed; ++b)
+        {
+            auto buffer = generateSineWave(440.0, 44100.0, 512, 0.5f);
+            processor.processBlock(buffer, midi);
+        }
+        expect(processor.duckState == PluginProcessor::DuckState::closed, "The fade reaches silence");
+        processor.distortionAmountParam->store(distortion);
+    }
+
     beginTest("The output lands exactly at the reported latency with a profile loaded");
     {
         // The relative tests line the paths up with each other; this one pins the

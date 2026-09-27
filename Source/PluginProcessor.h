@@ -493,6 +493,8 @@ private:
     int bypassLatencySamples = 0;
     // The bypass branches' latency tail: bypassLatencyDelay, then the shared pad.
     void applyBypassLatency(juce::AudioBuffer<float>& buffer) noexcept;
+    // The tail of a block processBlock abandons: applyBypassLatency, then the duck.
+    void endBlockEarly(juce::AudioBuffer<float>& buffer) noexcept;
     // Mono in, stereo out: copies the input across the output-only channels.
     void copyMonoInputAcrossChannels(juce::AudioBuffer<float>& buffer) noexcept;
 
