@@ -30,7 +30,7 @@ namespace
 }
 
 std::unique_ptr<NamProfile> NamProfile::load(const juce::File& file, int numChannels,
-                                             double sampleRate, int maxBlockSize,
+                                             double hostRate, int maxHostBlock,
                                              juce::String& errorOut)
 {
     if (! file.existsAsFile())
@@ -74,7 +74,12 @@ std::unique_ptr<NamProfile> NamProfile::load(const juce::File& file, int numChan
             profile->outputGain = static_cast<float>(
                 std::pow(10.0, (targetLoudnessDb - first.GetLoudness()) / 20.0));
 
-        profile->prepare(sampleRate, maxBlockSize);
+        profile->islands.resize(profile->models.size());
+        if (! profile->prepare(hostRate, maxHostBlock))
+        {
+            errorOut = unsupportedRateMessage(hostRate);
+            return {};
+        }
         return profile;
     }
     catch (const std::exception& e)
@@ -87,26 +92,44 @@ std::unique_ptr<NamProfile> NamProfile::load(const juce::File& file, int numChan
 NamProfile::NamProfile() = default;
 NamProfile::~NamProfile() = default;
 
-void NamProfile::prepare(double sampleRate, int maxBlockSize)
+juce::String NamProfile::unsupportedRateMessage(double hostRate)
 {
-    preparedSampleRate = sampleRate;
-    preparedBlockSize = juce::jmax(1, maxBlockSize);
-    // Prewarming settles each model's internal state, so the first block
-    // processed afterwards starts from rest instead of clicking.
+    auto kHz = juce::String(hostRate / 1000.0, 3);
+    while (kHz.endsWithChar('0'))
+        kHz = kHz.dropLastCharacters(1);
+    if (kHz.endsWithChar('.'))
+        kHz = kHz.dropLastCharacters(1);
+    return "This profile can't run at " + kHz + " kHz";
+}
+
+bool NamProfile::prepare(double hostRate, int maxHostBlock)
+{
+    preparedSampleRate = hostRate;
+    preparedBlockSize = juce::jmax(1, maxHostBlock);
+    ready = false;
+    for (auto& island : islands)
+        if (! island.prepare(hostRate, expectedSampleRate, preparedBlockSize))
+            return false;
+
+    // Each model runs at its trained rate, on blocks as large as its island hands
+    // it. Prewarming settles its internal state, so the first block starts from rest.
+    const int modelBlock = islands.empty() ? preparedBlockSize : islands.front().getMaxModelBlock();
     for (auto& model : models)
-        model->ResetAndPrewarm(preparedSampleRate, preparedBlockSize);
+        model->ResetAndPrewarm(expectedSampleRate, modelBlock);
+    settleSeconds = models.empty() ? 0.0 : models.front()->GetPrewarmSamples() / expectedSampleRate;
+    ready = true;
+    return true;
 }
 
 void NamProfile::process(int channel, const float* input, float* output, int numSamples) noexcept
 {
     auto& model = *models[static_cast<size_t>(channel)];
-    for (int done = 0; done < numSamples;)
-    {
-        const int count = juce::jmin(preparedBlockSize, numSamples - done);
-        // NAM takes non-const channel-pointer arrays; it does not write the input.
-        NAM_SAMPLE* in = const_cast<float*>(input + done);
-        NAM_SAMPLE* out = output + done;
-        model.process(&in, &out, count);
-        done += count;
-    }
+    islands[static_cast<size_t>(channel)].process(input, output, numSamples,
+        [&model](const float* in, float* out, int count)
+        {
+            // NAM takes non-const channel-pointer arrays; it does not write the input.
+            NAM_SAMPLE* inPtr = const_cast<float*>(in);
+            NAM_SAMPLE* outPtr = out;
+            model.process(&inPtr, &outPtr, count);
+        });
 }

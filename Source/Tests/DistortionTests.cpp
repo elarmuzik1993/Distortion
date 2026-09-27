@@ -5305,6 +5305,38 @@ namespace
         }
         return rms;
     }
+
+    // A NAM model written for one test and removed afterwards.
+    struct TempNam
+    {
+        explicit TempNam(const juce::String& json) : file(juce::File::createTempFile(".nam"))
+        {
+            file.replaceWithText(json);
+        }
+        ~TempNam() { file.deleteFile(); }
+        juce::File file;
+    };
+
+    // NAM Core's Linear architecture: an FIR filter whose weights are its taps.
+    juce::String linearModelJson(const juce::String& weights, int receptiveField, int sampleRate)
+    {
+        return "{\"version\":\"0.5.4\",\"architecture\":\"Linear\",\"config\":{\"receptive_field\":"
+             + juce::String(receptiveField) + ",\"bias\":false},\"weights\":[" + weights
+             + "],\"sample_rate\":" + juce::String(sampleRate) + "}";
+    }
+
+    // Runs channel 0 of a profile over a signal given at the host rate.
+    std::vector<float> runProfile(NamProfile& profile, const std::vector<float>& input, int blockSize)
+    {
+        std::vector<float> out(input.size());
+        for (size_t done = 0; done < input.size();)
+        {
+            const int n = static_cast<int>(std::min<size_t>(static_cast<size_t>(blockSize), input.size() - done));
+            profile.process(0, input.data() + done, out.data() + done, n);
+            done += static_cast<size_t>(n);
+        }
+        return out;
+    }
 }
 
 void NamProfileTests::runTest()
@@ -5512,6 +5544,93 @@ void NamProfileTests::runTest()
         expect(! restored.isProfileLoaded(), "The previous profile is not kept");
         expect(restored.getProfileStatus().error.isNotEmpty(), "The missing file is reported");
         expectEquals(restored.getProfileStatus().path, missing, "The path is kept for the next save");
+    }
+
+    beginTest("A profile at 44.1, 88.2, 96 and 192 kHz sounds as it does at 48 kHz");
+    {
+        const std::vector<double> harmonics { 1000.0, 2000.0, 3000.0, 4000.0, 5000.0 };
+        const std::vector<double> tones { 200.0, 1000.0, 3000.0, 7000.0, 12000.0, 17000.0 };
+
+        // One second of signal, measured over its second half, once the model and
+        // the island have settled.
+        const auto measure = [&](double rate, bool multitone)
+        {
+            std::vector<double> levels;
+            juce::String error;
+            auto profile = NamProfile::load(namTestModel("wavenet.nam"), 1, rate, 512, error);
+            expect(profile != nullptr, error);
+            if (profile == nullptr)
+                return levels;
+            const auto input = multitone ? multitoneAt(tones, rate, 1.0, 0.01f) : sineAt(1000.0, rate, 1.0, 0.2f);
+            const auto out = runProfile(*profile, input, 512);
+            const auto half = static_cast<size_t>(rate * 0.5);
+            for (const double f : multitone ? tones : harmonics)
+                levels.push_back(toneAmplitude(out, half, half, f, rate));
+            return levels;
+        };
+
+        const auto referenceHarmonics = measure(48000.0, false);
+        const auto referenceTones = measure(48000.0, true);
+        for (const double rate : { 44100.0, 88200.0, 96000.0, 192000.0 })
+        {
+            const auto harmonicLevels = measure(rate, false);
+            const auto toneLevels = measure(rate, true);
+            for (size_t i = 0; i < harmonicLevels.size() && i < referenceHarmonics.size(); ++i)
+                if (referenceHarmonics[i] > referenceHarmonics[0] * 1.0e-3)   // within 60 dB of the fundamental
+                    expectWithinAbsoluteError(toDb(harmonicLevels[i] / referenceHarmonics[i]), 0.0, 0.5,
+                                              "Harmonic " + juce::String(static_cast<int>(i) + 1)
+                                              + " at " + juce::String(rate));
+            for (size_t i = 0; i < toneLevels.size() && i < referenceTones.size(); ++i)
+                expectWithinAbsoluteError(toDb(toneLevels[i] / referenceTones[i]), 0.0, 0.5,
+                                          juce::String(tones[i]) + " Hz at " + juce::String(rate));
+        }
+    }
+
+    beginTest("A model run at the wrong rate fails the same check (negative control)");
+    {
+        // A two-tap average, [0.5, 0.5]: -2.0 dB at 10 kHz at the 48 kHz it claims.
+        // The same taps declared as 96 kHz make a 96 kHz host run them directly, the
+        // way the prototype ran every model: -0.5 dB at 10 kHz, 1.5 dB away.
+        TempNam at48(linearModelJson("0.5,0.5", 2, 48000));
+        TempNam at96(linearModelJson("0.5,0.5", 2, 96000));
+        const auto levelAt10k = [&](const juce::File& file, double rate)
+        {
+            juce::String error;
+            auto profile = NamProfile::load(file, 1, rate, 512, error);
+            expect(profile != nullptr, error);
+            if (profile == nullptr)
+                return 0.0;
+            const auto out = runProfile(*profile, sineAt(10000.0, rate, 0.5, 0.5f), 512);
+            const auto quarter = static_cast<size_t>(rate * 0.25);
+            return toneAmplitude(out, quarter, quarter, 10000.0, rate);
+        };
+
+        const double reference = levelAt10k(at48.file, 48000.0);
+        expectWithinAbsoluteError(toDb(reference / 0.5), -2.01, 0.1, "The reference is the model's own response");
+        expectWithinAbsoluteError(toDb(levelAt10k(at48.file, 96000.0) / reference), 0.0, 0.5,
+                                  "Through the island, a 96 kHz host hears the 48 kHz response");
+        expect(std::abs(toDb(levelAt10k(at96.file, 96000.0) / reference)) > 0.5,
+               "Run directly at 96 kHz, the same taps miss by more than 0.5 dB");
+    }
+
+    beginTest("A profile reports its island delay and refuses a host rate it can't serve");
+    {
+        juce::String error;
+        auto at48 = NamProfile::load(namTestModel("wavenet.nam"), 2, 48000.0, 512, error);
+        auto at44 = NamProfile::load(namTestModel("wavenet.nam"), 2, 44100.0, 512, error);
+        expect(at48 != nullptr && at44 != nullptr, error);
+        if (at48 != nullptr && at44 != nullptr)
+        {
+            expectEquals(at48->getLatencySamples(), 0);
+            expectEquals(at44->getLatencySamples(), ResamplingIsland::latencyFor(44100.0, 48000.0));
+            expect(at44->isPrepared(), "Prepared at 44.1 kHz");
+            expect(at44->getSettleSeconds() > 0.0, "A WaveNet reports how long it takes to settle");
+        }
+
+        error = {};
+        auto odd = NamProfile::load(namTestModel("wavenet.nam"), 2, 44056.0, 512, error);
+        expect(odd == nullptr, "A 44.056 kHz host is refused");
+        expectEquals(error, juce::String("This profile can't run at 44.056 kHz"));
     }
 }
 

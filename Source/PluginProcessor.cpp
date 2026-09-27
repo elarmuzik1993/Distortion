@@ -2590,7 +2590,7 @@ bool PluginProcessor::applyProfileStage(float* const* channels) noexcept
     // Only at 1x: the model runs at the rate it was prepared for. Right after a
     // profile loads, the oversampler rebuild is still pending for a tick; the
     // built-in clip type covers those few blocks.
-    if (profile == nullptr || profile->getNumChannels() == 0 || oversamplingFactor != 1
+    if (profile == nullptr || profile->getNumChannels() == 0 || ! profile->isPrepared() || oversamplingFactor != 1
         || numChannels < 1 || numChannels > 2
         || numSamples > profileScratch.getNumSamples()
         || profileScratch.getNumChannels() < 2 * numChannels + 1)
