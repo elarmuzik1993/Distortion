@@ -2684,17 +2684,19 @@ void PluginProcessor::installRequestedProfile(std::vector<NamProfile*>& toFree)
         change = true;   // with nothing newer staged, next stays nullptr: no profile
     if (auto* pending = pendingProfile.exchange(nullptr, std::memory_order_acq_rel))
     {
-        if (! isPreparedForHost(*pending))
+        if (change)
+        {
+            // A newer load or a clear has already decided. Staging this one again
+            // would bring it back over that on the next tick.
+            toFree.push_back(pending);
+        }
+        else if (! isPreparedForHost(*pending))
         {
             // Prepared for settings the host has since left: the timer re-prepares
             // it outside the lock and routes it again.
             NamProfile* expected = nullptr;
             if (! stagedProfile.compare_exchange_strong(expected, pending, std::memory_order_acq_rel))
                 toFree.push_back(pending);   // a newer load arrived meanwhile
-        }
-        else if (change)
-        {
-            toFree.push_back(pending);
         }
         else
         {

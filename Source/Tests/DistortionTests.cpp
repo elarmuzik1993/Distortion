@@ -6512,6 +6512,47 @@ void NamProfileTests::runTest()
                                       + juce::String(subGuard) + ": largest difference " + juce::String(largest, 8));
         }
     }
+
+    beginTest("An older pending profile never comes back over a newer load or a clear");
+    {
+        // The pending profile was prepared for a rate the host has left, which is
+        // the case that sends a still-wanted one back through the staged slot.
+        TempNam older(linearModelJson("0.5", 1, 48000));
+        TempNam newer(linearModelJson("1.0", 1, 48000));
+        for (const bool clear : { false, true })
+        {
+            PluginProcessor processor;
+            prepareForProfileTest(processor, 48000.0, 512);
+            juce::String error;
+            auto* pending = NamProfile::load(older.file, 2, 44100.0, 512, error).release();
+            expect(pending != nullptr && ! processor.isPreparedForHost(*pending), "Older profile left behind by the host");
+            processor.pendingProfile.store(pending);
+            NamProfile* staged = nullptr;
+            if (clear)
+            {
+                processor.clearRequested.store(true);
+            }
+            else
+            {
+                staged = NamProfile::load(newer.file, 2, 48000.0, 512, error).release();
+                expect(staged != nullptr && processor.isPreparedForHost(*staged), "Newer profile ready");
+                processor.stagedProfile.store(staged);
+            }
+
+            std::vector<NamProfile*> toFree;
+            {
+                const juce::ScopedLock sl(processor.getCallbackLock());
+                processor.installRequestedProfile(toFree);
+            }
+            const juce::String what = clear ? "after a clear" : "after a newer load";
+            expect(processor.activeProfile == staged, "The newest intent is installed " + what);
+            expect(processor.stagedProfile.load() == nullptr, "The older profile isn't staged again " + what);
+            expect(std::find(toFree.begin(), toFree.end(), pending) != toFree.end(),
+                   "The older profile is freed " + what);
+            for (auto* profile : toFree)
+                delete profile;
+        }
+    }
 }
 
 #endif // JUCE_DEBUG
