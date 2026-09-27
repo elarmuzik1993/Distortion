@@ -213,6 +213,11 @@ int renderToFile(const Args& args)
     // profile); a WAV input keeps its own rate.
     double sr = args.has("rate") ? static_cast<double>(args.num("rate", 44100.0f))
                                  : (profilePath.isNotEmpty() ? 48000.0 : kSampleRate);
+    if (sr <= 0.0)
+    {
+        std::cerr << "--rate must be a positive sample rate in Hz\n";
+        return 1;
+    }
     juce::AudioBuffer<float> input;
 
     if (inPath.isNotEmpty())
