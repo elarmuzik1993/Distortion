@@ -5483,6 +5483,8 @@ void NamProfileTests::runTest()
             processor.timerCallback();
             if (processor.isProfileSwitchIdle())
                 return true;
+            if (processor.stagedRefreshesInFlight.load() > 0)
+                juce::Thread::sleep(1);   // the loader is re-preparing a staged profile
             auto buffer = generateSineWave(440.0, processor.getSampleRate(), processor.getBlockSize(), 0.1f);
             processor.processBlock(buffer, midi);
         }
@@ -6566,37 +6568,99 @@ void NamProfileTests::runTest()
         return done();
     };
 
-    beginTest("A clear while the timer re-prepares a staged profile keeps it cleared");
+    // Blocks the profile loader until release(), so a test can hold a job queued.
+    struct LoaderGate
     {
-        int caughtInWindow = 0;
-        for (int round = 0; round < 5; ++round)
+        explicit LoaderGate(PluginProcessor& processor)
         {
-            PluginProcessor processor;
-            prepareForProfileTest(processor, 48000.0, 512);
-            // Prepared for 44.1 kHz, so the timer takes it out of its slot and
-            // prewarms it again before putting it back.
-            const auto model = namTestModel("wavenet.nam");
-            juce::String error;
-            auto stale = NamProfile::load(model, 2, 44100.0, 512, error);
-            expect(stale != nullptr, error);
-            stale->setRequestId(processor.beginProfileRequest(model));
-            processor.stagedProfile.store(stale.release());
-
-            std::atomic<bool> refreshed { false };
-            std::thread timer([&] { processor.refreshStagedProfile(); refreshed = true; });
-            // A descheduled spin can miss the whole window; the round then only
-            // checks the end state, and the count below makes sure most don't.
-            spinUntil([&] { return processor.stagedProfile.load() == nullptr || refreshed.load(); });
-            if (! refreshed.load())
-                ++caughtInWindow;
-            processor.clearProfile();   // as setStateInformation on a host thread would
-            timer.join();
-
-            expect(processor.stagedProfile.load() == nullptr, "The cleared profile isn't staged again");
-            expect(settle(processor), "Nothing left to switch");
-            expect(processor.activeProfile == nullptr && ! processor.profileMode, "No profile runs");
+            processor.getProfileLoader().addJob([this] { started.signal(); gate.wait(); });
+            started.wait();
         }
-        expect(caughtInWindow > 0, "At least one clear landed while the profile was out of its slot");
+        ~LoaderGate() { release(); }
+        void release() { gate.signal(); }
+        juce::WaitableEvent started, gate;
+    };
+
+    const auto waitForRefreshes = [&spinUntil](PluginProcessor& processor)
+    {
+        return spinUntil([&] { return processor.stagedRefreshesInFlight.load() == 0; });
+    };
+
+    beginTest("The timer leaves re-preparing a stale staged profile to the loader");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor, 48000.0, 512);
+        const auto model = namTestModel("wavenet.nam");
+        juce::String error;
+        auto stale = NamProfile::load(model, 2, 44100.0, 512, error);
+        expect(stale != nullptr, error);
+        stale->setRequestId(processor.beginProfileRequest(model));
+        auto* staleProfile = stale.get();
+        processor.stagedProfile.store(stale.release());
+
+        // With the loader busy, the tick still returns: nothing was prepared on it.
+        LoaderGate busy(processor);
+        processor.refreshStagedProfile();
+        expectEquals(processor.stagedRefreshesInFlight.load(), 1);
+        expect(processor.stagedProfile.load() == nullptr, "The profile is out with the loader");
+        expect(! processor.isProfileSwitchIdle(), "A refresh in flight isn't idle");
+        expectWithinAbsoluteError(staleProfile->getPreparedSampleRate(), 44100.0, 0.5);
+
+        busy.release();
+        expect(waitForRefreshes(processor), "The loader finishes the refresh");
+        auto* back = processor.stagedProfile.load();
+        expect(back == staleProfile, "The same profile is staged again");
+        if (back != nullptr)
+            expectWithinAbsoluteError(back->getPreparedSampleRate(), 48000.0, 0.5);
+        expect(settle(processor), "The switch completes");
+        expect(processor.profileMode && processor.activeProfile == staleProfile, "The profile is installed");
+    }
+
+    beginTest("A clear while the loader re-prepares a staged profile keeps it cleared");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor, 48000.0, 512);
+        const auto model = namTestModel("wavenet.nam");
+        juce::String error;
+        auto stale = NamProfile::load(model, 2, 44100.0, 512, error);
+        expect(stale != nullptr, error);
+        stale->setRequestId(processor.beginProfileRequest(model));
+        processor.stagedProfile.store(stale.release());
+
+        // The clear lands while the profile is out of its slot, held on the loader.
+        LoaderGate busy(processor);
+        processor.refreshStagedProfile();
+        expectEquals(processor.stagedRefreshesInFlight.load(), 1);
+        processor.clearProfile();   // as setStateInformation on a host thread would
+        busy.release();
+        expect(waitForRefreshes(processor), "The loader finishes the refresh");
+
+        expect(processor.stagedProfile.load() == nullptr, "The cleared profile isn't staged again");
+        expect(settle(processor), "Nothing left to switch");
+        expect(processor.activeProfile == nullptr && ! processor.profileMode, "No profile runs");
+        expect(processor.getProfileStatus().name.isEmpty(), "Nothing is reported loaded");
+    }
+
+    beginTest("A newer load while the loader re-prepares a staged profile wins");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor, 48000.0, 512);
+        const auto model = namTestModel("wavenet.nam");
+        juce::String error;
+        auto stale = NamProfile::load(model, 2, 44100.0, 512, error);
+        expect(stale != nullptr, error);
+        stale->setRequestId(processor.beginProfileRequest(model));
+        processor.stagedProfile.store(stale.release());
+
+        LoaderGate busy(processor);
+        processor.refreshStagedProfile();
+        expect(processor.loadProfileBlocking(namTestModel("lstm.nam")), "lstm.nam loads");
+        busy.release();
+        expect(waitForRefreshes(processor), "The loader finishes the refresh");
+
+        expect(settle(processor), "The switch completes");
+        expect(processor.activeProfile != nullptr && processor.activeProfile->getName() == "lstm",
+               "The newer load is installed, not the refreshed one");
     }
 
     beginTest("A clear during a switch into profile mode is served, not lost");

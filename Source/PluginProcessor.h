@@ -795,7 +795,9 @@ private:
     float profileRightStep = 1.0f;       // weight change per sample, set in prepareToPlay
     mutable juce::CriticalSection profileStatusLock;
     ProfileStatus profileStatus;
-    std::unique_ptr<juce::ThreadPool> profileLoader;   // created by the first loadProfileAsync, under profileStatusLock
+    std::atomic<int> stagedRefreshesInFlight { 0 };    // staged profiles out on the loader being re-prepared
+    // Declared after everything its jobs touch, so it is destroyed (and joined) first.
+    std::unique_ptr<juce::ThreadPool> profileLoader;   // created by getProfileLoader, under profileStatusLock
 
     // --- Duck: fade to silence around a runtime rebuild --------------------------
     enum class DuckState { open, closing, closed, opening };
@@ -814,7 +816,9 @@ private:
     bool canCrossfadeTo(const NamProfile& next) const noexcept;             // audio thread
     void takePendingProfile() noexcept;                                     // audio thread, block start
     void collectRetiredProfile();                                           // message thread
-    void refreshStagedProfile();                                            // message thread, outside the lock
+    void refreshStagedProfile();                                            // message thread; prepares on the loader
+    void restageProfile(NamProfile* staged, double rate, bool usable);      // puts it back unless superseded
+    juce::ThreadPool& getProfileLoader();
     void routeStagedProfile();                                              // message thread
     void requestDuck();
     void serviceDuck();                                                     // message thread

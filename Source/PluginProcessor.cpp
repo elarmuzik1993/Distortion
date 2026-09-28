@@ -2403,17 +2403,18 @@ int PluginProcessor::beginProfileRequest(const juce::File& file)
 void PluginProcessor::loadProfileAsync(const juce::File& file)
 {
     const int requestId = beginProfileRequest(file);
+    getProfileLoader().addJob([this, file, requestId] { loadProfileNow(file, requestId); });
+}
 
+juce::ThreadPool& PluginProcessor::getProfileLoader()
+{
     // Created on first use, so an instance that never loads a profile has no
-    // thread. Under the lock: the editor and a host restoring state can both get here.
-    juce::ThreadPool* loader = nullptr;
-    {
-        const juce::ScopedLock sl(profileStatusLock);
-        if (profileLoader == nullptr)
-            profileLoader = std::make_unique<juce::ThreadPool>(1);
-        loader = profileLoader.get();
-    }
-    loader->addJob([this, file, requestId] { loadProfileNow(file, requestId); });
+    // thread. Under the lock: the editor, a host restoring state and the timer can
+    // all get here.
+    const juce::ScopedLock sl(profileStatusLock);
+    if (profileLoader == nullptr)
+        profileLoader = std::make_unique<juce::ThreadPool>(1);
+    return *profileLoader;
 }
 
 bool PluginProcessor::loadProfileBlocking(const juce::File& file)
@@ -2493,6 +2494,7 @@ bool PluginProcessor::isProfileLoaded() const
 bool PluginProcessor::isProfileSwitchIdle() const
 {
     return stagedProfile.load() == nullptr && pendingProfile.load() == nullptr
+        && stagedRefreshesInFlight.load() == 0
         && incomingProfile == nullptr && ! duckRequested.load() && duckState == DuckState::open;
 }
 
@@ -2558,11 +2560,29 @@ void PluginProcessor::refreshStagedProfile()
     auto* staged = stagedProfile.exchange(nullptr, std::memory_order_acq_rel);
     if (staged == nullptr)
         return;
+    if (isPreparedForHost(*staged))
+    {
+        restageProfile(staged, rate, true);
+        return;
+    }
 
-    // A load that read the host settings before prepareToPlay changed them. Bring
-    // it up to date here, outside the callback lock.
-    const bool usable = isPreparedForHost(*staged) || staged->prepare(rate, block);
+    // A load that read the host settings before prepareToPlay changed them. It is
+    // brought up to date on the loader thread: prepare() prewarms the model, too
+    // long to hold up the message thread. If the host moves on again meanwhile,
+    // the next tick finds it out of date and sends it back. Held by the job, so a
+    // job dropped unrun (the destructor) frees it.
+    ++stagedRefreshesInFlight;
+    auto owned = std::make_shared<std::unique_ptr<NamProfile>>(staged);
+    getProfileLoader().addJob([this, owned, rate, block]
+    {
+        const bool usable = (*owned)->prepare(rate, block);
+        restageProfile(owned->release(), rate, usable);
+        --stagedRefreshesInFlight;
+    });
+}
 
+void PluginProcessor::restageProfile(NamProfile* staged, double rate, bool usable)
+{
     {
         // A clear or a newer load while it was out of the slot supersedes it. Both
         // bump the request id under this lock, so an empty slot alone can't tell.
@@ -2706,8 +2726,8 @@ void PluginProcessor::installRequestedProfile(std::vector<NamProfile*>& toFree)
         }
         else
         {
-            // Prepared for settings the host has since left: the timer re-prepares
-            // it outside the lock and routes it again.
+            // Prepared for settings the host has since left: the timer has the
+            // loader re-prepare it and routes it again.
             NamProfile* expected = nullptr;
             if (! stagedProfile.compare_exchange_strong(expected, staged, std::memory_order_acq_rel))
                 toFree.push_back(staged);   // a newer load arrived meanwhile
@@ -2725,8 +2745,8 @@ void PluginProcessor::installRequestedProfile(std::vector<NamProfile*>& toFree)
         }
         else if (! isPreparedForHost(*pending))
         {
-            // Prepared for settings the host has since left: the timer re-prepares
-            // it outside the lock and routes it again.
+            // Prepared for settings the host has since left: the timer has the
+            // loader re-prepare it and routes it again.
             NamProfile* expected = nullptr;
             if (! stagedProfile.compare_exchange_strong(expected, pending, std::memory_order_acq_rel))
                 toFree.push_back(pending);   // a newer load arrived meanwhile
