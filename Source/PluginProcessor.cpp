@@ -340,7 +340,8 @@ PluginProcessor::~PluginProcessor()
     parameters.removeParameterListener("linearPhaseDry", this);
 
     // No loader may stage once the slots below are freed.
-    profileLoader.removeAllJobs(true, 10000);
+    if (profileLoader != nullptr)
+        profileLoader->removeAllJobs(true, 10000);
     delete stagedProfile.exchange(nullptr);
     delete pendingProfile.exchange(nullptr);
     delete retiredProfile.exchange(nullptr);
@@ -2392,7 +2393,17 @@ int PluginProcessor::beginProfileRequest(const juce::File& file)
 void PluginProcessor::loadProfileAsync(const juce::File& file)
 {
     const int requestId = beginProfileRequest(file);
-    profileLoader.addJob([this, file, requestId] { loadProfileNow(file, requestId); });
+
+    // Created on first use, so an instance that never loads a profile has no
+    // thread. Under the lock: the editor and a host restoring state can both get here.
+    juce::ThreadPool* loader = nullptr;
+    {
+        const juce::ScopedLock sl(profileStatusLock);
+        if (profileLoader == nullptr)
+            profileLoader = std::make_unique<juce::ThreadPool>(1);
+        loader = profileLoader.get();
+    }
+    loader->addJob([this, file, requestId] { loadProfileNow(file, requestId); });
 }
 
 bool PluginProcessor::loadProfileBlocking(const juce::File& file)

@@ -780,7 +780,7 @@ private:
     int swapFadeLength = 1;
     mutable juce::CriticalSection profileStatusLock;
     ProfileStatus profileStatus;
-    juce::ThreadPool profileLoader { 1 };
+    std::unique_ptr<juce::ThreadPool> profileLoader;   // created by the first loadProfileAsync, under profileStatusLock
 
     // --- Duck: fade to silence around a runtime rebuild --------------------------
     enum class DuckState { open, closing, closed, opening };
