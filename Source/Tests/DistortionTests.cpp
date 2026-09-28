@@ -5365,7 +5365,7 @@ namespace
     float largestStep(const std::vector<float>& x, size_t from = 1)
     {
         float largest = 0.0f;
-        for (size_t i = juce::jmax<size_t>(1, from); i < x.size(); ++i)
+        for (size_t i = std::max<size_t>(1, from); i < x.size(); ++i)
             largest = juce::jmax(largest, std::abs(x[i] - x[i - 1]));
         return largest;
     }
