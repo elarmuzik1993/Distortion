@@ -5,7 +5,7 @@
   Review findings #1-#10 are all fixed; the last five commits are the macOS arm64 test build fix, then #8, #10, #7, #9.
 - CI on `771205d` (2026-09-28): build-windows, build-linux, build-macos all green; GitHub reports it mergeable.
 - Verified 2026-09-28 at `771205d`, Linux gcc Release: `DistortionTests` 3614 assertions pass;
-  the NAM Profile suite passed 10 of 10 runs. VST3/Standalone not rebuilt locally; pluginval not run.
+  the NAM Profile suite passed 10 of 10 runs. CI's pluginval (strictness 10) passes on all three platforms.
 - Unverified (from the previous handoff, local machine only): `fix/filter-mode-switch-cutoff`
   (`ff0ad79`, worktree `~/Distortion-filterfix`) and PR #54.
 
@@ -13,13 +13,11 @@
 1. Owner: ASIO standalone at 44.1 and 96 kHz: load, swap and clear profiles while playing, with
    Mono Input on and off; Reaper latency display stays put; A/B
    `build-rel/nam-regression/sd1_{44100,48000,96000}.wav` (local files, unverified).
-2. Run pluginval strictness 10 on the PR's VST3; then update the PR #55 description (it still says
-   3518 assertions and lists macOS/Linux builds as not done).
-3. Decide whether `.agents/` stays on the branch before merging; then mark PR #55 ready.
-4. Follow-ups predating the branch: host bypass still freezes the island and delay lines, and the
+2. Decide whether `.agents/` stays on the branch before merging; then mark PR #55 ready.
+3. Follow-ups predating the branch: host bypass still freezes the island and delay lines, and the
    input filter and oversampler IIR ring after any bypass gap; a block longer than prepared + 64
    skips the dry capture, so global Mix < 100% blends stale dry.
-5. Owner (unverified, local): filter modes in `~/Distortion-filterfix`; re-test #44.
+4. Owner (unverified, local): filter modes in `~/Distortion-filterfix`; re-test #44.
 
 ## Decisions
 - Reported latency is always R = max(user oversampler latency, island delay for a 48 kHz model).
