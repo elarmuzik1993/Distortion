@@ -1460,16 +1460,8 @@ void PluginProcessor::applyBypassLatency(juce::AudioBuffer<float>& buffer) noexc
     // crossed. None interpolation -> the samples pass through unchanged, only
     // time-shifted. The branch is a bit-clean passthrough only when R is 0.
     if (bypassLatencySamples > 0)
-    {
-        const int numSamp = buffer.getNumSamples();
-        const int numCh   = buffer.getNumChannels();
-        for (int sample = 0; sample < numSamp; ++sample)
-            for (int channel = 0; channel < numCh; ++channel)
-            {
-                bypassLatencyDelay.pushSample(channel, buffer.getSample(channel, sample));
-                buffer.setSample(channel, sample, bypassLatencyDelay.popSample(channel));
-            }
-    }
+        delayInPlace(bypassLatencyDelay, buffer.getArrayOfWritePointers(),
+                     buffer.getNumChannels(), buffer.getNumSamples());
 
     // Shares the active path's pad line, fed every block by whichever path runs,
     // so a crossing between the two never replays a stale line's leftover tail.
