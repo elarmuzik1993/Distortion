@@ -497,6 +497,8 @@ private:
     void endBlockEarly(juce::AudioBuffer<float>& buffer) noexcept;
     // Mono in, stereo out: copies the input across the output-only channels.
     void copyMonoInputAcrossChannels(juce::AudioBuffer<float>& buffer) noexcept;
+    // Mono Input on, or a mono input bus: every channel carries channel 0's input.
+    bool isInputMono() const noexcept;
 
     // --- Latency: one figure reported whatever runs ------------------------------
     // R is the larger of the user's oversampler latency and the island delay a
@@ -727,6 +729,11 @@ private:
     void feedProfileWhileBypassed(const juce::AudioBuffer<float>& buffer) noexcept;
     // Ends a swap once the incoming profile has fully faded in.
     void retireOutgoingProfileIfFaded() noexcept;
+    // Channel 1 sharing channel 0's model output while the input is mono.
+    // beginRightChannelChunk returns whether channel 1's models run this chunk;
+    // nextRightChannelWeight steps channel 1's own-model share by one sample.
+    bool beginRightChannelChunk() noexcept;
+    float nextRightChannelWeight() noexcept;
     void applyAutoGainAndISP(juce::AudioBuffer<float>& buffer);
     void applyLA2A();
     // Stereo-linked soft safety limiter at -0.5dBFS. Must run as the LAST gain stage
@@ -778,6 +785,14 @@ private:
     int swapWarmupRemaining = 0;
     int swapFadePosition = 0;
     int swapFadeLength = 1;
+    // Mono input: channel 1 fades to channel 0's model output and its own models
+    // rest, halving the cost. Back to stereo, they run unheard until settled, then
+    // fade back in, so their stale state is never heard. Audio thread.
+    bool profileShareMono = false;       // this block's input is mono
+    bool profileRightIdle = false;       // channel 1's models are resting
+    float profileRightWeight = 1.0f;     // channel 1's own-model share; 0 = channel 0's output
+    int profileRightWarmup = 0;          // samples channel 1's models still run unheard
+    float profileRightStep = 1.0f;       // weight change per sample, set in prepareToPlay
     mutable juce::CriticalSection profileStatusLock;
     ProfileStatus profileStatus;
     std::unique_ptr<juce::ThreadPool> profileLoader;   // created by the first loadProfileAsync, under profileStatusLock

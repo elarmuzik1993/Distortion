@@ -205,6 +205,12 @@ namespace
         line.reset();
     }
 
+    // Length of a profile crossfade (a swap, or channel 1 joining or leaving) at this rate.
+    int profileCrossfadeSamples(double sampleRate) noexcept
+    {
+        return juce::jmax(1, static_cast<int>(std::lround(DSPConstants::PROFILE_CROSSFADE_TIME_S * sampleRate)));
+    }
+
     // Delays each channel in place by the line's delay. Audio thread: no allocation.
     void delayInPlace(IntegerDelay& line, float* const* channels, int numChannels, int numSamples) noexcept
     {
@@ -1443,11 +1449,14 @@ void PluginProcessor::copyMonoInputAcrossChannels(juce::AudioBuffer<float>& buff
 {
     // See processBlock: the output-only channels hold undefined data (or, with Mono
     // Input on, the silent second interface input).
-    const bool monoInput = monoInputParam && monoInputParam->load() > 0.5f;
-    const int firstToOverwrite = monoInput ? 1
-                                           : juce::jmax(1, getTotalNumInputChannels());
+    const int firstToOverwrite = isInputMono() ? 1 : getTotalNumInputChannels();
     for (int ch = firstToOverwrite; ch < buffer.getNumChannels(); ++ch)
         buffer.copyFrom(ch, 0, buffer, 0, 0, buffer.getNumSamples());
+}
+
+bool PluginProcessor::isInputMono() const noexcept
+{
+    return (monoInputParam && monoInputParam->load() > 0.5f) || getTotalNumInputChannels() <= 1;
 }
 
 void PluginProcessor::applyBypassLatency(juce::AudioBuffer<float>& buffer) noexcept
@@ -1545,6 +1554,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // host did write channel 1, it just holds silence because nothing is plugged
     // into the second interface input.
     copyMonoInputAcrossChannels(buffer);
+    profileShareMono = isInputMono();
 
     // Mono-source detection. Advisory only - it lights the Mono Input control and
     // never touches the audio. Requires one channel to carry signal while the
@@ -2529,8 +2539,7 @@ void PluginProcessor::takePendingProfile() noexcept
     incomingProfile = next;
     swapWarmupRemaining = static_cast<int>(std::ceil(
         juce::jmin(next->getSettleSeconds(), DSPConstants::PROFILE_WARMUP_MAX_S) * profilePreparedRate));
-    swapFadeLength = juce::jmax(1, static_cast<int>(std::lround(
-        DSPConstants::PROFILE_CROSSFADE_TIME_S * profilePreparedRate)));
+    swapFadeLength = profileCrossfadeSamples(profilePreparedRate);
     swapFadePosition = 0;
 }
 
@@ -2768,6 +2777,7 @@ void PluginProcessor::prepareProfilesForHost(double sampleRate, int samplesPerBl
     profileHostBlockSize.store(samplesPerBlock);
     profilePreparedRate = sampleRate;
     profilePreparedBlock = samplesPerBlock;
+    profileRightStep = 1.0f / static_cast<float>(profileCrossfadeSamples(sampleRate));
 
     std::vector<NamProfile*> toFree;
     bool unsupported = false;
@@ -3110,8 +3120,13 @@ void PluginProcessor::feedProfileWhileBypassed(const juce::AudioBuffer<float>& b
     {
         const int n = juce::jmin(chunk, numSamples - done);
         auto* incoming = incomingProfile;
+        const bool rightRuns = beginRightChannelChunk();
+        for (int i = 0; i < n; ++i)
+            nextRightChannelWeight();
         for (int ch = 0; ch < numChannels; ++ch)
         {
+            if (ch == 1 && ! rightRuns)
+                continue;
             float* modelIn = profileScratch.getWritePointer(scratchModelIn + ch);
             float* out = profileScratch.getWritePointer(scratchActiveOut + ch);
             const float* in = buffer.getReadPointer(ch) + done;
@@ -3155,6 +3170,37 @@ void PluginProcessor::feedProfileWhileBypassed(const juce::AudioBuffer<float>& b
     // as it does when Sub Guard switches on.
     if (islandDelay > 0)
         subGuardLowDelayLine.reset();
+}
+
+bool PluginProcessor::beginRightChannelChunk() noexcept
+{
+    if (! profileShareMono && profileRightIdle)
+    {
+        // Back from a rest: channel 1's models run unheard until they have settled
+        // on their own input, as an incoming profile does before its crossfade.
+        double settle = activeProfile->getSettleSeconds();
+        if (incomingProfile != nullptr)
+            settle = juce::jmax(settle, incomingProfile->getSettleSeconds());
+        profileRightWarmup = static_cast<int>(std::ceil(
+            juce::jmin(settle, DSPConstants::PROFILE_WARMUP_MAX_S) * profilePreparedRate));
+        profileRightIdle = false;
+    }
+    else if (profileShareMono && profileRightWeight <= 0.0f)
+    {
+        profileRightIdle = true;
+    }
+    return ! profileRightIdle;
+}
+
+float PluginProcessor::nextRightChannelWeight() noexcept
+{
+    if (profileShareMono)
+        profileRightWeight = juce::jmax(0.0f, profileRightWeight - profileRightStep);
+    else if (profileRightWarmup > 0)
+        --profileRightWarmup;
+    else
+        profileRightWeight = juce::jmin(1.0f, profileRightWeight + profileRightStep);
+    return profileRightWeight;
 }
 
 bool PluginProcessor::applyProfileStage(float* const* channels) noexcept
@@ -3223,8 +3269,11 @@ void PluginProcessor::applyProfileChunk(float* const* channels, int numChannels,
     // then blended in linearly. The two outputs are correlated, so a linear blend
     // keeps the level where an equal-power one would bump it.
     auto* incoming = incomingProfile;
+    const bool rightRuns = beginRightChannelChunk();
     for (int ch = 0; ch < numChannels; ++ch)
     {
+        if (ch == 1 && ! rightRuns)
+            continue;
         const auto idx = static_cast<size_t>(ch);
         profile->process(ch, modelIn[idx], activeOut[idx], numSamples);
         if (incoming != nullptr)
@@ -3251,12 +3300,22 @@ void PluginProcessor::applyProfileChunk(float* const* channels, int numChannels,
                 weight = static_cast<float>(fadePosition) / static_cast<float>(swapFadeLength);
             }
         }
-        for (size_t ch = 0; ch < static_cast<size_t>(numChannels); ++ch)
+        const auto wetOf = [&](size_t ch)
         {
             float wet = activeOut[ch][i] * activeGain * (1.0f - weight);
             if (incoming != nullptr)
                 wet += incomingOut[ch][i] * incomingGain * weight;
-            channels[ch][i] = dry[ch][i] * (1.0f - mix[i]) + wet * mix[i];
+            return wet;
+        };
+        const float wet0 = wetOf(0);
+        channels[0][i] = dry[0][i] * (1.0f - mix[i]) + wet0 * mix[i];
+        if (numChannels > 1)
+        {
+            // A resting channel 1 has no output of its own, so it is only read
+            // while it has a share.
+            const float right = nextRightChannelWeight();
+            const float wet1 = right > 0.0f ? right * wetOf(1) + (1.0f - right) * wet0 : wet0;
+            channels[1][i] = dry[1][i] * (1.0f - mix[i]) + wet1 * mix[i];
         }
     }
 

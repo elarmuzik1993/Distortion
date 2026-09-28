@@ -6622,6 +6622,130 @@ void NamProfileTests::runTest()
                    "The clear won: no profile runs");
         }
     }
+
+    // Left and right as two tones, each carrying its phase across blocks.
+    const auto stereoBlock = [](ContinuousSine& left, ContinuousSine& right, int numSamples)
+    {
+        auto buffer = left.next(numSamples);
+        const auto r = right.next(numSamples);
+        buffer.copyFrom(1, 0, r, 0, 0, numSamples);
+        return buffer;
+    };
+
+    beginTest("With a mono input, channel 1 shares channel 0's model output and its model rests");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        setParameter(processor.parameters, "monoInput", 1.0f);
+        expect(processor.loadProfileBlocking(namTestModel("wavenet.nam")), "wavenet.nam loads");
+        expect(settle(processor), "Loaded");
+
+        ContinuousSine left { 110.0, 48000.0, 0.25f };
+        ContinuousSine right { 220.0, 48000.0, 0.1f };   // the unused second input
+        juce::MidiBuffer midi;
+        for (int b = 0; b < 10; ++b)
+        {
+            auto buffer = stereoBlock(left, right, 512);
+            processor.processBlock(buffer, midi);
+        }
+        expect(processor.profileRightIdle, "Channel 1's model rests once the fade is done");
+        expectEquals(processor.profileRightWeight, 0.0f);
+
+        int allocations = 0;
+        bool identical = true;
+        for (int b = 0; b < 4; ++b)
+        {
+            auto buffer = stereoBlock(left, right, 512);
+            allocations += allocationsDuring(processor, buffer);
+            for (int i = 0; i < 512; ++i)
+                identical = identical && juce::exactlyEqual(buffer.getSample(0, i), buffer.getSample(1, i));
+        }
+        expect(identical, "Both channels carry the same output");
+        expectEquals(allocations, 0, "processBlock while channel 1 rests");
+
+        // Through true bypass and back, it keeps resting.
+        setParameter(processor.parameters, "distortionAmount", 0.0f);
+        for (int b = 0; b < 10; ++b)
+        {
+            auto buffer = stereoBlock(left, right, 512);
+            processor.processBlock(buffer, midi);
+        }
+        setParameter(processor.parameters, "distortionAmount", 60.0f);
+        for (int b = 0; b < 10; ++b)
+        {
+            auto buffer = stereoBlock(left, right, 512);
+            processor.processBlock(buffer, midi);
+        }
+        expect(processor.profileRightIdle, "Channel 1's model still rests after true bypass");
+    }
+
+    beginTest("Leaving mono, channel 1 warms up and fades back in to what it would have been");
+    {
+        // A runs with Mono Input on, then off. B is stereo throughout and is fed what
+        // A's chain saw: the left input on both channels, then both inputs.
+        PluginProcessor a, b;
+        for (auto* p : { &a, &b })
+        {
+            prepareForProfileTest(*p);
+            expect(p->loadProfileBlocking(namTestModel("wavenet.nam")), "wavenet.nam loads");
+            expect(settle(*p), "Loaded");
+        }
+        setParameter(a.parameters, "monoInput", 1.0f);
+
+        // Mono Input goes off with nothing plugged into the second input: right is
+        // silent. unusedA is what that input carries while Mono Input ignores it.
+        ContinuousSine leftA { 110.0, 48000.0, 0.25f }, rightA { 220.0, 48000.0, 0.0f },
+                       unusedA { 330.0, 48000.0, 0.1f };
+        ContinuousSine leftB { 110.0, 48000.0, 0.25f }, leftB2 { 110.0, 48000.0, 0.25f },
+                       rightB { 220.0, 48000.0, 0.0f };
+        juce::MidiBuffer midi;
+        std::vector<float> a0, a1, b0, b1;
+        const auto run = [&](juce::AudioBuffer<float>& bufA, juce::AudioBuffer<float>& bufB, int& allocations)
+        {
+            allocations += allocationsDuring(a, bufA);
+            b.processBlock(bufB, midi);
+            appendChannel0(a0, bufA);
+            appendChannel0(b0, bufB);
+            a1.insert(a1.end(), bufA.getReadPointer(1), bufA.getReadPointer(1) + 512);
+            b1.insert(b1.end(), bufB.getReadPointer(1), bufB.getReadPointer(1) + 512);
+        };
+
+        int allocations = 0;
+        for (int blk = 0; blk < 20; ++blk)
+        {
+            auto bufA = stereoBlock(leftA, unusedA, 512);
+            auto bufB = stereoBlock(leftB, leftB2, 512);
+            run(bufA, bufB, allocations);
+        }
+        expect(a.profileRightIdle && ! b.profileRightIdle, "Only the mono instance rests channel 1");
+
+        const size_t rejoinAt = a1.size();
+        setParameter(a.parameters, "monoInput", 0.0f);
+        for (int blk = 0; blk < 30; ++blk)
+        {
+            auto bufA = stereoBlock(leftA, rightA, 512);
+            auto bufB = stereoBlock(leftB, rightB, 512);
+            run(bufA, bufB, allocations);
+        }
+        expectEquals(allocations, 0, "processBlock while channel 1 rests and rejoins");
+        expect(! a.profileRightIdle, "Channel 1's model runs again");
+        expectEquals(a.profileRightWeight, 1.0f);
+
+        expect(a0 == b0, "Channel 0 is untouched by the sharing");
+
+        // Channel 1 fades from the tone to silence, stepping no harder than the
+        // tone itself does on channel 0. Switched outright, it would drop at once.
+        const float stepRight = largestStep(a1, rejoinAt);
+        const float stepTone = largestStep(a0, rejoinAt);
+        expect(stepRight <= stepTone * 1.25f,
+               "No click on rejoining: " + juce::String(stepRight, 6) + " vs " + juce::String(stepTone, 6));
+
+        // Settled and faded in, channel 1 is what it would have been had it never rested.
+        float maxDiff = 0.0f;
+        for (size_t i = a1.size() - 10 * 512; i < a1.size(); ++i)
+            maxDiff = juce::jmax(maxDiff, std::abs(a1[i] - b1[i]));
+        expect(maxDiff < 1.0e-4f, "Channel 1 matches the stereo instance: " + juce::String(maxDiff, 8));
+    }
 }
 
 #endif // JUCE_DEBUG

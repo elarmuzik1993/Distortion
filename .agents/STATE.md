@@ -11,8 +11,7 @@
 
 ## Next
 1. Owner: push `feat/nam-profile-prototype` to update PR #55 (not pushed; push only when asked).
-2. Remaining PR #55 review findings (cleanups; #8 and #10 done on `fix/nam-pr55-cleanup`):
-   #7 `applyProfileStage` runs one model per channel even on identical mono input (2x CPU);
+2. Remaining PR #55 review findings (cleanups; #7, #8 and #10 done on `fix/nam-pr55-cleanup`):
    #9 `refreshStagedProfile` prepares and prewarms on the message thread: move it to `profileLoader`.
 3. Owner: ASIO standalone at 44.1 and 96 kHz: load, swap and clear profiles while playing; Reaper
    latency display stays put; A/B `build-rel/nam-regression/sd1_{44100,48000,96000}.wav`.
@@ -31,6 +30,9 @@
 - A block longer than the scratch runs the profile in pieces, never the zero-latency built-in clip.
 - Profiles carry their load request id; re-staged only while it is the newest, under
   `profileStatusLock`. Lock order: callback lock, then `profileStatusLock`.
+- Mono input (Mono Input on, or a mono bus): channel 1 takes channel 0's model output and its
+  models rest. Back to stereo they warm up unheard (settle time, max 100 ms), then fade in over
+  30 ms. The warm-up has no test of its own: the test models settle in under 1 ms.
 - Offline renders never duck. NAM Core pinned `0b3d3c9`. ASIO opt-in in `build-asio`.
   Sessions remember a profile by path.
 
