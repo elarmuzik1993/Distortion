@@ -20,6 +20,7 @@
 #include "Diagnostics/ReportSender.h"
 #include "Diagnostics/CurlTransport.h"
 #include "Diagnostics/PingSender.h"
+#include "Nam/NamProfile.h"
 
 //==============================================================================
 // DSP Constants - Centralized configuration for audio processing algorithms
@@ -152,6 +153,15 @@ namespace DSPConstants
     constexpr float OUTPUT_LIMITER_RELEASE_TIME_S = 0.050f;    // 50ms release (preserve punch)
     constexpr float OUTPUT_LIMITER_KNEE_DB = 1.0f;             // 1dB soft knee (transparent onset)
     constexpr float OUTPUT_LIMITER_CLAMP_SOFTNESS_DB = 1.0f;   // soft zone below ceiling for the hard backstop
+
+    // NAM profiles (Source/Nam/ResamplingIsland.h; the latency plan is updateLatencyPlan)
+    constexpr double PROFILE_RESERVE_MODEL_RATE = 48000.0;   // the latency reserve assumes a 48 kHz model
+    constexpr double PROFILE_WARMUP_MAX_S = 0.100;           // longest silent warm-up before a crossfade
+    constexpr double PROFILE_CROSSFADE_TIME_S = 0.030;       // profile-to-profile blend
+    constexpr double DUCK_FADE_TIME_S = 0.010;               // fade out, and back in, around a rebuild
+    constexpr int    DUCK_POLL_MS = 10;                      // timer interval while a duck is pending
+    constexpr int    DUCK_TIMEOUT_MS = 200;                  // rebuild anyway when audio isn't flowing
+    constexpr int    PROFILE_TIMER_MS = 50;                  // the processor timer's normal interval
 }
 
 // Forward declarations for test classes
@@ -202,6 +212,7 @@ class PluginProcessor : public juce::AudioProcessor,
     friend class RTCleanOversamplingTest;
     friend class CoefficientPropagationTest;
     friend class ProcessBlockDecompTest;
+    friend class NamProfileTests;
 #endif
 
 public:
@@ -219,6 +230,9 @@ public:
 #endif
 
     void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    // Host bypass: none of the chain runs, but the audio still arrives the reported
+    // latency late, as the host's delay compensation expects.
+    void processBlockBypassed(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     //==============================================================================
     // Bug reporting (USE-53)
@@ -300,6 +314,37 @@ public:
 
     // Sub Guard filter order enum (public for method signatures)
     enum class SubGuardFilterOrder { LR12, LR18, LR24 };
+
+    //==============================================================================
+    // NAM profile (prototype). A loaded .nam model replaces the built-in clip type
+    // as the distortion stage. While one is loaded the chain runs at 1x and the
+    // model runs at its trained rate inside a ResamplingIsland.
+    struct ProfileStatus
+    {
+        juce::String name;                // loaded profile, empty when none
+        juce::String path;                // requested file (kept if loading failed)
+        juce::String error;               // last load error, empty if none
+        double expectedSampleRate = 0.0;  // the rate the profile was trained at
+        bool loading = false;
+    };
+
+    // Message thread. Loads on a background thread; the timer then installs it:
+    // a crossfade from the current profile, or a duck around the rebuild into or
+    // out of profile mode.
+    void loadProfileAsync(const juce::File& file);
+    // Loads on the calling thread (never the audio thread) and stages the profile;
+    // the next timer tick or prepareToPlay installs it. For offline tools and
+    // tests. Returns false and records the error on failure.
+    bool loadProfileBlocking(const juce::File& file);
+    void clearProfile();
+    ProfileStatus getProfileStatus() const;
+    bool isProfileLoaded() const;
+    // True when no profile switch is in flight: nothing staged or pending, no
+    // crossfade, no duck. Reads audio-thread state, so tools and tests call it
+    // between processBlock calls.
+    bool isProfileSwitchIdle() const;
+
+    static constexpr const char* profilePathAttribute = "namProfilePath";
 
 private:
     // --- Bug reporting (USE-53) ---
@@ -436,13 +481,40 @@ private:
     // frequency, for both the IIR and FIR (linear-phase) oversampling modes.
     std::unique_ptr<juce::dsp::Oversampling<float>> dryOversampling;
 
-    // Re-imposes the reported oversampler latency onto the cheap true-bypass branch
-    // (which skips the oversampler). Without it the host's PDC plays the bypassed
-    // signal early, and crossing the bypass<->active threshold jumps in time. None
-    // interpolation makes it a pure integer delay — bit-transparent, only
-    // time-shifted. Sized/updated in rebuildOversampling (message thread).
+    // Re-imposes the active path's own latency (the oversampler's, or the island
+    // delay in profile mode) onto the cheap bypass branches, which skip the chain;
+    // the shared outputPadLine then adds the rest, so bypassed audio arrives R late
+    // in total. Without it the host's PDC plays the bypassed signal early, and
+    // crossing the bypass<->active threshold jumps in time. None interpolation
+    // makes it a pure integer delay: bit-transparent, only time-shifted, and the
+    // whole branch bit-clean only when R is 0. Sized in updateLatencyPlan (message
+    // thread, under the callback lock).
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> bypassLatencyDelay;
     int bypassLatencySamples = 0;
+    // The bypass branches' latency tail: bypassLatencyDelay, then the shared pad.
+    void applyBypassLatency(juce::AudioBuffer<float>& buffer) noexcept;
+    // The tail of a block processBlock abandons: applyBypassLatency, then the duck.
+    void endBlockEarly(juce::AudioBuffer<float>& buffer) noexcept;
+    // Mono in, stereo out: copies the input across the output-only channels.
+    void copyMonoInputAcrossChannels(juce::AudioBuffer<float>& buffer) noexcept;
+    // Mono Input on, or a mono input bus: every channel carries channel 0's input.
+    bool isInputMono() const noexcept;
+
+    // --- Latency: one figure reported whatever runs ------------------------------
+    // R is the larger of the user's oversampler latency and the island delay a
+    // 48 kHz model needs at this host rate. Every path pads up to R, and the three
+    // signals that go around a profile's island wait its delay. Written on the
+    // message thread under the callback lock (prepareToPlay, rebuilds); read by the
+    // audio thread.
+    int reservedLatency = 0;
+    int islandDelay = 0;       // the installed profile's island delay; 0 in built-in mode
+    int outputPadDelay = 0;    // R minus the active path's own latency
+    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> outputPadLine;
+    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> globalDryDelayLine;
+    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> subGuardLowDelayLine;
+    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> distMixDryDelayLine;
+    void updateLatencyPlan(double sampleRate, int hostBlockSize);   // message thread, under the callback lock
+    int oversamplerLatencyForUserSetting() const;
 
     juce::SmoothedValue<float> smoothedOutputGain;  // Only output gain uses SmoothedValue (normal rate)
     juce::SmoothedValue<float> smoothedGlobalMix;
@@ -458,17 +530,21 @@ private:
     int currentOversamplingStages = 2;  // Track current stages for comparison
     bool currentLinearPhase = false;   // Track filter type for needsRebuild check
     void rebuildOversampling(double sampleRate, int samplesPerBlock);
+    // Performs any requested switch at once, without a duck. Nothing calls
+    // triggerAsyncUpdate any more; tests and tools call this directly.
     void handleAsyncUpdate() override;
 
-    // Drains oversamplingRebuildPending on the message thread (see below).
+    // Message-thread housekeeping: routes loaded profiles, turns the rebuild flags
+    // below into duck requests, and has performSwitch do the (allocating) rebuild
+    // under the callback lock once the audio thread has faded out.
     void timerCallback() override;
 
     // Set by parameterChanged() to request a deferred oversampler rebuild.
     // parameterChanged() may run on the audio thread (host automation), and
     // posting to the system message queue (triggerAsyncUpdate / postMessage)
     // is not realtime-safe — on Linux it takes a lock and write()s the wake
-    // pipe. So the audio thread only flips this wait-free flag; a message-thread
-    // timer polls it and performs the (allocating) rebuild.
+    // pipe. So the audio thread only flips this wait-free flag; the message-thread
+    // timer turns it into a duck request, and performSwitch rebuilds.
     std::atomic<bool> oversamplingRebuildPending{ false };
 
     // APVTS listener: linearPhaseDry changes the oversampler filter type, so a
@@ -637,6 +713,27 @@ private:
     float applyDistortionStage(float inputSample, int channel,
                                float currentGain, float sampleDrive,
                                float sampleMixAmount, float sampleDistortionParam);
+    // Per-sample input gain, drive, mix and distortion amount, including LFO
+    // modulation (which advances lfoPhase). Shared by every distortion loop so
+    // they all modulate identically.
+    struct SampleControls { float gain, drive, mix, distortionParam; };
+    SampleControls advanceSampleControls(float lfoPhaseIncrement) noexcept;
+    // Runs the active NAM profile over the given channel buffers in place of the
+    // built-in clip type. Returns false (touching nothing) when no profile can
+    // run this block, so the caller falls back to applyDistortionStage. A block
+    // longer than the scratch runs in pieces, through applyProfileChunk.
+    bool applyProfileStage(float* const* channels) noexcept;
+    void applyProfileChunk(float* const* channels, int numChannels, int numSamples) noexcept;
+    bool canRunProfileStage(int numChannels) const noexcept;
+    // Keeps the profile's island, model and dry delays running through true bypass.
+    void feedProfileWhileBypassed(const juce::AudioBuffer<float>& buffer) noexcept;
+    // Ends a swap once the incoming profile has fully faded in.
+    void retireOutgoingProfileIfFaded() noexcept;
+    // Channel 1 sharing channel 0's model output while the input is mono.
+    // beginRightChannelChunk returns whether channel 1's models run this chunk;
+    // nextRightChannelWeight steps channel 1's own-model share by one sample.
+    bool beginRightChannelChunk() noexcept;
+    float nextRightChannelWeight() noexcept;
     void applyAutoGainAndISP(juce::AudioBuffer<float>& buffer);
     void applyLA2A();
     // Stereo-linked soft safety limiter at -0.5dBFS. Must run as the LAST gain stage
@@ -655,6 +752,81 @@ private:
     void updateSampleRateDependentCoefficients(double sampleRate);
     float generateLFOWaveform(float phase, int waveformType);  // Generate LFO waveforms
     void resetDSPState();  // Thread-safe DSP state reset (called from audio thread)
+
+    // --- NAM profile handoff -----------------------------------------------------
+    // The loader parks a finished profile in stagedProfile. The message-thread timer
+    // either hands it to the audio thread through pendingProfile (a crossfade, when
+    // profile mode is already on and the island delay matches) or requests a duck,
+    // and the rebuild installs it under the callback lock. The audio thread parks a
+    // profile it replaces in retiredProfile for the timer to free, so it never frees
+    // anything itself.
+    std::atomic<NamProfile*> stagedProfile { nullptr };   // loader -> message thread
+    std::atomic<NamProfile*> pendingProfile { nullptr };  // message thread -> audio thread
+    std::atomic<NamProfile*> retiredProfile { nullptr };  // audio thread -> message thread
+    NamProfile* activeProfile = nullptr;      // audio thread, or under the callback lock
+    NamProfile* incomingProfile = nullptr;    // a profile fading in; audio thread, or under the callback lock
+    bool profileMode = false;                 // chain at 1x running activeProfile; under the callback lock
+    std::atomic<bool> profileModeInstalled { false };   // profileMode, for the message thread
+    std::atomic<int> installedIslandDelay { 0 };        // the active profile's island delay, likewise
+    std::atomic<bool> clearRequested { false };         // the next rebuild installs no profile
+    std::atomic<bool> pendingNeedsDuck { false };       // the audio thread couldn't blend into pendingProfile
+    std::atomic<int> profileRequestId { 0 };            // newer loads and clears supersede older ones
+    std::atomic<double> profileHostSampleRate { 0.0 };
+    std::atomic<int> profileHostBlockSize { 0 };
+    double profilePreparedRate = 0.0;                   // what prepareToPlay last set, audio-readable
+    int profilePreparedBlock = 0;
+    // Sized in prepareToPlay. Channels: model input, active output, incoming output
+    // (two each), the per-sample mix, then the delayed dry half (two).
+    juce::AudioBuffer<float> profileScratch;
+    static constexpr int scratchModelIn = 0, scratchActiveOut = 2, scratchIncomingOut = 4,
+                         scratchMix = 6, scratchDry = 7, profileScratchChannels = 9;
+    // Profile-to-profile swap: a silent warm-up, then a linear blend. Audio thread,
+    // or under the callback lock (installRequestedProfile resets them).
+    int swapWarmupRemaining = 0;
+    int swapFadePosition = 0;
+    int swapFadeLength = 1;
+    // Mono input: channel 1 fades to channel 0's model output and its own models
+    // rest, halving the cost. Back to stereo, they run unheard until settled, then
+    // fade back in, so their stale state is never heard. Audio thread.
+    bool profileShareMono = false;       // this block's input is mono
+    bool profileRightIdle = false;       // channel 1's models are resting
+    float profileRightWeight = 1.0f;     // channel 1's own-model share; 0 = channel 0's output
+    int profileRightWarmup = 0;          // samples channel 1's models still run unheard
+    float profileRightStep = 1.0f;       // weight change per sample, set in prepareToPlay
+    mutable juce::CriticalSection profileStatusLock;
+    ProfileStatus profileStatus;
+    std::atomic<int> stagedRefreshesInFlight { 0 };    // staged profiles out on the loader being re-prepared
+    // Declared after everything its jobs touch, so it is destroyed (and joined) first.
+    std::unique_ptr<juce::ThreadPool> profileLoader;   // created by getProfileLoader, under profileStatusLock
+
+    // --- Duck: fade to silence around a runtime rebuild --------------------------
+    enum class DuckState { open, closing, closed, opening };
+    std::atomic<bool> duckRequested { false };      // message thread sets; the rebuild clears
+    std::atomic<bool> duckReady { false };          // audio thread: faded to silence
+    std::atomic<int> rebuildGeneration { 0 };       // bumped after every ducked rebuild
+    std::atomic<double> duckRequestedAtMs { 0.0 };  // when the pending duck was asked for
+    DuckState duckState = DuckState::open;          // audio thread
+    int seenRebuildGeneration = 0;                  // audio thread
+    float duckGain = 1.0f;                          // audio thread
+    float duckStep = 1.0f;                          // gain change per sample, set in prepareToPlay
+
+    int beginProfileRequest(const juce::File& file);  // records the request, returns its id
+    bool loadProfileNow(const juce::File& file, int requestId);
+    bool isPreparedForHost(const NamProfile& profile) const;
+    bool canCrossfadeTo(const NamProfile& next) const noexcept;             // audio thread
+    void takePendingProfile() noexcept;                                     // audio thread, block start
+    void collectRetiredProfile();                                           // message thread
+    void refreshStagedProfile();                                            // message thread; prepares on the loader
+    void restageProfile(NamProfile* staged, double rate, bool usable);      // puts it back unless superseded
+    juce::ThreadPool& getProfileLoader();
+    void routeStagedProfile();                                              // message thread
+    void requestDuck();
+    void serviceDuck();                                                     // message thread
+    void performSwitch();                                                   // message thread; takes the callback lock
+    void installRequestedProfile(std::vector<NamProfile*>& toFree);         // under the callback lock
+    void prepareProfilesForHost(double sampleRate, int samplesPerBlock);    // prepareToPlay only
+    void updateDuckState() noexcept;                                        // audio thread, block start
+    void applyDuckGain(juce::AudioBuffer<float>& buffer) noexcept;          // audio thread, last
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginProcessor)
 };

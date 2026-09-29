@@ -24,6 +24,9 @@ modules, and `JUCE_USE_FLAC` / `JUCE_USE_OGGVORBIS` are left at their default
 | zlib | zlib licence | `juce_core` | all |
 | AudioUnit SDK | Apache 2.0 | `juce_audio_plugin_client` | macOS (AU) |
 | Orbitron | SIL OFL 1.1 | embedded via `BinaryData` | all |
+| Neural Amp Modeler Core | MIT | compiled in (runs `.nam` profiles) | all |
+| Eigen | MPL 2.0; two files Apache 2.0 / BSD-3-Clause | compiled in through NAM Core | all |
+| JSON for Modern C++ 3.12.0 | MIT | compiled in through NAM Core | all |
 | MS VC++ Redistributable | Microsoft distributable-code terms | shipped beside the plugin | Windows |
 
 ---
@@ -607,6 +610,125 @@ Apache License
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
+```
+
+---
+
+## Neural Amp Modeler Core — Steven Atkinson
+
+Compiled into the plugin to run Neural Amp Modeler (`.nam`) profiles. Built from
+[NeuralAmpModelerCore](https://github.com/sdatkinson/NeuralAmpModelerCore) at
+commit `0b3d3c97b0859a3a8c92a8628c4dd89a25eb5842`. The repository's example
+models serve as fixtures for the test runner only and are not shipped.
+
+```
+MIT License
+
+Copyright (c) 2023 Steven Atkinson
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+---
+
+## JSON for Modern C++ — Niels Lohmann
+
+Compiled into the plugin through NAM Core, which vendors version 3.12.0
+(`Dependencies/nlohmann/json.hpp`).
+
+```
+MIT License
+
+Copyright (c) 2013-2025 Niels Lohmann
+
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+---
+
+## Eigen — Eigen contributors
+
+Header-only linear algebra library, compiled into the plugin through NAM Core,
+unmodified. Built with `EIGEN_MPL2_ONLY`, so no LGPL-licensed Eigen code is
+compiled in.
+
+Eigen is licensed under the Mozilla Public License 2.0. The exact source used
+(commit `bc3b39870ecb690a623a3f49149a358b95c5781d`) is available at
+<https://gitlab.com/libeigen/eigen/-/tree/bc3b39870ecb690a623a3f49149a358b95c5781d>,
+and the licence text at <https://mozilla.org/MPL/2.0/>.
+
+```
+This Source Code Form is subject to the terms of the Mozilla Public License,
+v. 2.0. If a copy of the MPL was not distributed with this file, You can
+obtain one at https://mozilla.org/MPL/2.0/.
+```
+
+Two of the compiled headers carry additional notices:
+
+- `Eigen/src/Core/arch/Default/BFloat16.h`: Copyright 2017 The TensorFlow
+  Authors, licensed under the Apache License, Version 2.0 (full text in the
+  AudioUnit SDK section above).
+- `Eigen/src/LU/arch/InverseSize4.h` reimplements code from an Intel library,
+  distributed under the following terms:
+
+```
+ Copyright (c) 2011, Intel Corporation. All rights reserved.
+
+ Redistribution and use in source and binary forms, with or without modification,
+ are permitted provided that the following conditions are met:
+
+ * Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+ * Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+ * Neither the name of Intel Corporation nor the names of its contributors may
+   be used to endorse or promote products derived from this software without
+   specific prior written permission.
+
+ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+ WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+ ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+ (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+ LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
 ---

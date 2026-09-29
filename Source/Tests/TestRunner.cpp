@@ -23,9 +23,6 @@
 //==============================================================================
 int main(int argc, char* argv[])
 {
-    (void)argc;
-    (void)argv;
-
     std::cout << "Starting test runner...\n";
     std::cout.flush();
 
@@ -53,10 +50,24 @@ int main(int argc, char* argv[])
     runner.setAssertOnFailure(false);
     runner.setPassesAreLogged(true);
 
-    // Run all tests
+    // Run all tests, or only those whose name contains the first argument
+    // (case-insensitive), e.g. DistortionTests "NAM Profile".
     std::cout << "Running tests...\n";
     std::cout.flush();
-    runner.runAllTests();
+    if (argc > 1)
+    {
+        const juce::String filter(argv[1]);
+        juce::Array<juce::UnitTest*> selected;
+        for (auto* test : juce::UnitTest::getAllTests())
+            if (test->getName().containsIgnoreCase(filter))
+                selected.add(test);
+        std::cout << "Filter \"" << filter << "\": " << selected.size() << " test class(es)\n";
+        runner.runTests(selected);
+    }
+    else
+    {
+        runner.runAllTests();
+    }
     std::cout << "Tests completed.\n";
     std::cout.flush();
 

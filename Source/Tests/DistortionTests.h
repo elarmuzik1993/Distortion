@@ -16,6 +16,7 @@
 #include "../Diagnostics/ReportComposer.h"
 #include "../Diagnostics/ReportSender.h"
 #include "../Diagnostics/PingSender.h"
+#include "../Nam/ResamplingIsland.h"
 
 //==============================================================================
 // Test Categories
@@ -1057,6 +1058,24 @@ public:
     }
 };
 
+// The island that runs a NAM model at its trained rate inside any host rate:
+// delay, frequency response, anti-aliasing and block independence.
+class ResamplingIslandTests : public juce::UnitTest
+{
+public:
+    ResamplingIslandTests() : UnitTest("Resampling Island", TestCategories::DSP) {}
+    void runTest() override;
+};
+
+// NAM profile (prototype): loading, the 1x switch, processing, the lock-free
+// swap, session recall and failure handling. Uses NAM Core's example models.
+class NamProfileTests : public juce::UnitTest
+{
+public:
+    NamProfileTests() : UnitTest("NAM Profile", TestCategories::DSP) {}
+    void runTest() override;
+};
+
 // Force static test registration
 inline void registerAllTests()
 {
@@ -1114,6 +1133,8 @@ inline void registerAllTests()
     static DiagPingSenderTest diagPingSenderTest;
     static DiagProcessorTest diagProcessorTest;
     static SettingsPersistenceTest settingsPersistenceTest;
+    static ResamplingIslandTests resamplingIslandTests;
+    static NamProfileTests namProfileTests;
 }
 
 #endif // JUCE_DEBUG

@@ -15,6 +15,7 @@
       DistortionUiSnapshot --out shots
       DistortionUiSnapshot --scale 70 --out shots
       DistortionUiSnapshot --signal --out shots   # scope shows a waveform
+      DistortionUiSnapshot --profile drive.nam    # a NAM profile loaded
 
   ==============================================================================
 */
@@ -135,6 +136,10 @@ bool snapshot(PluginProcessor& proc, int width, int height, const juce::File& ou
         juce::MessageManager::getInstance()->runDispatchLoopUntil(600);
     }
 
+    // The profile button picks up the loaded profile on the editor's UI tick.
+    if (proc.isProfileLoaded())
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(100);
+
     // Lay out and paint synchronously into an offscreen image.
     juce::Image image(juce::Image::ARGB, width, height, true);
     {
@@ -165,10 +170,12 @@ int main(int argc, char* argv[])
     bool collapsed = false;
     bool extreme = false;
     bool signal = false;
+    juce::String profilePath;
     for (int i = 1; i < argc; ++i)
     {
         const juce::String t(argv[i]);
         if (t == "--out" && i + 1 < argc)        outDir    = argv[++i];
+        else if (t == "--profile" && i + 1 < argc) profilePath = argv[++i];
         else if (t == "--scale" && i + 1 < argc) onlyScale = juce::String(argv[++i]).getIntValue();
         else if (t == "--collapsed")             collapsed = true;
         else if (t == "--extreme")               extreme   = true;
@@ -192,6 +199,13 @@ int main(int argc, char* argv[])
     proc.setRateAndBufferSizeDetails(44100.0, 512);
     proc.prepareToPlay(44100.0, 512);
 
+    if (profilePath.isNotEmpty()
+        && ! proc.loadProfileBlocking(juce::File::getCurrentWorkingDirectory().getChildFile(profilePath)))
+    {
+        std::cout << "Profile failed to load: " << proc.getProfileStatus().error << "\n";
+        return 1;
+    }
+
     const int scales[] = { 70, 80, 90, 100 };
     bool allOk = true;
 
@@ -213,6 +227,8 @@ int main(int argc, char* argv[])
             name += "-extreme";
         if (signal)
             name += "-signal";
+        if (profilePath.isNotEmpty())
+            name += "-profile";
         allOk &= snapshot(proc, w, h, dir.getChildFile(name + ".png"), extreme, signal);
     }
 

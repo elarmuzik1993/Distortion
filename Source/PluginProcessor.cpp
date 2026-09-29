@@ -193,6 +193,34 @@ namespace
         std::function<void()> action;
         void timerCallback() override { stopTimer(); if (action) action(); }
     };
+
+    using IntegerDelay = juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None>;
+
+    // Sizes a pure integer delay. Message thread: it allocates.
+    void prepareDelay(IntegerDelay& line, const juce::dsp::ProcessSpec& spec, int delaySamples)
+    {
+        line.prepare(spec);
+        line.setMaximumDelayInSamples(juce::jmax(1, delaySamples));
+        line.setDelay(static_cast<float>(delaySamples));
+        line.reset();
+    }
+
+    // Length of a profile crossfade (a swap, or channel 1 joining or leaving) at this rate.
+    int profileCrossfadeSamples(double sampleRate) noexcept
+    {
+        return juce::jmax(1, static_cast<int>(std::lround(DSPConstants::PROFILE_CROSSFADE_TIME_S * sampleRate)));
+    }
+
+    // Delays each channel in place by the line's delay. Audio thread: no allocation.
+    void delayInPlace(IntegerDelay& line, float* const* channels, int numChannels, int numSamples) noexcept
+    {
+        for (int ch = 0; ch < numChannels; ++ch)
+            for (int i = 0; i < numSamples; ++i)
+            {
+                line.pushSample(ch, channels[ch][i]);
+                channels[ch][i] = line.popSample(ch);
+            }
+    }
 }
 
 //==============================================================================
@@ -302,7 +330,7 @@ PluginProcessor::PluginProcessor()
     drainTimer = std::move (t);
    #endif
 
-    startTimer(50);
+    startTimer(DSPConstants::PROFILE_TIMER_MS);
 }
 
 PluginProcessor::~PluginProcessor()
@@ -316,6 +344,17 @@ PluginProcessor::~PluginProcessor()
     reportSender.reset();   // joins the background thread (bounded)
     pingSender.reset();     // joins the background thread (bounded)
     parameters.removeParameterListener("linearPhaseDry", this);
+
+    // No loader may stage once the slots below are freed.
+    if (profileLoader != nullptr)
+        profileLoader->removeAllJobs(true, 10000);
+    delete stagedProfile.exchange(nullptr);
+    delete pendingProfile.exchange(nullptr);
+    delete retiredProfile.exchange(nullptr);
+    delete incomingProfile;
+    incomingProfile = nullptr;
+    delete activeProfile;
+    activeProfile = nullptr;
 }
 
 //==============================================================================
@@ -746,6 +785,10 @@ void PluginProcessor::changeProgramName(int index, const juce::String& newName)
 //==============================================================================
 void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
+    // Held for the whole prepare: the timer installs profiles and rebuilds the
+    // oversampler under the same lock, so the two never interleave.
+    const juce::ScopedLock callbackLockGuard(getCallbackLock());
+
     // Store sample rate for LFO calculations
     currentSampleRate = static_cast<float>(sampleRate);
     lfoPhase = 0.0f;  // Reset LFO phase
@@ -756,6 +799,11 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // below has to be wide enough for what actually gets processed.
     const int numChannels = std::max(1, std::max(getTotalNumInputChannels(),
                                                  getTotalNumOutputChannels()));
+
+    // NAM profiles: bring every one we hold up to these settings and finish any
+    // pending switch, so the oversampler below is built for the final mode.
+    prepareProfilesForHost(sampleRate, samplesPerBlock);
+    profileScratch.setSize(profileScratchChannels, samplesPerBlock, false, false, true);
 
     // Output gain is applied AFTER downsampling at normal sample rate
     smoothedOutputGain.reset(sampleRate, DSPConstants::GAIN_SMOOTH_TIME_S);
@@ -971,15 +1019,13 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // 1. Internal filter latency compensation
     // 2. Sample rate (44.1kHz vs 48kHz have different characteristics)
     // 3. Block size alignment requirements
-    const float oversamplingLatencyFractional = oversampling
-        ? oversampling->getLatencyInSamples() : 0.0f;
-
-    // Report latency to host for proper delay compensation. Round to nearest sample
-    // (truncating loses up to ~1 sample of PDC accuracy vs other tracks).
-    setLatencySamples(static_cast<int>(std::lround(oversamplingLatencyFractional)));
+    // The latency reported to the host comes from rebuildOversampling above
+    // (updateLatencyPlan): the reserve, not only the oversampler's figure.
 
     // The dry path for the global mix is phase-aligned by routing it through the matched
     // dryOversampling instance (built in rebuildOversampling), not a fractional delay.
+    // In profile mode the chain runs at 1x and no oversampler is built; the dry is
+    // delayed by the island delay D instead (globalDryDelayLine, updateLatencyPlan).
 
     lowBandBuffer.setSize(numChannels, worstCaseOversampledBlockSize, false, false, true);
     highBandBuffer.setSize(numChannels, worstCaseOversampledBlockSize, false, false, true);
@@ -1154,8 +1200,10 @@ void PluginProcessor::applyLA2ACompression(juce::AudioBuffer<float>& buffer,
 
 void PluginProcessor::requestOversamplingRebuild(int stages)
 {
-    requestedOversamplingStages.store(stages, std::memory_order_release);
-    triggerAsyncUpdate();
+    // The editor re-sends the saved setting every time it opens; only a real change
+    // rebuilds, and the rebuild is ducked so it no longer clicks.
+    if (requestedOversamplingStages.exchange(stages, std::memory_order_acq_rel) != stages)
+        requestDuck();
 }
 
 void PluginProcessor::parameterChanged(const juce::String& parameterID, float /*newValue*/)
@@ -1171,27 +1219,31 @@ void PluginProcessor::parameterChanged(const juce::String& parameterID, float /*
 
 void PluginProcessor::timerCallback()
 {
-    // Message-thread poll: pick up a deferred oversampler rebuild requested from
-    // the audio thread by parameterChanged(). exchange() ensures we only rebuild
-    // once per request even if multiple changes arrived since the last tick.
+    // Message-thread housekeeping for NAM profiles and every runtime rebuild.
+    collectRetiredProfile();
+    refreshStagedProfile();
+    routeStagedProfile();
+    if (pendingNeedsDuck.exchange(false, std::memory_order_acq_rel))
+        requestDuck();
+    // parameterChanged() flags a linear-phase change from any thread (often the
+    // audio thread); its rebuild is ducked like every other one.
     if (oversamplingRebuildPending.exchange(false, std::memory_order_acq_rel))
-        handleAsyncUpdate();
+        requestDuck();
+    serviceDuck();
 }
 
 void PluginProcessor::handleAsyncUpdate()
 {
-    const double sampleRate = getSampleRate();
-    const int samplesPerBlock = getBlockSize();
-    if (sampleRate <= 0.0 || samplesPerBlock <= 0)
-        return;
-
-    const juce::ScopedLock callbackLockGuard(getCallbackLock());
-    rebuildOversampling(sampleRate, samplesPerBlock);
+    // Performs whatever switch is requested at once, without waiting for the audio
+    // thread to fade out. Tests and tools use it to apply a rebuild directly.
+    performSwitch();
 }
 
 void PluginProcessor::rebuildOversampling(double sampleRate, int samplesPerBlock)
 {
-    const int stages = requestedOversamplingStages.load(std::memory_order_acquire);
+    // Profile mode runs the chain at 1x: the profile's island converts to the
+    // model's rate itself. The user's setting returns when the profile is cleared.
+    const int stages = profileMode ? 0 : requestedOversamplingStages.load(std::memory_order_acquire);
     const bool linearPhase = linearPhaseDryParam && (linearPhaseDryParam->load() > 0.5f);
     // Widest layout, matching prepareToPlay - see the note there. An oversampler
     // built for 1 channel would be handed 2 under mono-in / stereo-out.
@@ -1337,32 +1389,132 @@ void PluginProcessor::rebuildOversampling(double sampleRate, int samplesPerBlock
     lowBandBufferB.setSize(numChannels, oversampledBlockSize, false, false, true);
     highBandBufferB.setSize(numChannels, oversampledBlockSize, false, false, true);
 
-    // Report updated latency (round to nearest sample for accurate host PDC)
-    setLatencySamples(oversampling
-        ? static_cast<int>(std::lround(oversampling->getLatencyInSamples())) : 0);
-
-    // The dry global-mix path is phase-aligned via the matched dryOversampling instance
-    // (rebuilt above), so it inherits the same latency automatically — no manual delay.
-
-    // Re-impose that same reported latency on the true-bypass branch, which skips
-    // the oversampler entirely. A plain integer delay at the base rate keeps the
-    // bypassed signal bit-transparent (only time-shifted) while staying aligned
-    // with the host's PDC and with the active path. Allocated here on the message
-    // thread; the audio-thread bypass branch only pushes/pops samples.
-    bypassLatencySamples = getLatencySamples();
-    {
-        juce::dsp::ProcessSpec baseSpec;
-        baseSpec.sampleRate = sr;
-        baseSpec.maximumBlockSize = static_cast<juce::uint32>(currentBlockSize);
-        baseSpec.numChannels = static_cast<juce::uint32>(numChannels);
-        bypassLatencyDelay.prepare(baseSpec);
-        bypassLatencyDelay.setMaximumDelayInSamples(juce::jmax(1, bypassLatencySamples));
-        bypassLatencyDelay.setDelay(static_cast<float>(bypassLatencySamples));
-        bypassLatencyDelay.reset();
-    }
+    // Latency: one reported figure, every path padded up to it (the bypass branch
+    // included), and the dry paths around a profile's island delayed to match.
+    updateLatencyPlan(sr, currentBlockSize);
 
     // Reset all DSP state
     resetDSPState();
+}
+
+int PluginProcessor::oversamplerLatencyForUserSetting() const
+{
+    // What the user's Oversampling setting would add, even while a profile keeps the
+    // chain at 1x and that oversampler isn't built.
+    const int stages = requestedOversamplingStages.load(std::memory_order_acquire);
+    if (stages <= 0)
+        return 0;
+    const bool linearPhase = linearPhaseDryParam && linearPhaseDryParam->load() > 0.5f;
+    const juce::dsp::Oversampling<float> probe(1, static_cast<size_t>(stages),
+        linearPhase ? juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple
+                    : juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR,
+        false, false);
+    return static_cast<int>(std::lround(probe.getLatencyInSamples()));
+}
+
+void PluginProcessor::updateLatencyPlan(double sampleRate, int hostBlockSize)
+{
+    const int numChannels = std::max(1, std::max(getTotalNumInputChannels(), getTotalNumOutputChannels()));
+    const int builtInLatency = oversampling ? static_cast<int>(std::lround(oversampling->getLatencyInSamples())) : 0;
+    const int userOversamplerLatency = profileMode ? oversamplerLatencyForUserSetting() : builtInLatency;
+    const int reserve = juce::jmax(userOversamplerLatency,
+        ResamplingIsland::latencyFor(sampleRate, DSPConstants::PROFILE_RESERVE_MODEL_RATE));
+
+    islandDelay = profileMode ? activeProfile->getLatencySamples() : 0;
+    const int pathLatency = profileMode ? islandDelay : builtInLatency;
+    // A model trained at another rate can need more than the reserve; the host then
+    // sees the larger figure while that profile is loaded.
+    reservedLatency = juce::jmax(reserve, pathLatency);
+    outputPadDelay = reservedLatency - pathLatency;
+
+    juce::dsp::ProcessSpec baseSpec;
+    baseSpec.sampleRate = sampleRate;
+    baseSpec.maximumBlockSize = static_cast<juce::uint32>(juce::jmax(1, hostBlockSize));
+    baseSpec.numChannels = static_cast<juce::uint32>(numChannels);
+    prepareDelay(outputPadLine, baseSpec, outputPadDelay);
+    prepareDelay(globalDryDelayLine, baseSpec, islandDelay);
+    prepareDelay(subGuardLowDelayLine, baseSpec, islandDelay);
+    prepareDelay(distMixDryDelayLine, baseSpec, islandDelay);
+
+    setLatencySamples(reservedLatency);
+    // The true-bypass branch skips everything above, so it imposes the path's own
+    // latency itself, then shares the same pad line the active path uses to reach
+    // the full reserve — so a crossing between the two branches never replays
+    // whatever either line held from the last time that path ran.
+    bypassLatencySamples = pathLatency;
+    prepareDelay(bypassLatencyDelay, baseSpec, bypassLatencySamples);
+}
+
+void PluginProcessor::copyMonoInputAcrossChannels(juce::AudioBuffer<float>& buffer) noexcept
+{
+    // See processBlock: the output-only channels hold undefined data (or, with Mono
+    // Input on, the silent second interface input).
+    const int firstToOverwrite = isInputMono() ? 1 : getTotalNumInputChannels();
+    for (int ch = firstToOverwrite; ch < buffer.getNumChannels(); ++ch)
+        buffer.copyFrom(ch, 0, buffer, 0, 0, buffer.getNumSamples());
+}
+
+bool PluginProcessor::isInputMono() const noexcept
+{
+    return (monoInputParam && monoInputParam->load() > 0.5f) || getTotalNumInputChannels() <= 1;
+}
+
+void PluginProcessor::applyBypassLatency(juce::AudioBuffer<float>& buffer) noexcept
+{
+    // ========== LATENCY COMPENSATION (Bypass path) ==========
+    // The active path is delayed by its own path latency (the oversampler's, or the
+    // island delay in profile mode), then padded up to the reported reserve. A
+    // bypass branch skips the chain, so it imposes that same path latency here,
+    // then the shared pad below: R in total, which keeps it aligned with the
+    // host's PDC and avoids a timing jump when the bypass<->active threshold is
+    // crossed. None interpolation -> the samples pass through unchanged, only
+    // time-shifted. The branch is a bit-clean passthrough only when R is 0.
+    if (bypassLatencySamples > 0)
+        delayInPlace(bypassLatencyDelay, buffer.getArrayOfWritePointers(),
+                     buffer.getNumChannels(), buffer.getNumSamples());
+
+    // Shares the active path's pad line, fed every block by whichever path runs,
+    // so a crossing between the two never replays a stale line's leftover tail.
+    // Together with the delay above this reaches the same reserve, R, as the
+    // active path.
+    if (outputPadDelay > 0)
+        delayInPlace(outputPadLine, buffer.getArrayOfWritePointers(),
+                     buffer.getNumChannels(), buffer.getNumSamples());
+}
+
+void PluginProcessor::endBlockEarly(juce::AudioBuffer<float>& buffer) noexcept
+{
+    // A block processBlock gives up on still goes out through the bypass branches'
+    // latency tail and then the duck: it lands at the reported latency, the pad line
+    // keeps its history, and a fade under way keeps moving instead of stalling at
+    // full level until the timer's timeout rebuilds unfaded.
+    applyBypassLatency(buffer);
+    applyDuckGain(buffer);
+}
+
+void PluginProcessor::processBlockBypassed(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
+{
+    RT_ASSERT_SCOPE();
+    juce::ignoreUnused(midiMessages);
+    juce::ScopedNoDenormals noDenormals;
+
+    if (buffer.getNumSamples() == 0 || buffer.getNumChannels() == 0)
+        return;
+
+    // A duck requested before the host bypassed us still has to finish, so the
+    // fade runs here too; closed means silence until the rebuild, as in processBlock.
+    updateDuckState();
+    if (duckState == DuckState::closed)
+    {
+        buffer.clear();
+        return;
+    }
+
+    // None of the chain runs, but the host still compensates for the reported
+    // latency, so the signal takes the internal bypass branch's latency tail.
+    copyMonoInputAcrossChannels(buffer);
+    applyBypassLatency(buffer);
+    applyDuckGain(buffer);
 }
 
 void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
@@ -1378,6 +1530,16 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     if (buffer.getNumSamples() == 0 || buffer.getNumChannels() == 0)
         return;
 
+    updateDuckState();
+    if (duckState == DuckState::closed)
+    {
+        // Faded out and waiting for the rebuild: silence, and none of the chain runs.
+        buffer.clear();
+        return;
+    }
+
+    takePendingProfile();
+
     // Mono in, stereo out: the host hands us a buffer with as many channels as
     // the OUTPUT bus, but only the input ones hold audio - the rest are
     // undefined. Copy the mono input across them so a single-input source (a
@@ -1391,13 +1553,8 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // With Mono Input on, the same copy is applied across every channel: there the
     // host did write channel 1, it just holds silence because nothing is plugged
     // into the second interface input.
-    {
-        const bool monoInput = monoInputParam && monoInputParam->load() > 0.5f;
-        const int firstToOverwrite = monoInput ? 1
-                                               : juce::jmax(1, getTotalNumInputChannels());
-        for (int ch = firstToOverwrite; ch < buffer.getNumChannels(); ++ch)
-            buffer.copyFrom(ch, 0, buffer, 0, 0, buffer.getNumSamples());
-    }
+    copyMonoInputAcrossChannels(buffer);
+    profileShareMono = isInputMono();
 
     // Mono-source detection. Advisory only - it lights the Mono Input control and
     // never touches the audio. Requires one channel to carry signal while the
@@ -1509,6 +1666,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     if (std::isnan(inGainParam) || std::isnan(outGainParam) || std::isnan(distortionParam))
     {
         debugHadNaN.store(true, std::memory_order_relaxed);
+        endBlockEarly(buffer);
         return;  // Skip this block to prevent NaN propagation
     }
     auto highPassFreq = highPassFreqParam->load();
@@ -1691,7 +1849,10 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // 100% wet, when the blend is skipped — so the active path can keep its dry
     // allpass/FIR history phase-locked to the wet path (see GLOBAL MIX below); that
     // round-trip needs the current dry block captured here.
-    if ((needsGlobalMix || dryOversampling) && dryFits)
+    // At 1x a profile's island is the wet path's whole latency and no dry
+    // oversampler exists; the dry is then delayed in step every active block.
+    const bool profileDryDelay = profileMode && islandDelay > 0;
+    if ((needsGlobalMix || dryOversampling || profileDryDelay) && dryFits)
     {
         for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
             dryBuffer.copyFrom(ch, 0, buffer, ch, 0, buffer.getNumSamples());
@@ -1711,6 +1872,8 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             juce::dsp::AudioBlock<float> filterBlock(buffer);
             applyInputFilter(filterBlock);
         }
+
+        feedProfileWhileBypassed(buffer);   // profile mode only; the output is untouched
 
         for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
         {
@@ -1762,25 +1925,8 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             }
         }
 
-        // ========== LATENCY COMPENSATION (Bypass path) ==========
-        // The active path is delayed by the oversampler's reported latency; this
-        // branch skips the oversampler, so it must impose the same integer delay
-        // to stay aligned with the host's PDC and avoid a timing jump when the
-        // bypass<->active threshold is crossed. None interpolation -> the samples
-        // pass through unchanged, only time-shifted. When latency is zero
-        // (oversampling off) the branch stays a truly bit-clean passthrough.
-        if (bypassLatencySamples > 0)
-        {
-            const int numSamp = buffer.getNumSamples();
-            const int numCh   = buffer.getNumChannels();
-            for (int sample = 0; sample < numSamp; ++sample)
-                for (int channel = 0; channel < numCh; ++channel)
-                {
-                    bypassLatencyDelay.pushSample(channel, buffer.getSample(channel, sample));
-                    buffer.setSample(channel, sample, bypassLatencyDelay.popSample(channel));
-                }
-        }
-
+        applyBypassLatency(buffer);
+        applyDuckGain(buffer);   // last, as on the active path
         return;  // Skip all DSP processing
     }
 
@@ -1792,6 +1938,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // CRITICAL: Check for zero samples (would cause division by zero)
     if (actualOversampledSamples == 0)
     {
+        endBlockEarly(buffer);
         return;
     }
 
@@ -1860,7 +2007,10 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     applyCleanBoostEmphasis();
 
     if (!applySubGuardSplit())
+    {
+        endBlockEarly(buffer);
         return;  // band-split safety check failed — bail entire processBlock
+    }
 
     // Clean Boost de-emphasis: complementary high-shelf cut restoring spectral balance.
     applyCleanBoostDeEmphasis();
@@ -1905,6 +2055,13 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         auto dryBlock = juce::dsp::AudioBlock<float>(dryBuffer).getSubBlock(0, static_cast<size_t>(buffer.getNumSamples()));
         dryOversampling->processSamplesUp(dryBlock);     // fills the internal oversampled buffer
         dryOversampling->processSamplesDown(dryBlock);   // identity round-trip: matched phase + latency
+    }
+    else if (profileDryDelay && dryFits)
+    {
+        // Delay the dry by the island's D every active block, so the line's history
+        // tracks the wet path the way the dry oversampler's does.
+        delayInPlace(globalDryDelayLine, dryBuffer.getArrayOfWritePointers(),
+                     buffer.getNumChannels(), buffer.getNumSamples());
     }
 
     if (needsGlobalMix)
@@ -1964,6 +2121,15 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             pushSampleToScope(leftSample, rightSample);
         }
     }
+
+    // Pad the active path out to the reported latency: zero at 48 kHz with a
+    // built-in clip type, where the oversampler's own latency is the whole figure.
+    if (outputPadDelay > 0)
+        delayInPlace(outputPadLine, buffer.getArrayOfWritePointers(),
+                     buffer.getNumChannels(), buffer.getNumSamples());
+
+    // Last: the fade around a rebuild (see updateDuckState).
+    applyDuckGain(buffer);
 }
 
 void PluginProcessor::applyFinalLimiter(juce::AudioBuffer<float>& buffer)
@@ -2159,6 +2325,9 @@ void PluginProcessor::getStateInformation(juce::MemoryBlock& destData)
     // Stamp the schema version so future loads can migrate deterministically
     // instead of sniffing for the presence of individual attributes.
     state.setProperty(stateVersionAttribute, currentStateVersion, nullptr);
+    // The profile is remembered by path. A session opened where the file is
+    // missing keeps the path and falls back to the built-in clip type.
+    state.setProperty(profilePathAttribute, getProfileStatus().path, nullptr);
     std::unique_ptr<juce::XmlElement> xml(state.createXml());
     copyXmlToBinary(*xml, destData);
 }
@@ -2171,6 +2340,24 @@ void PluginProcessor::setStateInformation(const void* data, int sizeInBytes)
         parameters.replaceState(juce::ValueTree::fromXml(*xmlState));
 
         migrateState(*xmlState);
+
+        const juce::String profilePath = xmlState->getStringAttribute(profilePathAttribute);
+        // The path belongs to the session, not the parameters: left in the tree, it
+        // would be copied into every user preset saved from here on.
+        parameters.state.removeProperty(profilePathAttribute, nullptr);
+        if (profilePath.isEmpty())
+        {
+            if (isProfileLoaded() || getProfileStatus().path.isNotEmpty())
+                clearProfile();
+        }
+        else if (juce::File::isAbsolutePath(profilePath) && profilePath != getProfileStatus().path)
+        {
+            // Drop the current profile first, so a session whose file is missing
+            // falls back to the built-in clip type rather than keeping this one.
+            if (isProfileLoaded())
+                clearProfile();
+            loadProfileAsync(juce::File(profilePath));
+        }
 
         // Signal audio thread to reset state (thread-safe handoff)
         stateNeedsReset.store(true, std::memory_order_release);
@@ -2201,6 +2388,533 @@ void PluginProcessor::migrateState(const juce::XmlElement& xmlState)
     // Upgrade the live tree to the current version so the next save is written
     // in the latest format regardless of where this state originated.
     parameters.state.setProperty(stateVersionAttribute, currentStateVersion, nullptr);
+}
+
+// =============================================================================
+// NAM profile (prototype)
+// =============================================================================
+
+int PluginProcessor::beginProfileRequest(const juce::File& file)
+{
+    const juce::ScopedLock sl(profileStatusLock);
+    profileStatus.path = file.getFullPathName();
+    profileStatus.error = {};
+    profileStatus.loading = true;
+    return ++profileRequestId;
+}
+
+void PluginProcessor::loadProfileAsync(const juce::File& file)
+{
+    const int requestId = beginProfileRequest(file);
+    getProfileLoader().addJob([this, file, requestId] { loadProfileNow(file, requestId); });
+}
+
+juce::ThreadPool& PluginProcessor::getProfileLoader()
+{
+    // Created on first use, so an instance that never loads a profile has no
+    // thread. Under the lock: the editor, a host restoring state and the timer can
+    // all get here.
+    const juce::ScopedLock sl(profileStatusLock);
+    if (profileLoader == nullptr)
+        profileLoader = std::make_unique<juce::ThreadPool>(1);
+    return *profileLoader;
+}
+
+bool PluginProcessor::loadProfileBlocking(const juce::File& file)
+{
+    return loadProfileNow(file, beginProfileRequest(file));
+}
+
+bool PluginProcessor::loadProfileNow(const juce::File& file, int requestId)
+{
+    // One model per channel of the widest layout the plugin accepts (stereo), so
+    // a later mono -> stereo change never leaves a channel without a model.
+    constexpr int numChannels = 2;
+
+    // Prepared for what the host last asked for; before the first prepareToPlay,
+    // for NAM's native 48 kHz. The timer re-prepares it if the host moves on.
+    const double hostRate = profileHostSampleRate.load();
+    const int hostBlock = profileHostBlockSize.load();
+    const double sampleRate = hostRate > 0.0 ? hostRate : 48000.0;
+    const int maxBlockSize = hostBlock > 0 ? hostBlock : 512;
+
+    juce::String error;
+    auto profile = NamProfile::load(file, numChannels, sampleRate, maxBlockSize, error);
+
+    const juce::ScopedLock sl(profileStatusLock);
+    if (requestId != profileRequestId.load())
+        return false;   // superseded by a newer load or a clear while this one ran
+
+    profileStatus.loading = false;
+    if (profile == nullptr)
+    {
+        profileStatus.error = error;
+        return false;
+    }
+
+    profileStatus.name = profile->getName();
+    profileStatus.path = file.getFullPathName();
+    profileStatus.expectedSampleRate = profile->getExpectedSampleRate();
+    profileStatus.error = {};
+
+    // The timer decides how it goes in: a crossfade, or a duck and a rebuild. It
+    // supersedes an older load still waiting here, and any clear before it.
+    clearRequested.store(false, std::memory_order_release);
+    profile->setRequestId(requestId);
+    delete stagedProfile.exchange(profile.release(), std::memory_order_acq_rel);
+    return true;
+}
+
+void PluginProcessor::clearProfile()
+{
+    const juce::ScopedLock sl(profileStatusLock);
+    ++profileRequestId;   // an in-flight load must not stage after this
+    profileStatus = {};
+    delete stagedProfile.exchange(nullptr, std::memory_order_acq_rel);
+    delete pendingProfile.exchange(nullptr, std::memory_order_acq_rel);
+
+    // Leaving profile mode rebuilds the oversampler, so it goes through a duck.
+    // With no profile installed there is nothing left to undo.
+    if (profileModeInstalled.load(std::memory_order_acquire))
+    {
+        clearRequested.store(true, std::memory_order_release);
+        requestDuck();
+    }
+}
+
+PluginProcessor::ProfileStatus PluginProcessor::getProfileStatus() const
+{
+    const juce::ScopedLock sl(profileStatusLock);
+    return profileStatus;
+}
+
+bool PluginProcessor::isProfileLoaded() const
+{
+    const juce::ScopedLock sl(profileStatusLock);
+    return profileStatus.name.isNotEmpty();
+}
+
+bool PluginProcessor::isProfileSwitchIdle() const
+{
+    return stagedProfile.load() == nullptr && pendingProfile.load() == nullptr
+        && stagedRefreshesInFlight.load() == 0
+        && incomingProfile == nullptr && ! duckRequested.load() && duckState == DuckState::open;
+}
+
+bool PluginProcessor::isPreparedForHost(const NamProfile& profile) const
+{
+    return juce::exactlyEqual(profile.getPreparedSampleRate(), profileHostSampleRate.load())
+        && profile.getPreparedBlockSize() >= profileHostBlockSize.load();
+}
+
+bool PluginProcessor::canCrossfadeTo(const NamProfile& next) const noexcept
+{
+    return profileMode && activeProfile != nullptr && next.isPrepared()
+        && next.getLatencySamples() == activeProfile->getLatencySamples()
+        && juce::exactlyEqual(next.getPreparedSampleRate(), profilePreparedRate)
+        && next.getPreparedBlockSize() >= profilePreparedBlock;
+}
+
+void PluginProcessor::takePendingProfile() noexcept
+{
+    // One swap at a time, never during a duck, and only with somewhere to park the
+    // profile it replaces.
+    if (incomingProfile != nullptr || duckState != DuckState::open
+        || duckRequested.load(std::memory_order_acquire)
+        || retiredProfile.load(std::memory_order_acquire) != nullptr)
+        return;
+
+    auto* next = pendingProfile.exchange(nullptr, std::memory_order_acq_rel);
+    if (next == nullptr)
+        return;
+
+    if (! canCrossfadeTo(*next))
+    {
+        // The mode or the host settings changed after the timer routed it: hand it
+        // back, and the timer installs it with a duck instead.
+        NamProfile* expected = nullptr;
+        if (! pendingProfile.compare_exchange_strong(expected, next, std::memory_order_acq_rel))
+            retiredProfile.store(next, std::memory_order_release);   // a newer one replaced it
+        pendingNeedsDuck.store(true, std::memory_order_release);
+        return;
+    }
+
+    // The new profile runs beside the current one: silently until it has settled
+    // on the real input, then blended in by applyProfileStage.
+    incomingProfile = next;
+    swapWarmupRemaining = static_cast<int>(std::ceil(
+        juce::jmin(next->getSettleSeconds(), DSPConstants::PROFILE_WARMUP_MAX_S) * profilePreparedRate));
+    swapFadeLength = profileCrossfadeSamples(profilePreparedRate);
+    swapFadePosition = 0;
+}
+
+void PluginProcessor::collectRetiredProfile()
+{
+    delete retiredProfile.exchange(nullptr, std::memory_order_acq_rel);
+}
+
+void PluginProcessor::refreshStagedProfile()
+{
+    const double rate = profileHostSampleRate.load();
+    const int block = profileHostBlockSize.load();
+    if (rate <= 0.0 || block <= 0)
+        return;
+
+    auto* staged = stagedProfile.exchange(nullptr, std::memory_order_acq_rel);
+    if (staged == nullptr)
+        return;
+    if (isPreparedForHost(*staged))
+    {
+        restageProfile(staged, rate, true);
+        return;
+    }
+
+    // A load that read the host settings before prepareToPlay changed them. It is
+    // brought up to date on the loader thread: prepare() prewarms the model, too
+    // long to hold up the message thread. If the host moves on again meanwhile,
+    // the next tick finds it out of date and sends it back. Held by the job, so a
+    // job dropped unrun (the destructor) frees it.
+    ++stagedRefreshesInFlight;
+    auto owned = std::make_shared<std::unique_ptr<NamProfile>>(staged);
+    getProfileLoader().addJob([this, owned, rate, block]
+    {
+        const bool usable = (*owned)->prepare(rate, block);
+        restageProfile(owned->release(), rate, usable);
+        --stagedRefreshesInFlight;
+    });
+}
+
+void PluginProcessor::restageProfile(NamProfile* staged, double rate, bool usable)
+{
+    {
+        // A clear or a newer load while it was out of the slot supersedes it. Both
+        // bump the request id under this lock, so an empty slot alone can't tell.
+        const juce::ScopedLock sl(profileStatusLock);
+        if (staged->getRequestId() == profileRequestId.load())
+        {
+            if (! usable)
+            {
+                profileStatus.name = {};   // the path stays, so the session remembers it
+                profileStatus.error = NamProfile::unsupportedRateMessage(rate);
+            }
+            else
+            {
+                NamProfile* expected = nullptr;
+                if (stagedProfile.compare_exchange_strong(expected, staged, std::memory_order_acq_rel))
+                    return;
+            }
+        }
+    }
+    delete staged;
+}
+
+void PluginProcessor::routeStagedProfile()
+{
+    // A duck already on its way installs whatever is staged.
+    if (duckRequested.load(std::memory_order_acquire))
+        return;
+
+    // Held while the profile is out of the slot, so a clear can't run in between
+    // and then see it come back.
+    const juce::ScopedLock sl(profileStatusLock);
+
+    auto* staged = stagedProfile.exchange(nullptr, std::memory_order_acq_rel);
+    if (staged == nullptr)
+        return;
+
+    const bool ready = isPreparedForHost(*staged);
+    if (ready && profileModeInstalled.load(std::memory_order_acquire)
+        && staged->getLatencySamples() == installedIslandDelay.load(std::memory_order_acquire))
+    {
+        // Same island delay: the audio thread blends into it. A target it hasn't
+        // taken yet is superseded.
+        delete pendingProfile.exchange(staged, std::memory_order_acq_rel);
+        return;
+    }
+
+    // Entering profile mode, or a different delay: it goes in with a rebuild.
+    NamProfile* expected = nullptr;
+    if (! stagedProfile.compare_exchange_strong(expected, staged, std::memory_order_acq_rel))
+    {
+        delete staged;   // a newer load was staged meanwhile; the next tick routes it
+        return;
+    }
+    if (ready)
+        requestDuck();
+}
+
+void PluginProcessor::requestDuck()
+{
+    // The timestamp goes in before the flag is raised, so serviceDuck on another
+    // thread can never pair the new flag with an old time and time out at once.
+    if (! duckRequested.load(std::memory_order_acquire))
+    {
+        duckRequestedAtMs.store(juce::Time::getMillisecondCounterHiRes(), std::memory_order_release);
+        duckRequested.store(true, std::memory_order_release);
+    }
+    // Poll quickly while the audio thread fades out. Timer calls belong on the
+    // message thread; from anywhere else the next regular tick picks this up.
+    if (juce::MessageManager::existsAndIsCurrentThread())
+        startTimer(DSPConstants::DUCK_POLL_MS);
+}
+
+void PluginProcessor::serviceDuck()
+{
+    if (! duckRequested.load(std::memory_order_acquire))
+        return;
+
+    // An offline render doesn't duck (see updateDuckState): rebuild straight away,
+    // as every rebuild did before the duck existed.
+    if (isNonRealtime())
+    {
+        performSwitch();
+        return;
+    }
+
+    // The audio thread normally reports silence within a block or two. If it
+    // doesn't (transport stopped, plugin suspended), nothing is playing, so the
+    // rebuild goes ahead anyway.
+    const double sampleRate = getSampleRate();
+    const double blockMs = sampleRate > 0.0 ? 1000.0 * getBlockSize() / sampleRate : 0.0;
+    const double timeoutMs = juce::jmax(static_cast<double>(DSPConstants::DUCK_TIMEOUT_MS), 3.0 * blockMs);
+    const bool timedOut = juce::Time::getMillisecondCounterHiRes()
+                        - duckRequestedAtMs.load(std::memory_order_acquire) >= timeoutMs;
+    if (duckReady.load(std::memory_order_acquire) || timedOut)
+        performSwitch();
+}
+
+void PluginProcessor::performSwitch()
+{
+    std::vector<NamProfile*> toFree;
+    {
+        const juce::ScopedLock callbackLockGuard(getCallbackLock());
+        // Lowered before the requests are read, so a clear arriving from another
+        // thread after that finds no duck pending and asks for its own; lowered
+        // afterwards, it would wipe that clear's duck and leave it unserved.
+        duckRequested.store(false, std::memory_order_release);
+        duckReady.store(false, std::memory_order_release);
+        installRequestedProfile(toFree);
+        const double sampleRate = getSampleRate();
+        const int hostBlockSize = getBlockSize();
+        if (sampleRate > 0.0 && hostBlockSize > 0)
+            rebuildOversampling(sampleRate, hostBlockSize);
+        rebuildGeneration.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    // Freed outside the lock, so the audio thread waits only for the rebuild itself.
+    for (auto* profile : toFree)
+        delete profile;
+    if (juce::MessageManager::existsAndIsCurrentThread())
+        startTimer(DSPConstants::PROFILE_TIMER_MS);
+}
+
+void PluginProcessor::installRequestedProfile(std::vector<NamProfile*>& toFree)
+{
+    // Callers hold the callback lock. This lock, taken after it, makes a clear from
+    // another thread land wholly before or after: it either empties the slots read
+    // below, or sees the profileModeInstalled written at the end.
+    const juce::ScopedLock sl(profileStatusLock);
+
+    // Newest intent wins: a finished load, then a clear, then a blend target the
+    // audio thread hasn't taken, then the profile it was fading in.
+    NamProfile* next = nullptr;
+    bool change = false;
+
+    if (auto* staged = stagedProfile.exchange(nullptr, std::memory_order_acq_rel))
+    {
+        if (isPreparedForHost(*staged))
+        {
+            next = staged;
+            change = true;
+        }
+        else
+        {
+            // Prepared for settings the host has since left: the timer has the
+            // loader re-prepare it and routes it again.
+            NamProfile* expected = nullptr;
+            if (! stagedProfile.compare_exchange_strong(expected, staged, std::memory_order_acq_rel))
+                toFree.push_back(staged);   // a newer load arrived meanwhile
+        }
+    }
+    if (clearRequested.exchange(false, std::memory_order_acq_rel))
+        change = true;   // with nothing newer staged, next stays nullptr: no profile
+    if (auto* pending = pendingProfile.exchange(nullptr, std::memory_order_acq_rel))
+    {
+        if (change)
+        {
+            // A newer load or a clear has already decided. Staging this one again
+            // would bring it back over that on the next tick.
+            toFree.push_back(pending);
+        }
+        else if (! isPreparedForHost(*pending))
+        {
+            // Prepared for settings the host has since left: the timer has the
+            // loader re-prepare it and routes it again.
+            NamProfile* expected = nullptr;
+            if (! stagedProfile.compare_exchange_strong(expected, pending, std::memory_order_acq_rel))
+                toFree.push_back(pending);   // a newer load arrived meanwhile
+        }
+        else
+        {
+            next = pending;
+            change = true;
+        }
+    }
+    if (incomingProfile != nullptr)
+    {
+        if (change)
+        {
+            toFree.push_back(incomingProfile);
+        }
+        else
+        {
+            next = incomingProfile;
+            change = true;
+        }
+        incomingProfile = nullptr;
+    }
+    if (auto* retired = retiredProfile.exchange(nullptr, std::memory_order_acq_rel))
+        toFree.push_back(retired);
+
+    if (change)
+    {
+        if (activeProfile != nullptr)
+            toFree.push_back(activeProfile);
+        activeProfile = next;
+    }
+
+    profileMode = activeProfile != nullptr && activeProfile->isPrepared()
+               && activeProfile->getNumChannels() > 0;
+    profileModeInstalled.store(profileMode, std::memory_order_release);
+    installedIslandDelay.store(profileMode ? activeProfile->getLatencySamples() : 0,
+                               std::memory_order_release);
+    swapWarmupRemaining = 0;
+    swapFadePosition = 0;
+}
+
+void PluginProcessor::prepareProfilesForHost(double sampleRate, int samplesPerBlock)
+{
+    // Called from prepareToPlay under the callback lock, with processing stopped:
+    // audio-thread state may be touched and a model may be prewarmed here.
+    profileHostSampleRate.store(sampleRate);
+    profileHostBlockSize.store(samplesPerBlock);
+    profilePreparedRate = sampleRate;
+    profilePreparedBlock = samplesPerBlock;
+    profileRightStep = 1.0f / static_cast<float>(profileCrossfadeSamples(sampleRate));
+
+    std::vector<NamProfile*> toFree;
+    bool unsupported = false;
+    const auto bringUp = [&](NamProfile* profile) -> NamProfile*
+    {
+        if (profile == nullptr || isPreparedForHost(*profile) || profile->prepare(sampleRate, samplesPerBlock))
+            return profile;
+        unsupported = true;   // the host moved to a rate this profile can't run at
+        toFree.push_back(profile);
+        return nullptr;
+    };
+    const auto bringUpSlot = [&](std::atomic<NamProfile*>& slot)
+    {
+        if (auto* profile = bringUp(slot.exchange(nullptr, std::memory_order_acq_rel)))
+        {
+            NamProfile* expected = nullptr;
+            if (! slot.compare_exchange_strong(expected, profile, std::memory_order_acq_rel))
+                toFree.push_back(profile);   // a newer one arrived meanwhile
+        }
+    };
+    bringUpSlot(stagedProfile);
+    bringUpSlot(pendingProfile);
+    incomingProfile = bringUp(incomingProfile);
+    activeProfile = bringUp(activeProfile);
+    if (unsupported)
+    {
+        const juce::ScopedLock sl(profileStatusLock);
+        profileStatus.name = {};   // the path stays, so the session remembers it
+        profileStatus.error = NamProfile::unsupportedRateMessage(sampleRate);
+    }
+
+    // Finish any pending switch the way the timer would, except that nothing fades.
+    // prepareToPlay rebuilds with the current settings next, so a flag still asking
+    // for a rebuild is stale and must not duck on the next tick. The flags drop
+    // first, as in performSwitch, so a clear arriving meanwhile keeps its duck.
+    duckRequested.store(false, std::memory_order_release);
+    duckReady.store(false, std::memory_order_release);
+    pendingNeedsDuck.store(false, std::memory_order_release);
+    oversamplingRebuildPending.store(false, std::memory_order_release);
+    installRequestedProfile(toFree);
+    // No duck is pending now, so the timer can drop back from its quick poll.
+    // Timer calls belong on the message thread (see requestDuck).
+    if (juce::MessageManager::existsAndIsCurrentThread()
+        && getTimerInterval() == DSPConstants::DUCK_POLL_MS)
+        startTimer(DSPConstants::PROFILE_TIMER_MS);
+    duckState = DuckState::open;
+    duckGain = 1.0f;
+    seenRebuildGeneration = rebuildGeneration.load(std::memory_order_acquire);
+    duckStep = static_cast<float>(1.0 / (DSPConstants::DUCK_FADE_TIME_S * sampleRate));
+
+    for (auto* profile : toFree)
+        delete profile;
+}
+
+void PluginProcessor::updateDuckState() noexcept
+{
+    const int generation = rebuildGeneration.load(std::memory_order_acquire);
+    if (generation != seenRebuildGeneration)
+    {
+        seenRebuildGeneration = generation;
+        // A rebuild finished. Fade back in only if this thread had started fading
+        // out; one that ran while audio wasn't flowing leaves the level alone.
+        if (duckState == DuckState::closing || duckState == DuckState::closed)
+        {
+            duckState = DuckState::opening;
+            duckGain = 0.0f;
+        }
+    }
+    if (isNonRealtime())
+    {
+        // An offline render runs faster than the timer that performs the rebuild,
+        // so waiting for it in silence would print that silence into the file many
+        // times over. Never duck while bouncing: serviceDuck rebuilds at once
+        // instead, and a duck already under way is abandoned at full level.
+        if (duckState == DuckState::closing || duckState == DuckState::closed)
+        {
+            duckState = DuckState::open;
+            duckGain = 1.0f;
+        }
+        return;
+    }
+    if (duckState == DuckState::open && duckRequested.load(std::memory_order_acquire))
+        duckState = DuckState::closing;
+}
+
+void PluginProcessor::applyDuckGain(juce::AudioBuffer<float>& buffer) noexcept
+{
+    if (duckState == DuckState::open)
+        return;   // unity: the output stays bit-exact
+
+    const bool closing = duckState == DuckState::closing;
+    const int numSamples = buffer.getNumSamples();
+    float gain = duckGain;
+    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+    {
+        gain = duckGain;
+        auto* data = buffer.getWritePointer(ch);
+        for (int i = 0; i < numSamples; ++i)
+        {
+            gain = closing ? juce::jmax(0.0f, gain - duckStep) : juce::jmin(1.0f, gain + duckStep);
+            data[i] *= gain;
+        }
+    }
+    duckGain = gain;
+
+    if (closing && duckGain <= 0.0f)
+    {
+        duckState = DuckState::closed;
+        duckReady.store(true, std::memory_order_release);
+    }
+    else if (! closing && duckGain >= 1.0f)
+    {
+        duckState = DuckState::open;
+    }
 }
 
 // =============================================================================
@@ -2332,6 +3046,310 @@ float PluginProcessor::applyDistortionStage(float inputSample, int channel,
     return inputSample * (1.0f - sampleMixAmount) + distorted * sampleMixAmount;
 }
 
+PluginProcessor::SampleControls PluginProcessor::advanceSampleControls(float lfoPhaseIncrement) noexcept
+{
+    SampleControls c;
+    c.gain            = inputGainRamp.advance();
+    c.drive           = driveRamp.advance();
+    c.mix             = distMixRamp.advance();
+    c.distortionParam = pb_modulatedDistortionParam;
+
+    // Only destinations 0 (distortion) and 3 (mix) are modulated here. Destination 4
+    // (output gain) is handled in the output-gain stage; advancing lfoPhase here too
+    // would double-advance it and run the tremolo at ~2x rate.
+    if (pb_lfoEnabled && pb_lfoPhaseIncrement > 0.0f
+        && (pb_lfoDestination == 0 || pb_lfoDestination == 3))
+    {
+        float sampleLfoValue = generateLFOWaveform(lfoPhase, pb_lfoWaveform);
+        if (std::isnan(sampleLfoValue) || std::isinf(sampleLfoValue))
+            sampleLfoValue = 0.0f;
+        const float sampleLfoMod = sampleLfoValue * pb_lfoSign * pb_lfoDepth / 100.0f;
+
+        if (pb_lfoDestination == 0)
+        {
+            c.distortionParam = juce::jlimit(0.0f, 100.0f,
+                pb_distortionParam + sampleLfoMod * 50.0f);
+            c.drive = 1.0f + (c.distortionParam / 100.0f) * 3.0f;
+            if (pb_extremeEnabled) c.drive *= 4.0f;
+        }
+        else if (pb_lfoDestination == 3)
+        {
+            const float modMix = juce::jlimit(0.0f, 100.0f,
+                pb_distMix + sampleLfoMod * 50.0f);
+            c.mix = modMix / 100.0f;
+        }
+
+        lfoPhase += lfoPhaseIncrement;
+        if (lfoPhase >= 1.0f)
+            lfoPhase -= 1.0f;
+    }
+    return c;
+}
+
+namespace
+{
+    // Distortion Amount drives a profile through its input level, the way
+    // pushing a pedal harder does: 0% -> -24 dB, 50% -> -6 dB, 100% -> +12 dB.
+    // Mix-level material is far hotter than the instrument level most captures
+    // expect, so the range sits mostly below unity.
+    float profileInputGainDb(float distortionParam) noexcept
+    {
+        return -24.0f + distortionParam * 0.36f;
+    }
+}
+
+bool PluginProcessor::canRunProfileStage(int numChannels) const noexcept
+{
+    // Profile mode is only on once the rebuild to 1x has run, so the island sees
+    // the host rate it was prepared for. Block length is no bar: callers run a
+    // block longer than the scratch in pieces.
+    const auto* profile = activeProfile;
+    return profileMode && profile != nullptr && profile->isPrepared() && oversamplingFactor == 1
+        && numChannels >= 1 && numChannels <= 2 && numChannels <= profile->getNumChannels()
+        && profileScratch.getNumSamples() > 0
+        && profileScratch.getNumChannels() >= profileScratchChannels;
+}
+
+void PluginProcessor::retireOutgoingProfileIfFaded() noexcept
+{
+    if (incomingProfile == nullptr || swapWarmupRemaining > 0 || swapFadePosition < swapFadeLength)
+        return;
+    // Fully faded in: the outgoing profile goes to the timer to be freed.
+    retiredProfile.store(activeProfile, std::memory_order_release);
+    activeProfile = incomingProfile;
+    incomingProfile = nullptr;
+}
+
+void PluginProcessor::feedProfileWhileBypassed(const juce::AudioBuffer<float>& buffer) noexcept
+{
+    // True bypass skips the chain, so without this the island, the model and the
+    // dry delays would freeze and, once the amount comes back up, replay whatever
+    // they held when bypass began. They run on the real input instead, their
+    // outputs discarded, as applyProfileStage's own sub-threshold stretch does.
+    const int numSamples = buffer.getNumSamples();
+    const int numChannels = buffer.getNumChannels();
+    if (! canRunProfileStage(numChannels))
+        return;
+
+    // Below the bypass threshold the model hears the input at the bottom of its
+    // input-gain curve, as it would on the active path.
+    const float inputGain = inputGainRamp.peek()
+        * juce::Decibels::decibelsToGain(profileInputGainDb(0.0f));
+    // The global dry line takes the captured dry, which exists only when it fits.
+    const bool feedGlobalDry = numSamples <= dryBuffer.getNumSamples()
+                            && numChannels <= dryBuffer.getNumChannels();
+    const int chunk = profileScratch.getNumSamples();
+    for (int done = 0; done < numSamples; done += chunk)
+    {
+        const int n = juce::jmin(chunk, numSamples - done);
+        auto* incoming = incomingProfile;
+        const bool rightRuns = beginRightChannelChunk();
+        for (int i = 0; i < n; ++i)
+            nextRightChannelWeight();
+        for (int ch = 0; ch < numChannels; ++ch)
+        {
+            if (ch == 1 && ! rightRuns)
+                continue;
+            float* modelIn = profileScratch.getWritePointer(scratchModelIn + ch);
+            float* out = profileScratch.getWritePointer(scratchActiveOut + ch);
+            const float* in = buffer.getReadPointer(ch) + done;
+            for (int i = 0; i < n; ++i)
+                modelIn[i] = in[i] * inputGain;
+            activeProfile->process(ch, modelIn, out, n);
+            if (incoming != nullptr)
+                incoming->process(ch, modelIn, out, n);
+        }
+
+        // A swap under way keeps its clock, so it can't stall until bypass ends.
+        if (incoming != nullptr)
+        {
+            const int warm = juce::jmin(swapWarmupRemaining, n);
+            swapWarmupRemaining -= warm;
+            swapFadePosition = juce::jmin(swapFadeLength, swapFadePosition + n - warm);
+            retireOutgoingProfileIfFaded();
+        }
+
+        if (islandDelay <= 0)
+            continue;
+
+        // The Distortion Mix dry line takes the stage input and the global dry line
+        // the captured dry, both through a scratch copy so the bypass output is untouched.
+        std::array<float*, 2> dry {};
+        for (int ch = 0; ch < numChannels; ++ch)
+        {
+            dry[static_cast<size_t>(ch)] = profileScratch.getWritePointer(scratchDry + ch);
+            std::copy_n(buffer.getReadPointer(ch) + done, n, dry[static_cast<size_t>(ch)]);
+        }
+        delayInPlace(distMixDryDelayLine, dry.data(), numChannels, n);
+        if (feedGlobalDry)
+        {
+            for (int ch = 0; ch < numChannels; ++ch)
+                std::copy_n(dryBuffer.getReadPointer(ch) + done, n, dry[static_cast<size_t>(ch)]);
+            delayInPlace(globalDryDelayLine, dry.data(), numChannels, n);
+        }
+    }
+
+    // No low band is split off while bypassed, so its line restarts from silence,
+    // as it does when Sub Guard switches on.
+    if (islandDelay > 0)
+        subGuardLowDelayLine.reset();
+}
+
+bool PluginProcessor::beginRightChannelChunk() noexcept
+{
+    if (! profileShareMono && profileRightIdle)
+    {
+        // Back from a rest: channel 1's models run unheard until they have settled
+        // on their own input, as an incoming profile does before its crossfade.
+        double settle = activeProfile->getSettleSeconds();
+        if (incomingProfile != nullptr)
+            settle = juce::jmax(settle, incomingProfile->getSettleSeconds());
+        profileRightWarmup = static_cast<int>(std::ceil(
+            juce::jmin(settle, DSPConstants::PROFILE_WARMUP_MAX_S) * profilePreparedRate));
+        profileRightIdle = false;
+    }
+    else if (profileShareMono && profileRightWeight <= 0.0f)
+    {
+        profileRightIdle = true;
+    }
+    return ! profileRightIdle;
+}
+
+float PluginProcessor::nextRightChannelWeight() noexcept
+{
+    if (profileShareMono)
+        profileRightWeight = juce::jmax(0.0f, profileRightWeight - profileRightStep);
+    else if (profileRightWarmup > 0)
+        --profileRightWarmup;
+    else
+        profileRightWeight = juce::jmin(1.0f, profileRightWeight + profileRightStep);
+    return profileRightWeight;
+}
+
+bool PluginProcessor::applyProfileStage(float* const* channels) noexcept
+{
+    const int numSamples = static_cast<int>(pb_numSamples);
+    const int numChannels = static_cast<int>(pb_numChannels);
+    if (! canRunProfileStage(numChannels))
+        return false;
+
+    // A host can hand over a block longer than it prepared for. The profile runs
+    // on it in pieces the scratch holds, rather than dropping to the built-in clip
+    // type, whose zero latency would put the wet path D ahead of the dry and low
+    // band that still wait the island's D.
+    const int chunk = profileScratch.getNumSamples();
+    for (int done = 0; done < numSamples; done += chunk)
+    {
+        std::array<float*, 2> piece {};
+        for (int ch = 0; ch < numChannels; ++ch)
+            piece[static_cast<size_t>(ch)] = channels[ch] + done;
+        applyProfileChunk(piece.data(), numChannels, juce::jmin(chunk, numSamples - done));
+    }
+    return true;
+}
+
+void PluginProcessor::applyProfileChunk(float* const* channels, int numChannels, int numSamples) noexcept
+{
+    auto* profile = activeProfile;
+
+    std::array<float*, 2> modelIn {};
+    std::array<float*, 2> activeOut {};
+    std::array<float*, 2> incomingOut {};
+    for (int ch = 0; ch < numChannels; ++ch)
+    {
+        const auto idx = static_cast<size_t>(ch);
+        modelIn[idx]     = profileScratch.getWritePointer(scratchModelIn + ch);
+        activeOut[idx]   = profileScratch.getWritePointer(scratchActiveOut + ch);
+        incomingOut[idx] = profileScratch.getWritePointer(scratchIncomingOut + ch);
+    }
+    float* mix = profileScratch.getWritePointer(scratchMix);
+    const float lfoPhaseIncrement = pb_lfoPhaseIncrement / static_cast<float>(oversamplingFactor);
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        const auto c = advanceSampleControls(lfoPhaseIncrement);
+        // Same bypass threshold as applyDistortionStage. The model keeps running
+        // below it so its state stays continuous when the amount comes back up.
+        mix[i] = c.distortionParam < 0.5f ? 0.0f : c.mix;
+        const float inputGain = c.gain
+            * juce::Decibels::decibelsToGain(profileInputGainDb(c.distortionParam));
+        for (size_t ch = 0; ch < static_cast<size_t>(numChannels); ++ch)
+            modelIn[ch][i] = channels[ch][i] * inputGain;
+    }
+
+    // The dry half of the Distortion Mix blend waits the island's D, so the blend
+    // never comb-filters (D is 0 when the host runs at the trained rate).
+    std::array<float*, 2> dry {};
+    for (int ch = 0; ch < numChannels; ++ch)
+    {
+        dry[static_cast<size_t>(ch)] = profileScratch.getWritePointer(scratchDry + ch);
+        std::copy(channels[ch], channels[ch] + numSamples, dry[static_cast<size_t>(ch)]);
+    }
+    if (islandDelay > 0)
+        delayInPlace(distMixDryDelayLine, dry.data(), numChannels, numSamples);
+
+    // A profile on its way in runs on the same input: silently until it has settled,
+    // then blended in linearly. The two outputs are correlated, so a linear blend
+    // keeps the level where an equal-power one would bump it.
+    auto* incoming = incomingProfile;
+    const bool rightRuns = beginRightChannelChunk();
+    for (int ch = 0; ch < numChannels; ++ch)
+    {
+        if (ch == 1 && ! rightRuns)
+            continue;
+        const auto idx = static_cast<size_t>(ch);
+        profile->process(ch, modelIn[idx], activeOut[idx], numSamples);
+        if (incoming != nullptr)
+            incoming->process(ch, modelIn[idx], incomingOut[idx], numSamples);
+    }
+
+    const float activeGain = profile->getOutputGain();
+    const float incomingGain = incoming != nullptr ? incoming->getOutputGain() : 0.0f;
+    int warmup = swapWarmupRemaining;
+    int fadePosition = swapFadePosition;
+    for (int i = 0; i < numSamples; ++i)
+    {
+        float weight = 0.0f;   // the incoming profile's share
+        if (incoming != nullptr)
+        {
+            if (warmup > 0)
+            {
+                --warmup;
+            }
+            else
+            {
+                if (fadePosition < swapFadeLength)
+                    ++fadePosition;
+                weight = static_cast<float>(fadePosition) / static_cast<float>(swapFadeLength);
+            }
+        }
+        const auto wetOf = [&](size_t ch)
+        {
+            float wet = activeOut[ch][i] * activeGain * (1.0f - weight);
+            if (incoming != nullptr)
+                wet += incomingOut[ch][i] * incomingGain * weight;
+            return wet;
+        };
+        const float wet0 = wetOf(0);
+        channels[0][i] = dry[0][i] * (1.0f - mix[i]) + wet0 * mix[i];
+        if (numChannels > 1)
+        {
+            // A resting channel 1 has no output of its own, so it is only read
+            // while it has a share.
+            const float right = nextRightChannelWeight();
+            const float wet1 = right > 0.0f ? right * wetOf(1) + (1.0f - right) * wet0 : wet0;
+            channels[1][i] = dry[1][i] * (1.0f - mix[i]) + wet1 * mix[i];
+        }
+    }
+
+    if (incoming != nullptr)
+    {
+        swapWarmupRemaining = warmup;
+        swapFadePosition = fadePosition;
+        retireOutgoingProfileIfFaded();
+    }
+}
+
 bool PluginProcessor::applySubGuardSplit()
 {
     pb_subGuardActive = (pb_subGuardFreq > 1.0f);
@@ -2344,49 +3362,21 @@ bool PluginProcessor::applySubGuardSplit()
         // Per-sample LFO phase increment (oversampled rate: divide by oversamplingFactor)
         const float lfoOversampledPhaseInc = pb_lfoPhaseIncrement / static_cast<float>(oversamplingFactor);
 
+        std::array<float*, 2> channels {};
+        for (size_t channel = 0; channel < juce::jmin(pb_numChannels, channels.size()); ++channel)
+            channels[channel] = pb_oversampledBlock.getChannelPointer(channel);
+        if (applyProfileStage(channels.data()))
+            return true;
+
         for (size_t sample = 0; sample < pb_numSamples; ++sample)
         {
-            const float currentGain = inputGainRamp.advance();
-            float sampleDrive       = driveRamp.advance();
-            float sampleMixAmount   = distMixRamp.advance();
-            float sampleDistortionParam = pb_modulatedDistortionParam;
-
-            // Only destinations 0 (distortion) and 3 (mix) are modulated here. Destination 4
-            // (output gain) is handled in the output-gain stage; advancing lfoPhase here too
-            // would double-advance it and run the tremolo at ~2x rate.
-            if (pb_lfoEnabled && pb_lfoPhaseIncrement > 0.0f
-                && (pb_lfoDestination == 0 || pb_lfoDestination == 3))
-            {
-                float sampleLfoValue = generateLFOWaveform(lfoPhase, pb_lfoWaveform);
-                if (std::isnan(sampleLfoValue) || std::isinf(sampleLfoValue))
-                    sampleLfoValue = 0.0f;
-                const float sampleLfoMod = sampleLfoValue * pb_lfoSign * pb_lfoDepth / 100.0f;
-
-                if (pb_lfoDestination == 0)
-                {
-                    sampleDistortionParam = juce::jlimit(0.0f, 100.0f,
-                        pb_distortionParam + sampleLfoMod * 50.0f);
-                    sampleDrive = 1.0f + (sampleDistortionParam / 100.0f) * 3.0f;
-                    if (pb_extremeEnabled) sampleDrive *= 4.0f;
-                }
-                else if (pb_lfoDestination == 3)
-                {
-                    const float modMix = juce::jlimit(0.0f, 100.0f,
-                        pb_distMix + sampleLfoMod * 50.0f);
-                    sampleMixAmount = modMix / 100.0f;
-                }
-
-                lfoPhase += lfoOversampledPhaseInc;
-                if (lfoPhase >= 1.0f)
-                    lfoPhase -= 1.0f;
-            }
+            const auto c = advanceSampleControls(lfoOversampledPhaseInc);
 
             for (size_t channel = 0; channel < pb_numChannels; ++channel)
             {
                 auto* channelData = pb_oversampledBlock.getChannelPointer(channel);
                 channelData[sample] = applyDistortionStage(channelData[sample],
-                    static_cast<int>(channel), currentGain, sampleDrive,
-                    sampleMixAmount, sampleDistortionParam);
+                    static_cast<int>(channel), c.gain, c.drive, c.mix, c.distortionParam);
             }
         }
         return true;
@@ -2409,6 +3399,7 @@ bool PluginProcessor::applySubGuardSplit()
     {
         currentSubGuardOrder = targetOrder;
         sgCrossfadeActive = false;
+        subGuardLowDelayLine.reset();   // no stale low band from the last time Sub Guard ran
     }
     sgWasActive = true;
 
@@ -2516,6 +3507,12 @@ bool PluginProcessor::applySubGuardSplit()
         }
     }
 
+    // A profile's island delays the high band by its D; the clean low band waits the
+    // same D, so the recombine, the subtract and the re-add below all line up.
+    if (profileMode && islandDelay > 0)
+        delayInPlace(subGuardLowDelayLine, lowBandBuffer.getArrayOfWritePointers(),
+                     static_cast<int>(pb_numChannels), static_cast<int>(pb_numSamples));
+
     // ========== AUTO-GAIN: Measure high-band input RMS (post-crossover, pre-distortion) ==========
     // Matches the band the output RMS is measured on (high band only, after the clean low
     // is stripped). Keeping both envelopes on the same band stops auto-gain from over-boosting
@@ -2541,49 +3538,22 @@ bool PluginProcessor::applySubGuardSplit()
     // Apply studio distortion ONLY to the (possibly blended) high band
     const float lfoOversampledPhaseIncSG = pb_lfoPhaseIncrement / static_cast<float>(oversamplingFactor);
 
-    for (size_t sample = 0; sample < pb_numSamples; ++sample)
+    std::array<float*, 2> highChannels {};
+    for (size_t channel = 0; channel < juce::jmin(pb_numChannels, highChannels.size()); ++channel)
+        highChannels[channel] = highBandBuffer.getWritePointer(static_cast<int>(channel));
+
+    if (! applyProfileStage(highChannels.data()))
     {
-        const float currentGain = inputGainRamp.advance();
-        float sampleDrive       = driveRamp.advance();
-        float sampleMixAmount   = distMixRamp.advance();
-        float sampleDistortionParam = pb_modulatedDistortionParam;
-
-        // Only destinations 0 (distortion) and 3 (mix) are modulated here. Destination 4
-        // (output gain) is handled in the output-gain stage; advancing lfoPhase here too
-        // would double-advance it and run the tremolo at ~2x rate.
-        if (pb_lfoEnabled && pb_lfoPhaseIncrement > 0.0f
-            && (pb_lfoDestination == 0 || pb_lfoDestination == 3))
+        for (size_t sample = 0; sample < pb_numSamples; ++sample)
         {
-            float sampleLfoValue = generateLFOWaveform(lfoPhase, pb_lfoWaveform);
-            if (std::isnan(sampleLfoValue) || std::isinf(sampleLfoValue))
-                sampleLfoValue = 0.0f;
-            const float sampleLfoMod = sampleLfoValue * pb_lfoSign * pb_lfoDepth / 100.0f;
+            const auto c = advanceSampleControls(lfoOversampledPhaseIncSG);
 
-            if (pb_lfoDestination == 0)
+            for (size_t channel = 0; channel < pb_numChannels; ++channel)
             {
-                sampleDistortionParam = juce::jlimit(0.0f, 100.0f,
-                    pb_distortionParam + sampleLfoMod * 50.0f);
-                sampleDrive = 1.0f + (sampleDistortionParam / 100.0f) * 3.0f;
-                if (pb_extremeEnabled) sampleDrive *= 4.0f;
+                auto* highBandData = highBandBuffer.getWritePointer(static_cast<int>(channel));
+                highBandData[sample] = applyDistortionStage(highBandData[sample],
+                    static_cast<int>(channel), c.gain, c.drive, c.mix, c.distortionParam);
             }
-            else if (pb_lfoDestination == 3)
-            {
-                const float modMix = juce::jlimit(0.0f, 100.0f,
-                    pb_distMix + sampleLfoMod * 50.0f);
-                sampleMixAmount = modMix / 100.0f;
-            }
-
-            lfoPhase += lfoOversampledPhaseIncSG;
-            if (lfoPhase >= 1.0f)
-                lfoPhase -= 1.0f;
-        }
-
-        for (size_t channel = 0; channel < pb_numChannels; ++channel)
-        {
-            auto* highBandData = highBandBuffer.getWritePointer(static_cast<int>(channel));
-            highBandData[sample] = applyDistortionStage(highBandData[sample],
-                static_cast<int>(channel), currentGain, sampleDrive,
-                sampleMixAmount, sampleDistortionParam);
         }
     }
 
@@ -3156,6 +4126,18 @@ void PluginProcessor::resetDSPState()
 
     // Clear the bypass latency-compensation delay so it doesn't replay stale tails
     bypassLatencyDelay.reset();
+    outputPadLine.reset();
+    globalDryDelayLine.reset();
+    subGuardLowDelayLine.reset();
+    distMixDryDelayLine.reset();
+    // The profiles' islands restart with the dry lines above, so the wet and dry
+    // halves come back in step instead of the island replaying pre-reset audio.
+    // prepareProfilesForHost skips a profile already prepared for these settings,
+    // so this is the only reset that one gets.
+    if (activeProfile != nullptr)
+        activeProfile->reset();
+    if (incomingProfile != nullptr)
+        incomingProfile->reset();
 
     // Abort any in-flight Sub Guard order crossfade; the next active block re-seeds
     // the order from the current frequency (OFF->ON snap path).

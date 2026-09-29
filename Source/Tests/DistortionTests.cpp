@@ -5019,4 +5019,1799 @@ void InputFilterModeTest::runTest()
     }
 }
 
+
+//==============================================================================
+// Resampling island: a model at its trained rate inside any host rate
+//==============================================================================
+
+namespace
+{
+    constexpr double kTwoPi = juce::MathConstants<double>::twoPi;
+
+    std::vector<float> sineAt(double frequency, double sampleRate, double seconds, float amplitude)
+    {
+        std::vector<float> x(static_cast<size_t>(std::lround(sampleRate * seconds)));
+        for (size_t i = 0; i < x.size(); ++i)
+            x[i] = amplitude * static_cast<float>(std::sin(kTwoPi * frequency * static_cast<double>(i) / sampleRate));
+        return x;
+    }
+
+    std::vector<float> multitoneAt(const std::vector<double>& frequencies, double sampleRate,
+                                   double seconds, float amplitudeEach)
+    {
+        std::vector<float> x(static_cast<size_t>(std::lround(sampleRate * seconds)), 0.0f);
+        for (size_t i = 0; i < x.size(); ++i)
+            for (size_t f = 0; f < frequencies.size(); ++f)
+                x[i] += amplitudeEach * static_cast<float>(std::sin(kTwoPi * frequencies[f] * static_cast<double>(i) / sampleRate
+                                                                    + 0.7 * static_cast<double>(f)));   // spread the phases
+        return x;
+    }
+
+    // Amplitude of the component at `frequency` in x[start, start + length): a
+    // Hann-windowed single-bin DFT, exact for a steady tone.
+    double toneAmplitude(const std::vector<float>& x, size_t start, size_t length,
+                         double frequency, double sampleRate)
+    {
+        double re = 0.0, im = 0.0;
+        for (size_t i = 0; i < length; ++i)
+        {
+            const double window = 0.5 - 0.5 * std::cos(kTwoPi * static_cast<double>(i) / static_cast<double>(length - 1));
+            const double phase = kTwoPi * frequency * static_cast<double>(i) / sampleRate;
+            re += static_cast<double>(x[start + i]) * window * std::cos(phase);
+            im -= static_cast<double>(x[start + i]) * window * std::sin(phase);
+        }
+        return 4.0 * std::sqrt(re * re + im * im) / static_cast<double>(length);
+    }
+
+    double toDb(double ratio) { return 20.0 * std::log10(juce::jmax(ratio, 1.0e-12)); }
+
+    size_t indexOfPeak(const std::vector<float>& x)
+    {
+        size_t best = 0;
+        for (size_t i = 1; i < x.size(); ++i)
+            if (std::abs(x[i]) > std::abs(x[best]))
+                best = i;
+        return best;
+    }
+
+    // Runs `input` through the island in host blocks of `blockSize`, with `modelFn`
+    // standing in for the model.
+    template <typename ModelFn>
+    std::vector<float> runIsland(ResamplingIsland& island, const std::vector<float>& input,
+                                 int blockSize, ModelFn&& modelFn)
+    {
+        std::vector<float> out(input.size());
+        for (size_t done = 0; done < input.size();)
+        {
+            const int n = static_cast<int>(std::min<size_t>(static_cast<size_t>(blockSize), input.size() - done));
+            island.process(input.data() + done, out.data() + done, n, modelFn);
+            done += static_cast<size_t>(n);
+        }
+        return out;
+    }
+
+    const auto passThroughModel = [](const float* in, float* out, int n)
+    {
+        std::copy(in, in + n, out);
+    };
+}
+
+void ResamplingIslandTests::runTest()
+{
+    beginTest("The delay is a whole number of host samples, fixed per rate pair");
+    {
+        expectEquals(ResamplingIsland::latencyFor(48000.0, 48000.0), 0);
+        expectEquals(ResamplingIsland::latencyFor(44100.0, 48000.0), 25);
+        expectEquals(ResamplingIsland::latencyFor(88200.0, 48000.0), 46);
+        expectEquals(ResamplingIsland::latencyFor(96000.0, 48000.0), 48);
+        expectEquals(ResamplingIsland::latencyFor(192000.0, 48000.0), 96);
+        expectEquals(ResamplingIsland::latencyFor(32000.0, 48000.0), 24);
+    }
+
+    beginTest("Every standard rate is supported; one needing too many phases is refused");
+    {
+        for (const double rate : { 8000.0, 11025.0, 16000.0, 22050.0, 32000.0, 44100.0, 48000.0,
+                                   64000.0, 88200.0, 96000.0, 176400.0, 192000.0, 352800.0, 384000.0 })
+            expect(ResamplingIsland::supports(rate, 48000.0), "Supports " + juce::String(rate));
+
+        // 44 056 Hz against 48 kHz reduces to 5507 / 6000: far past 1024 phases.
+        expect(! ResamplingIsland::supports(44056.0, 48000.0), "44.056 kHz is refused");
+        expectEquals(ResamplingIsland::latencyFor(44056.0, 48000.0), -1);
+        ResamplingIsland island;
+        expect(! island.prepare(44056.0, 48000.0, 512), "prepare refuses it too");
+        expect(! island.isPrepared(), "and leaves the island unprepared");
+    }
+
+    beginTest("Equal rates pass audio straight through with no delay");
+    {
+        ResamplingIsland island;
+        expect(island.prepare(48000.0, 48000.0, 256), "prepares");
+        expect(island.isPassThrough(), "is a pass-through");
+        expectEquals(island.getLatencySamples(), 0);
+        expectEquals(island.getMaxModelBlock(), 256);
+
+        const auto input = sineAt(997.0, 48000.0, 0.1, 0.5f);
+        int largestCall = 0;
+        const auto doubled = runIsland(island, input, 1000, [&](const float* in, float* out, int n)
+        {
+            largestCall = juce::jmax(largestCall, n);
+            for (int i = 0; i < n; ++i)
+                out[i] = 2.0f * in[i];
+        });
+        bool exact = true;
+        for (size_t i = 0; i < input.size(); ++i)
+            exact = exact && doubled[i] == 2.0f * input[i];
+        expect(exact, "Every sample went straight through the model");
+        expect(largestCall <= 256, "Host blocks larger than prepared are chunked");
+    }
+
+    beginTest("An impulse comes out exactly D samples late");
+    {
+        for (const double rate : { 44100.0, 88200.0, 96000.0, 192000.0, 32000.0 })
+        {
+            ResamplingIsland island;
+            expect(island.prepare(rate, 48000.0, 512), "prepares at " + juce::String(rate));
+            expectEquals(island.getLatencySamples(), ResamplingIsland::latencyFor(rate, 48000.0));
+
+            std::vector<float> input(4096, 0.0f);
+            input[1000] = 1.0f;
+            const auto out = runIsland(island, input, 512, passThroughModel);
+            expectEquals(static_cast<int>(indexOfPeak(out)), 1000 + island.getLatencySamples(),
+                         "Peak position at " + juce::String(rate));
+            // Only the band below the model's Nyquist survives the round trip, so an
+            // impulse at 96 or 192 kHz peaks near 0.5 or 0.25 by construction.
+            expect(std::abs(out[indexOfPeak(out)]) > 0.8f * static_cast<float>(juce::jmin(1.0, 48000.0 / rate)),
+                   "The impulse survives at " + juce::String(rate));
+        }
+    }
+
+    beginTest("The response is flat within 0.5 dB from 20 Hz to 18 kHz");
+    {
+        for (const double rate : { 44100.0, 88200.0, 96000.0, 192000.0 })
+        {
+            for (const double frequency : { 20.0, 100.0, 1000.0, 5000.0, 10000.0, 15000.0, 18000.0 })
+            {
+                ResamplingIsland island;
+                island.prepare(rate, 48000.0, 512);
+                const auto out = runIsland(island, sineAt(frequency, rate, 1.0, 0.5f), 512, passThroughModel);
+                const auto half = static_cast<size_t>(rate * 0.5);
+                expectWithinAbsoluteError(toDb(toneAmplitude(out, half, half, frequency, rate) / 0.5), 0.0, 0.5,
+                                          juce::String(frequency) + " Hz at " + juce::String(rate) + " Hz");
+            }
+        }
+    }
+
+    beginTest("Content above the lower Nyquist is filtered, not folded back");
+    {
+        // On the way in: 30 kHz into a 96 kHz island would fold to 18 kHz at 48 kHz.
+        ResamplingIsland in96;
+        in96.prepare(96000.0, 48000.0, 512);
+        const auto out96 = runIsland(in96, sineAt(30000.0, 96000.0, 1.0, 0.5f), 512, passThroughModel);
+        expect(toDb(toneAmplitude(out96, 48000, 48000, 18000.0, 96000.0) / 0.5) <= -40.0, "No 18 kHz fold at 96 kHz");
+        expect(toDb(toneAmplitude(out96, 48000, 48000, 30000.0, 96000.0) / 0.5) <= -40.0, "30 kHz does not pass");
+
+        // On the way out: a 20 kHz model output would fold to 12 kHz in a 32 kHz host.
+        // At 44.1 kHz anything that folds lands above 20 kHz, so that rate can't show it.
+        const auto toneModel = [](double frequency)
+        {
+            return [frequency, phase = 0.0](const float*, float* out, int n) mutable
+            {
+                for (int i = 0; i < n; ++i)
+                {
+                    out[i] = 0.5f * static_cast<float>(std::sin(phase));
+                    phase += kTwoPi * frequency / 48000.0;
+                }
+            };
+        };
+        const std::vector<float> silence(32000, 0.0f);
+        ResamplingIsland out32;
+        out32.prepare(32000.0, 48000.0, 512);
+        const auto folded = runIsland(out32, silence, 512, toneModel(20000.0));
+        expect(toDb(toneAmplitude(folded, 16000, 16000, 12000.0, 32000.0) / 0.5) <= -40.0, "No 12 kHz fold at 32 kHz");
+
+        ResamplingIsland pass32;
+        pass32.prepare(32000.0, 48000.0, 512);
+        const auto passed = runIsland(pass32, silence, 512, toneModel(10000.0));
+        expectWithinAbsoluteError(toDb(toneAmplitude(passed, 16000, 16000, 10000.0, 32000.0) / 0.5), 0.0, 0.5,
+                                  "10 kHz passes at 32 kHz");
+    }
+
+    beginTest("The output does not depend on how the host splits its blocks");
+    {
+        juce::Random random(11);
+        std::vector<float> noise(20000);
+        for (auto& s : noise)
+            s = random.nextFloat() - 0.5f;
+
+        for (const double rate : { 44100.0, 96000.0 })
+        {
+            ResamplingIsland reference;
+            reference.prepare(rate, 48000.0, 512);
+            const auto expected = runIsland(reference, noise, 512, passThroughModel);
+
+            for (const int blockSize : { 1, 37, 256, 2000 })
+            {
+                ResamplingIsland island;
+                island.prepare(rate, 48000.0, 512);   // 2000 exceeds it: chunked inside
+                int largestCall = 0;
+                const auto out = runIsland(island, noise, blockSize, [&](const float* in, float* o, int n)
+                {
+                    largestCall = juce::jmax(largestCall, n);
+                    std::copy(in, in + n, o);
+                });
+                expect(out == expected, "Blocks of " + juce::String(blockSize) + " at " + juce::String(rate));
+                expect(largestCall <= island.getMaxModelBlock(), "The model never gets more than it was prepared for");
+            }
+        }
+    }
+
+    beginTest("reset() clears the history and keeps the delay");
+    {
+        ResamplingIsland island;
+        island.prepare(44100.0, 48000.0, 512);
+        std::vector<float> impulse(2048, 0.0f);
+        impulse[100] = 1.0f;
+        const auto first = runIsland(island, impulse, 512, passThroughModel);
+        island.reset();
+        const auto second = runIsland(island, impulse, 512, passThroughModel);
+        expect(first == second, "The same input gives the same output after a reset");
+    }
+}
+
+//==============================================================================
+// NAM profile (prototype)
+//==============================================================================
+
+namespace
+{
+    juce::File namTestModel(const char* name)
+    {
+        return juce::File(DISTORTION_NAM_TEST_MODELS_DIR).getChildFile(name);
+    }
+
+    // Loads through setStateInformation run on the profile loader thread; wait
+    // for it rather than sleeping a fixed time.
+    bool waitForProfileLoad(PluginProcessor& processor, int timeoutMs = 10000)
+    {
+        const auto deadline = juce::Time::getMillisecondCounter() + static_cast<juce::uint32>(timeoutMs);
+        while (processor.getProfileStatus().loading)
+        {
+            if (juce::Time::getMillisecondCounter() > deadline)
+                return false;
+            juce::Thread::sleep(5);
+        }
+        return true;
+    }
+
+    void prepareForProfileTest(PluginProcessor& processor, double sampleRate = 48000.0, int blockSize = 512)
+    {
+        processor.setRateAndBufferSizeDetails(sampleRate, blockSize);
+        processor.prepareToPlay(sampleRate, blockSize);
+        setParameter(processor.parameters, "distortionAmount", 60.0f);
+        setParameter(processor.parameters, "subGuardFreq", 0.0f);
+    }
+
+    float processSine(PluginProcessor& processor, int blocks, juce::AudioBuffer<float>* lastOut = nullptr)
+    {
+        juce::MidiBuffer midi;
+        float rms = 0.0f;
+        for (int b = 0; b < blocks; ++b)
+        {
+            auto buffer = generateSineWave(440.0, processor.getSampleRate(), processor.getBlockSize(), 0.5f);
+            processor.processBlock(buffer, midi);
+            rms = calculateRMS(buffer);
+            if (lastOut != nullptr)
+                lastOut->makeCopyOf(buffer);
+        }
+        return rms;
+    }
+
+    // A NAM model written for one test and removed afterwards.
+    struct TempNam
+    {
+        explicit TempNam(const juce::String& json) : file(juce::File::createTempFile(".nam"))
+        {
+            file.replaceWithText(json);
+        }
+        ~TempNam() { file.deleteFile(); }
+        juce::File file;
+    };
+
+    // NAM Core's Linear architecture: an FIR filter whose weights are its taps.
+    juce::String linearModelJson(const juce::String& weights, int receptiveField, int sampleRate)
+    {
+        return "{\"version\":\"0.5.4\",\"architecture\":\"Linear\",\"config\":{\"receptive_field\":"
+             + juce::String(receptiveField) + ",\"bias\":false},\"weights\":[" + weights
+             + "],\"sample_rate\":" + juce::String(sampleRate) + "}";
+    }
+
+    // Runs channel 0 of a profile over a signal given at the host rate.
+    std::vector<float> runProfile(NamProfile& profile, const std::vector<float>& input, int blockSize)
+    {
+        std::vector<float> out(input.size());
+        for (size_t done = 0; done < input.size();)
+        {
+            const int n = static_cast<int>(std::min<size_t>(static_cast<size_t>(blockSize), input.size() - done));
+            profile.process(0, input.data() + done, out.data() + done, n);
+            done += static_cast<size_t>(n);
+        }
+        return out;
+    }
+
+    // A sine that carries its phase across blocks, so block edges add no steps.
+    struct ContinuousSine
+    {
+        double frequency = 110.0;
+        double sampleRate = 48000.0;
+        float amplitude = 0.25f;
+        double phase = 0.0;
+
+        juce::AudioBuffer<float> next(int numSamples)
+        {
+            juce::AudioBuffer<float> buffer(2, numSamples);
+            for (int i = 0; i < numSamples; ++i)
+            {
+                const float value = amplitude * static_cast<float>(std::sin(phase));
+                buffer.setSample(0, i, value);
+                buffer.setSample(1, i, value);
+                phase += kTwoPi * frequency / sampleRate;
+            }
+            phase = std::fmod(phase, kTwoPi);
+            return buffer;
+        }
+    };
+
+    // The largest jump between neighbouring samples from index `from` on.
+    float largestStep(const std::vector<float>& x, size_t from = 1)
+    {
+        float largest = 0.0f;
+        for (size_t i = std::max<size_t>(1, from); i < x.size(); ++i)
+            largest = juce::jmax(largest, std::abs(x[i] - x[i - 1]));
+        return largest;
+    }
+
+    int longestZeroRun(const std::vector<float>& x)
+    {
+        int longest = 0, run = 0;
+        for (const float s : x)
+        {
+            run = s == 0.0f ? run + 1 : 0;
+            longest = juce::jmax(longest, run);
+        }
+        return longest;
+    }
+
+    void appendChannel0(std::vector<float>& to, const juce::AudioBuffer<float>& buffer)
+    {
+        to.insert(to.end(), buffer.getReadPointer(0), buffer.getReadPointer(0) + buffer.getNumSamples());
+    }
+
+    // Allocations made by one processBlock call (0 when the RT guard isn't built in).
+    int allocationsDuring(PluginProcessor& processor, juce::AudioBuffer<float>& buffer)
+    {
+        juce::MidiBuffer midi;
+       #if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD
+        rt_guard::resetAllocationCounter();
+        processor.processBlock(buffer, midi);
+        return rt_guard::getAllocationCount();
+       #else
+        processor.processBlock(buffer, midi);
+        return 0;
+       #endif
+    }
+
+    // Everything that colours level off, and Distortion Amount at the 0 dB point of
+    // a profile's input-gain curve (-24 dB + 0.36 dB per %), so an identity model
+    // passes the signal at unity.
+    void configureUnityChain(PluginProcessor& processor)
+    {
+        setParameter(processor.parameters, "distortionAmount", 200.0f / 3.0f);
+        setParameter(processor.parameters, "inputGain", 50.0f);
+        setParameter(processor.parameters, "outputGain", 50.0f);
+        setParameter(processor.parameters, "autoGainEnabled", 0.0f);
+        setParameter(processor.parameters, "compEnabled", 0.0f);
+        setParameter(processor.parameters, "extremeEnabled", 0.0f);
+        setParameter(processor.parameters, "cleanBoost", 0.0f);
+        setParameter(processor.parameters, "waveshaperMix", 0.0f);
+        setParameter(processor.parameters, "tone", 20000.0f);
+        setParameter(processor.parameters, "highPassFreq", 20.0f);
+        setParameter(processor.parameters, "lfoEnabled", 0.0f);
+        setParameter(processor.parameters, "subGuardFreq", 0.0f);
+    }
+
+    // Runs a mono signal through both channels in 512-sample blocks; returns channel 0.
+    std::vector<float> renderThrough(PluginProcessor& processor, const std::vector<float>& signal)
+    {
+        constexpr int blockSize = 512;
+        std::vector<float> out;
+        juce::MidiBuffer midi;
+        for (size_t done = 0; done + static_cast<size_t>(blockSize) <= signal.size(); done += static_cast<size_t>(blockSize))
+        {
+            juce::AudioBuffer<float> buffer(2, blockSize);
+            for (int ch = 0; ch < 2; ++ch)
+                buffer.copyFrom(ch, 0, signal.data() + done, blockSize);
+            processor.processBlock(buffer, midi);
+            appendChannel0(out, buffer);
+        }
+        return out;
+    }
+
+    // White noise low-passed at 8 kHz: inside the island's band at every rate.
+    std::vector<float> lowPassedNoise(double sampleRate, double seconds, float amplitude)
+    {
+        std::vector<float> x(static_cast<size_t>(std::lround(sampleRate * seconds)));
+        juce::Random random(5);
+        for (auto& s : x)
+            s = amplitude * (random.nextFloat() * 2.0f - 1.0f);
+        juce::IIRFilter lowPass;
+        lowPass.setCoefficients(juce::IIRCoefficients::makeLowPass(sampleRate, 8000.0));
+        lowPass.processSamples(x.data(), static_cast<int>(x.size()));
+        return x;
+    }
+
+    // The lag, within +/- maxLag samples, at which b lines up best with a.
+    int bestLag(const std::vector<float>& a, const std::vector<float>& b, size_t from, int maxLag)
+    {
+        const auto room = static_cast<size_t>(maxLag);
+        const size_t end = juce::jmin(a.size(), b.size());
+        int best = 0;
+        double bestScore = -1.0e300;
+        for (int lag = -maxLag; lag <= maxLag; ++lag)
+        {
+            double score = 0.0;
+            for (size_t i = juce::jmax(from, room); i + room < end; ++i)
+                score += static_cast<double>(a[i]) * static_cast<double>(b[static_cast<size_t>(static_cast<int64_t>(i) + lag)]);
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = lag;
+            }
+        }
+        return best;
+    }
+}
+
+void NamProfileTests::runTest()
+{
+    // Drives the audio thread and the message-thread timer the way a running host
+    // does, until no profile switch is in flight.
+    const auto settle = [](PluginProcessor& processor, int maxRounds = 400)
+    {
+        juce::MidiBuffer midi;
+        for (int round = 0; round < maxRounds; ++round)
+        {
+            processor.timerCallback();
+            if (processor.isProfileSwitchIdle())
+                return true;
+            if (processor.stagedRefreshesInFlight.load() > 0)
+                juce::Thread::sleep(1);   // the loader is re-preparing a staged profile
+            auto buffer = generateSineWave(440.0, processor.getSampleRate(), processor.getBlockSize(), 0.1f);
+            processor.processBlock(buffer, midi);
+        }
+        return processor.isProfileSwitchIdle();
+    };
+
+    beginTest("Loading a profile reports it and switches the chain to 1x");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        expect(processor.oversamplingFactor > 1, "Default setting oversamples");
+
+        expect(processor.loadProfileBlocking(namTestModel("wavenet.nam")), "wavenet.nam loads");
+        const auto status = processor.getProfileStatus();
+        expectEquals(status.name, juce::String("wavenet"));
+        expect(status.error.isEmpty(), "No error after a good load");
+        expectWithinAbsoluteError(status.expectedSampleRate, 48000.0, 0.5);
+
+        expect(settle(processor), "The switch into profile mode completes");
+        expect(processor.profileMode, "Profile mode is on");
+        expectEquals(static_cast<int>(processor.oversamplingFactor), 1);
+    }
+
+    beginTest("A SlimmableContainer profile loads and runs");
+    {
+        // Many downloaded profiles ship as containers of several sized submodels.
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        expect(processor.loadProfileBlocking(namTestModel("slimmable_container.nam")),
+               "slimmable_container.nam loads");
+        expect(processor.getProfileStatus().error.isEmpty(), "No error after a good load");
+
+        expect(settle(processor), "The switch completes");
+        juce::AudioBuffer<float> out;
+        const float rms = processSine(processor, 8, &out);
+        expect(processor.activeProfile != nullptr, "The container is the active profile");
+        expect(! containsInvalidSamples(out), "Output stays finite");
+        expect(rms > 0.0f, "The container produces output");
+    }
+
+    beginTest("An active profile changes the sound and stays finite, with and without Sub Guard");
+    {
+        for (const float subGuard : { 0.0f, 80.0f })
+        {
+            // Reference: the built-in clip type, also at 1x, so the only difference is the profile.
+            PluginProcessor reference;
+            prepareForProfileTest(reference);
+            setParameter(reference.parameters, "subGuardFreq", subGuard);
+            reference.requestOversamplingRebuild(0);
+            reference.handleAsyncUpdate();
+            juce::AudioBuffer<float> refOut;
+            processSine(reference, 8, &refOut);
+
+            PluginProcessor processor;
+            prepareForProfileTest(processor);
+            setParameter(processor.parameters, "subGuardFreq", subGuard);
+            expect(processor.loadProfileBlocking(namTestModel("wavenet.nam")), "wavenet.nam loads");
+            expect(settle(processor), "The switch completes");
+            juce::AudioBuffer<float> out;
+            const float rms = processSine(processor, 8, &out);
+
+            expect(processor.activeProfile != nullptr && processor.activeProfile->getNumChannels() == 2,
+                   "The audio thread picked up a stereo profile");
+            expect(! containsInvalidSamples(out), "Output is finite");
+            expect(rms > 1.0e-4f, "Output is not silent");
+
+            float maxDiff = 0.0f;
+            for (int ch = 0; ch < out.getNumChannels(); ++ch)
+                for (int i = 0; i < out.getNumSamples(); ++i)
+                    maxDiff = juce::jmax(maxDiff, std::abs(out.getSample(ch, i) - refOut.getSample(ch, i)));
+            expect(maxDiff > 1.0e-3f, "The profile, not the built-in clip type, shaped the output (Sub Guard "
+                                      + juce::String(subGuard) + " Hz)");
+        }
+    }
+
+    beginTest("Clearing restores the built-in clip type and the oversampling setting");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        processor.loadProfileBlocking(namTestModel("wavenet.nam"));
+        expect(settle(processor), "Loaded");
+
+        processor.clearProfile();
+        expect(processor.duckRequested.load(), "Leaving profile mode asks for a duck");
+        expect(settle(processor), "Cleared");
+
+        expect(! processor.isProfileLoaded(), "No profile reported after clearing");
+        expect(processor.activeProfile == nullptr && ! processor.profileMode, "No profile runs");
+        expect(processor.oversamplingFactor > 1, "The user's oversampling setting is back");
+        expect(processor.retiredProfile.load() == nullptr, "The replaced profile was freed");
+    }
+
+   #if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD
+    beginTest("No allocation while a profile runs or while one is swapped in");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        setParameter(processor.parameters, "subGuardFreq", 80.0f);
+        processor.loadProfileBlocking(namTestModel("wavenet.nam"));
+        expect(settle(processor), "Loaded");
+        processSine(processor, 4);   // filters settled
+
+        juce::MidiBuffer midi;
+        auto buffer = generateSineWave(440.0, 48000.0, 512, 0.5f);
+        rt_guard::resetAllocationCounter();
+        processor.processBlock(buffer, midi);
+        expectEquals(rt_guard::getAllocationCount(), 0, "processBlock with an active profile");
+
+        // A second profile arrives while audio runs: the swap must not allocate or free.
+        expect(processor.loadProfileBlocking(namTestModel("lstm.nam")), "lstm.nam loads");
+        processor.timerCallback();
+        expect(! processor.duckRequested.load(), "Swapping profiles needs no rebuild");
+        int allocations = 0;
+        for (int block = 0; block < 64 && ! processor.isProfileSwitchIdle(); ++block)
+        {
+            auto swapBuffer = generateSineWave(440.0, 48000.0, 512, 0.5f);
+            allocations += allocationsDuring(processor, swapBuffer);
+            expect(! containsInvalidSamples(swapBuffer), "Output stays finite across the swap");
+            processor.timerCallback();
+        }
+        expectEquals(allocations, 0, "processBlock across the swap");
+        expect(processor.activeProfile != nullptr && processor.activeProfile->getName() == "lstm",
+               "The new profile is active after the swap");
+    }
+   #endif
+
+    beginTest("A profile prepared for other settings is refreshed before it runs");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor, 48000.0, 512);
+        processor.loadProfileBlocking(namTestModel("wavenet.nam"));   // staged for 48 kHz / 512
+
+        // The host changes settings before the timer installed it: prepareToPlay
+        // brings it up to the new settings and installs it, with nothing left pending.
+        prepareForProfileTest(processor, 44100.0, 1024);
+        expect(processor.isProfileSwitchIdle(), "Nothing left pending after prepareToPlay");
+        expect(processor.profileMode && processor.activeProfile != nullptr, "The profile is installed");
+        if (processor.activeProfile != nullptr)
+        {
+            expectWithinAbsoluteError(processor.activeProfile->getPreparedSampleRate(), 44100.0, 0.5);
+            expect(processor.activeProfile->getPreparedBlockSize() >= 1024, "Prepared for the new block size");
+            expectEquals(processor.activeProfile->getLatencySamples(), ResamplingIsland::latencyFor(44100.0, 48000.0));
+        }
+        juce::AudioBuffer<float> out;
+        processSine(processor, 2, &out);
+        expect(! containsInvalidSamples(out), "It runs at the new settings");
+    }
+
+    beginTest("Bad files fail cleanly and leave the built-in clip type running");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+
+        expect(! processor.loadProfileBlocking(namTestModel("does-not-exist.nam")), "Missing file fails");
+        expect(processor.getProfileStatus().error.isNotEmpty(), "Missing file reports an error");
+
+        auto garbage = juce::File::createTempFile(".nam");
+        garbage.replaceWithText("{ not a model");
+        expect(! processor.loadProfileBlocking(garbage), "Malformed file fails");
+        expect(processor.getProfileStatus().error.isNotEmpty(), "Malformed file reports an error");
+        garbage.deleteFile();
+
+        expect(! processor.isProfileLoaded(), "Nothing is loaded after failures");
+        processor.timerCallback();
+        expect(processor.oversamplingFactor > 1, "Oversampling untouched by failed loads");
+        juce::AudioBuffer<float> out;
+        processSine(processor, 2, &out);
+        expect(! containsInvalidSamples(out), "Built-in path still runs");
+    }
+
+    beginTest("A session remembers the profile by path and restores it");
+    {
+        juce::MemoryBlock saved;
+        {
+            PluginProcessor processor;
+            prepareForProfileTest(processor);
+            processor.loadProfileBlocking(namTestModel("wavenet.nam"));
+            processor.getStateInformation(saved);
+        }
+
+        PluginProcessor restored;
+        prepareForProfileTest(restored);
+        restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+        expect(waitForProfileLoad(restored), "Restore finished loading");
+        expectEquals(restored.getProfileStatus().name, juce::String("wavenet"));
+        expect(! restored.parameters.state.hasProperty(PluginProcessor::profilePathAttribute),
+               "The session's profile path stays out of the parameter tree, so presets never carry it");
+
+        // A session saved without a profile clears one that is loaded.
+        juce::MemoryBlock plain;
+        {
+            PluginProcessor processor;
+            prepareForProfileTest(processor);
+            processor.getStateInformation(plain);
+        }
+        restored.setStateInformation(plain.getData(), static_cast<int>(plain.getSize()));
+        expect(! restored.isProfileLoaded(), "A session without a profile clears it");
+
+        // A session whose profile file is missing falls back to the built-in clip
+        // type rather than keeping the profile that was loaded before it.
+        restored.loadProfileBlocking(namTestModel("wavenet.nam"));
+        auto xml = restored.parameters.copyState().createXml();
+        const auto missing = namTestModel("moved-away.nam").getFullPathName();
+        xml->setAttribute(PluginProcessor::profilePathAttribute, missing);
+        juce::MemoryBlock missingState;
+        juce::AudioProcessor::copyXmlToBinary(*xml, missingState);
+        restored.setStateInformation(missingState.getData(), static_cast<int>(missingState.getSize()));
+        expect(waitForProfileLoad(restored), "Restore attempt finished");
+        expect(! restored.isProfileLoaded(), "The previous profile is not kept");
+        expect(restored.getProfileStatus().error.isNotEmpty(), "The missing file is reported");
+        expectEquals(restored.getProfileStatus().path, missing, "The path is kept for the next save");
+    }
+
+    beginTest("A profile at 44.1, 88.2, 96 and 192 kHz sounds as it does at 48 kHz");
+    {
+        const std::vector<double> harmonics { 1000.0, 2000.0, 3000.0, 4000.0, 5000.0 };
+        const std::vector<double> tones { 200.0, 1000.0, 3000.0, 7000.0, 12000.0, 17000.0 };
+
+        // One second of signal, measured over its second half, once the model and
+        // the island have settled.
+        const auto measure = [&](double rate, bool multitone)
+        {
+            std::vector<double> levels;
+            juce::String error;
+            auto profile = NamProfile::load(namTestModel("wavenet.nam"), 1, rate, 512, error);
+            expect(profile != nullptr, error);
+            if (profile == nullptr)
+                return levels;
+            const auto input = multitone ? multitoneAt(tones, rate, 1.0, 0.01f) : sineAt(1000.0, rate, 1.0, 0.2f);
+            const auto out = runProfile(*profile, input, 512);
+            const auto half = static_cast<size_t>(rate * 0.5);
+            for (const double f : multitone ? tones : harmonics)
+                levels.push_back(toneAmplitude(out, half, half, f, rate));
+            return levels;
+        };
+
+        const auto referenceHarmonics = measure(48000.0, false);
+        const auto referenceTones = measure(48000.0, true);
+        for (const double rate : { 44100.0, 88200.0, 96000.0, 192000.0 })
+        {
+            const auto harmonicLevels = measure(rate, false);
+            const auto toneLevels = measure(rate, true);
+            for (size_t i = 0; i < harmonicLevels.size() && i < referenceHarmonics.size(); ++i)
+                if (referenceHarmonics[i] > referenceHarmonics[0] * 1.0e-3)   // within 60 dB of the fundamental
+                    expectWithinAbsoluteError(toDb(harmonicLevels[i] / referenceHarmonics[i]), 0.0, 0.5,
+                                              "Harmonic " + juce::String(static_cast<int>(i) + 1)
+                                              + " at " + juce::String(rate));
+            for (size_t i = 0; i < toneLevels.size() && i < referenceTones.size(); ++i)
+                expectWithinAbsoluteError(toDb(toneLevels[i] / referenceTones[i]), 0.0, 0.5,
+                                          juce::String(tones[i]) + " Hz at " + juce::String(rate));
+        }
+    }
+
+    beginTest("A model run at the wrong rate fails the same check (negative control)");
+    {
+        // A two-tap average, [0.5, 0.5]: -2.0 dB at 10 kHz at the 48 kHz it claims.
+        // The same taps declared as 96 kHz make a 96 kHz host run them directly, the
+        // way the prototype ran every model: -0.5 dB at 10 kHz, 1.5 dB away.
+        TempNam at48(linearModelJson("0.5,0.5", 2, 48000));
+        TempNam at96(linearModelJson("0.5,0.5", 2, 96000));
+        const auto levelAt10k = [&](const juce::File& file, double rate)
+        {
+            juce::String error;
+            auto profile = NamProfile::load(file, 1, rate, 512, error);
+            expect(profile != nullptr, error);
+            if (profile == nullptr)
+                return 0.0;
+            const auto out = runProfile(*profile, sineAt(10000.0, rate, 0.5, 0.5f), 512);
+            const auto quarter = static_cast<size_t>(rate * 0.25);
+            return toneAmplitude(out, quarter, quarter, 10000.0, rate);
+        };
+
+        const double reference = levelAt10k(at48.file, 48000.0);
+        expectWithinAbsoluteError(toDb(reference / 0.5), -2.01, 0.1, "The reference is the model's own response");
+        expectWithinAbsoluteError(toDb(levelAt10k(at48.file, 96000.0) / reference), 0.0, 0.5,
+                                  "Through the island, a 96 kHz host hears the 48 kHz response");
+        expect(std::abs(toDb(levelAt10k(at96.file, 96000.0) / reference)) > 0.5,
+               "Run directly at 96 kHz, the same taps miss by more than 0.5 dB");
+    }
+
+    beginTest("A profile reports its island delay and refuses a host rate it can't serve");
+    {
+        juce::String error;
+        auto at48 = NamProfile::load(namTestModel("wavenet.nam"), 2, 48000.0, 512, error);
+        auto at44 = NamProfile::load(namTestModel("wavenet.nam"), 2, 44100.0, 512, error);
+        expect(at48 != nullptr && at44 != nullptr, error);
+        if (at48 != nullptr && at44 != nullptr)
+        {
+            expectEquals(at48->getLatencySamples(), 0);
+            expectEquals(at44->getLatencySamples(), ResamplingIsland::latencyFor(44100.0, 48000.0));
+            expect(at44->isPrepared(), "Prepared at 44.1 kHz");
+            expect(at44->getSettleSeconds() > 0.0, "A WaveNet reports how long it takes to settle");
+        }
+
+        error = {};
+        auto odd = NamProfile::load(namTestModel("wavenet.nam"), 2, 44056.0, 512, error);
+        expect(odd == nullptr, "A 44.056 kHz host is refused");
+        expectEquals(error, juce::String("This profile can't run at 44.056 kHz"));
+    }
+
+    beginTest("A load prepared for settings the host has left is re-prepared before it runs");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor, 96000.0, 512);
+        // Stands in for a load that read the host settings before prepareToPlay
+        // changed them: a profile prepared for 48 kHz, staged into a 96 kHz host.
+        juce::String error;
+        auto stale = NamProfile::load(namTestModel("wavenet.nam"), 2, 48000.0, 512, error);
+        expect(stale != nullptr, error);
+        stale->setRequestId(processor.profileRequestId.load());   // as a real load tags it
+        processor.stagedProfile.store(stale.release());
+        expect(settle(processor), "The switch completes");
+        expect(processor.activeProfile != nullptr, "The profile is installed");
+        if (processor.activeProfile != nullptr)
+            expectWithinAbsoluteError(processor.activeProfile->getPreparedSampleRate(), 96000.0, 0.5);
+    }
+
+    beginTest("Entering and leaving profile mode ducks instead of clicking");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        ContinuousSine sine;
+        int allocations = 0;
+        const auto run = [&](int blocks, std::vector<float>& captured)
+        {
+            for (int b = 0; b < blocks; ++b)
+            {
+                auto buffer = sine.next(512);
+                allocations += allocationsDuring(processor, buffer);
+                appendChannel0(captured, buffer);
+            }
+        };
+        const auto runUntilIdle = [&](std::vector<float>& captured)
+        {
+            for (int round = 0; round < 100; ++round)
+            {
+                processor.timerCallback();
+                if (processor.isProfileSwitchIdle())
+                    return true;
+                run(1, captured);
+            }
+            return false;
+        };
+
+        std::vector<float> builtIn, entering, profiled, leaving, builtInAgain;
+        run(40, builtIn);
+        processor.loadProfileBlocking(namTestModel("wavenet.nam"));
+        expect(runUntilIdle(entering), "Entering completes");
+        expect(processor.profileMode, "Profile mode is on");
+        run(40, profiled);
+        processor.clearProfile();
+        expect(runUntilIdle(leaving), "Leaving completes");
+        expect(! processor.profileMode, "Profile mode is off");
+        run(40, builtInAgain);
+
+        // Steady states skip their first 20 blocks, where filters and the model settle.
+        const float steady = juce::jmax(largestStep(builtIn, 512 * 20), largestStep(profiled, 512 * 20),
+                                        largestStep(builtInAgain, 512 * 20));
+        entering.insert(entering.begin(), builtIn.back());
+        leaving.insert(leaving.begin(), profiled.back());
+        expect(largestStep(entering) <= 1.5f * steady, "No click entering profile mode");
+        expect(largestStep(leaving) <= 1.5f * steady, "No click leaving profile mode");
+        expect(longestZeroRun(entering) <= 1920 && longestZeroRun(leaving) <= 1920,
+               "The silent gap is 40 ms or less at 512-sample blocks");
+        expectEquals(allocations, 0, "No allocation on the audio thread across the ducks");
+    }
+
+    beginTest("The switch completes after the timeout when no audio is flowing");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        expect(processor.loadProfileBlocking(namTestModel("wavenet.nam")), "Loads");
+        processor.timerCallback();
+        expect(processor.duckRequested.load(), "Entering profile mode asks for a duck");
+        processor.timerCallback();
+        expect(processor.activeProfile == nullptr, "It waits for the audio thread, or the timeout");
+
+        juce::Thread::sleep(DSPConstants::DUCK_TIMEOUT_MS + 50);
+        processor.timerCallback();
+        expect(processor.profileMode && processor.activeProfile != nullptr, "Installed after the timeout");
+        expectEquals(static_cast<int>(processor.oversamplingFactor), 1);
+
+        juce::MidiBuffer midi;
+        auto out = generateSineWave(440.0, 48000.0, 64, 0.5f);   // shorter than the 480-sample fade
+        processor.processBlock(out, midi);
+        expect(processor.duckState == PluginProcessor::DuckState::open,
+               "Playback starts at full level: the audio thread never faded out");
+    }
+
+    beginTest("Changing the Oversampling setting ducks; re-sending the same one does nothing");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        processor.requestOversamplingRebuild(2);   // what an opening editor re-sends
+        expect(! processor.duckRequested.load(), "The current setting again: no rebuild, no dip");
+        processor.requestOversamplingRebuild(1);
+        expect(processor.duckRequested.load(), "A new setting asks for a duck");
+        expect(settle(processor), "The rebuild completes");
+        expectEquals(static_cast<int>(processor.oversamplingFactor), 2);
+    }
+
+    beginTest("Toggling the linear-phase filter ducks through the timer");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        setParameter(processor.parameters, "linearPhaseDry", 1.0f);   // flags a rebuild, as automation would
+        processor.timerCallback();
+        expect(processor.duckRequested.load(), "The flagged rebuild became a duck");
+        expect(settle(processor), "The rebuild completes");
+        expect(processor.currentLinearPhase, "The oversampler now uses the linear-phase filter");
+    }
+
+    beginTest("A pending profile prepared for settings the host has left is re-prepared before it runs");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor, 96000.0, 512);
+        expect(processor.loadProfileBlocking(namTestModel("wavenet.nam")), "wavenet.nam loads");
+        expect(settle(processor), "The switch into profile mode completes");
+
+        // Stands in for a host that calls prepareToPlay off the message thread while
+        // the timer is inside routeStagedProfile: a profile prepared for 48 kHz lands
+        // in pendingProfile behind its back.
+        juce::String error;
+        auto stale = NamProfile::load(namTestModel("lstm.nam"), 2, 48000.0, 512, error);
+        expect(stale != nullptr, error);
+        stale->setRequestId(processor.profileRequestId.load());   // as a real load tags it
+        processor.pendingProfile.store(stale.release());
+        expect(settle(processor), "The switch completes");
+        expect(processor.activeProfile != nullptr && processor.activeProfile->getName() == "lstm",
+               "lstm is active");
+        if (processor.activeProfile != nullptr)
+            expectWithinAbsoluteError(processor.activeProfile->getPreparedSampleRate(), 96000.0, 0.5);
+    }
+
+    beginTest("Swapping profiles crossfades without a click, a duck or an allocation");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        processor.loadProfileBlocking(namTestModel("wavenet.nam"));
+        expect(settle(processor), "First profile in");
+
+        ContinuousSine sine;
+        int allocations = 0;
+        bool ducked = false;
+        const auto run = [&](int blocks, std::vector<float>& captured)
+        {
+            for (int b = 0; b < blocks; ++b)
+            {
+                auto buffer = sine.next(512);
+                allocations += allocationsDuring(processor, buffer);
+                appendChannel0(captured, buffer);
+                ducked = ducked || processor.duckState != PluginProcessor::DuckState::open;
+            }
+        };
+
+        std::vector<float> before, swapping, after;
+        run(40, before);
+        processor.loadProfileBlocking(namTestModel("lstm.nam"));
+        for (int round = 0; round < 100; ++round)
+        {
+            processor.timerCallback();
+            if (processor.isProfileSwitchIdle())
+                break;
+            run(1, swapping);
+        }
+        run(40, after);
+
+        expect(processor.activeProfile != nullptr && processor.activeProfile->getName() == "lstm", "lstm is active");
+        expect(! ducked, "A swap between two 48 kHz profiles never ducks");
+        expectEquals(allocations, 0, "No allocation on the audio thread across the swap");
+        expect(swapping.size() >= static_cast<size_t>(std::lround(DSPConstants::PROFILE_CROSSFADE_TIME_S * 48000.0)),
+               "The blend took at least its 30 ms");
+        const float steady = juce::jmax(largestStep(before, 512 * 20), largestStep(after, 512 * 20));
+        swapping.insert(swapping.begin(), before.back());
+        swapping.push_back(after.front());
+        expect(largestStep(swapping) <= 1.5f * steady, "No click across the swap");
+    }
+
+    beginTest("A profile arriving mid-swap waits its turn");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        processor.loadProfileBlocking(namTestModel("wavenet.nam"));
+        expect(settle(processor), "First profile in");
+
+        processor.loadProfileBlocking(namTestModel("lstm.nam"));
+        processor.timerCallback();      // routed for a crossfade
+        processSine(processor, 1);      // taken: lstm starts on its way in
+        expect(processor.incomingProfile != nullptr, "lstm is on its way in");
+
+        processor.loadProfileBlocking(namTestModel("slimmable_container.nam"));
+        processor.timerCallback();
+        expect(! processor.duckRequested.load(), "The newcomer is routed for a blend, not a duck");
+
+        processSine(processor, 1);
+        expect(processor.incomingProfile != nullptr && processor.incomingProfile->getName() == "lstm",
+               "The swap in flight keeps going");
+        expect(processor.pendingProfile.load() != nullptr
+               && processor.pendingProfile.load()->getName() == "slimmable_container",
+               "The newcomer waits");
+        expect(processor.activeProfile != nullptr && processor.activeProfile->getName() == "wavenet",
+               "wavenet is still active while lstm is mid-swap");
+
+        // Same shape as settle(), but recording each distinct active profile along
+        // the way: the newest must win only after lstm has had its turn as active.
+        std::vector<juce::String> activeNames;
+        bool idle = false;
+        for (int round = 0; round < 400; ++round)
+        {
+            processor.timerCallback();
+            if (processor.isProfileSwitchIdle())
+            {
+                idle = true;
+                break;
+            }
+            processSine(processor, 1);
+            if (processor.activeProfile != nullptr
+                && (activeNames.empty() || activeNames.back() != processor.activeProfile->getName()))
+                activeNames.push_back(processor.activeProfile->getName());
+        }
+        expect(idle, "Both swaps complete");
+
+        int lstmIndex = -1, slimIndex = -1;
+        for (size_t i = 0; i < activeNames.size(); ++i)
+        {
+            if (lstmIndex < 0 && activeNames[i] == "lstm")
+                lstmIndex = static_cast<int>(i);
+            if (slimIndex < 0 && activeNames[i] == "slimmable_container")
+                slimIndex = static_cast<int>(i);
+        }
+        expect(lstmIndex >= 0 && slimIndex >= 0 && lstmIndex < slimIndex,
+               "lstm becomes active before slimmable_container");
+
+        expect(processor.activeProfile != nullptr
+               && processor.activeProfile->getName() == "slimmable_container", "The newest profile wins");
+        expect(processor.retiredProfile.load() == nullptr, "Nothing is left to free");
+    }
+
+    beginTest("A swap lasts its warm-up plus 30 ms, however the host splits its blocks");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        processor.loadProfileBlocking(namTestModel("wavenet.nam"));
+        expect(settle(processor), "First profile in");
+
+        processor.loadProfileBlocking(namTestModel("lstm.nam"));
+        processor.timerCallback();   // routed: lstm sits in pendingProfile
+
+        juce::MidiBuffer midi;
+        ContinuousSine sine;
+        int blockCount = 0;
+        double lstmSettleSeconds = 0.0;
+        bool completed = false;
+        for (int i = 0; i < 20000; ++i)
+        {
+            auto buffer = sine.next(1);
+            processor.processBlock(buffer, midi);
+            ++blockCount;
+
+            if (i == 0)
+            {
+                expect(processor.incomingProfile != nullptr, "The first sample takes lstm");
+                if (processor.incomingProfile != nullptr)
+                    lstmSettleSeconds = processor.incomingProfile->getSettleSeconds();
+            }
+
+            if (processor.incomingProfile == nullptr)
+            {
+                completed = true;
+                break;
+            }
+        }
+        expect(completed, "The swap finished within the safety cap");
+
+        const int warmupSamples = static_cast<int>(std::ceil(
+            juce::jmin(lstmSettleSeconds, DSPConstants::PROFILE_WARMUP_MAX_S) * 48000.0));
+        const int fadeSamples = static_cast<int>(std::lround(DSPConstants::PROFILE_CROSSFADE_TIME_S * 48000.0));
+        expectEquals(blockCount, warmupSamples + fadeSamples,
+                     "The swap lasts exactly its warm-up plus its fade, sample for sample");
+        expect(processor.activeProfile != nullptr && processor.activeProfile->getName() == "lstm", "lstm is active");
+    }
+
+    beginTest("The reported latency is the reserve, whatever loads, swaps or clears");
+    {
+        for (const double rate : { 44100.0, 48000.0, 96000.0 })
+        {
+            for (const bool linearPhase : { false, true })
+            {
+                PluginProcessor processor;
+                setParameter(processor.parameters, "linearPhaseDry", linearPhase ? 1.0f : 0.0f);
+                prepareForProfileTest(processor, rate, 512);
+
+                const juce::dsp::Oversampling<float> probe(1, 2,
+                    linearPhase ? juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple
+                                : juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, false, false);
+                const int expected = juce::jmax(static_cast<int>(std::lround(probe.getLatencyInSamples())),
+                                                ResamplingIsland::latencyFor(rate, 48000.0));
+                const auto label = juce::String(rate) + (linearPhase ? " Hz, linear phase" : " Hz, IIR");
+
+                expect(settle(processor), "Settled, " + label);
+                expectEquals(processor.getLatencySamples(), expected, "Built-in clip type, " + label);
+                processor.loadProfileBlocking(namTestModel("wavenet.nam"));
+                expect(settle(processor), "Loaded, " + label);
+                expectEquals(processor.getLatencySamples(), expected, "Profile loaded, " + label);
+                processor.loadProfileBlocking(namTestModel("lstm.nam"));
+                expect(settle(processor), "Swapped, " + label);
+                expectEquals(processor.getLatencySamples(), expected, "Profile swapped, " + label);
+                processor.clearProfile();
+                expect(settle(processor), "Cleared, " + label);
+                expectEquals(processor.getLatencySamples(), expected, "Profile cleared, " + label);
+            }
+        }
+    }
+
+    beginTest("At 48 kHz the built-in path keeps its old latency and adds no pad");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor, 48000.0, 512);
+        expectEquals(processor.getLatencySamples(), 3, "The default 4x oversampler's own latency, measured before this change");
+        expectEquals(processor.outputPadDelay, 0);
+    }
+
+    beginTest("A model trained at another rate raises the reported latency only while loaded");
+    {
+        TempNam at44(linearModelJson("1.0", 1, 44100));
+        PluginProcessor processor;
+        prepareForProfileTest(processor, 48000.0, 512);
+        const int normal = processor.getLatencySamples();
+
+        processor.loadProfileBlocking(namTestModel("wavenet.nam"));
+        expect(settle(processor), "48 kHz profile in");
+        expectEquals(processor.getLatencySamples(), normal, "A 48 kHz model at 48 kHz fits the reserve");
+
+        processor.loadProfileBlocking(at44.file);
+        processor.timerCallback();
+        expect(processor.duckRequested.load(), "A different island delay goes in with a duck, not a blend");
+        expect(settle(processor), "44.1 kHz profile in");
+        expectEquals(processor.getLatencySamples(), ResamplingIsland::latencyFor(48000.0, 44100.0),
+                     "Its island delay is reported while it is loaded");
+
+        processor.clearProfile();
+        expect(settle(processor), "Cleared");
+        expectEquals(processor.getLatencySamples(), normal, "Back to the reserve once it is gone");
+    }
+
+    beginTest("Dry and wet line up through the island");
+    {
+        // An identity model: the dry and wet halves of either mix carry the same
+        // signal, so any misalignment shows up directly.
+        TempNam identity(linearModelJson("1.0", 1, 48000));
+        for (const double rate : { 44100.0, 96000.0 })
+        {
+            const auto render = [&](float distMix, float globalMix, const std::vector<float>& signal)
+            {
+                PluginProcessor processor;
+                prepareForProfileTest(processor, rate, 512);
+                configureUnityChain(processor);
+                setParameter(processor.parameters, "distMix", distMix);
+                setParameter(processor.parameters, "globalMix", globalMix);
+                processor.loadProfileBlocking(identity.file);
+                expect(settle(processor), "Identity profile in");
+                return renderThrough(processor, signal);
+            };
+
+            const auto noise = lowPassedNoise(rate, 1.0, 0.05f);
+            const auto from = static_cast<size_t>(rate * 0.25);
+            const auto wet = render(100.0f, 100.0f, noise);
+            expectEquals(bestLag(wet, render(0.0f, 100.0f, noise), from, 64), 0,
+                         "Distortion Mix dry half vs wet at " + juce::String(rate));
+            expectEquals(bestLag(wet, render(100.0f, 0.0f, noise), from, 64), 0,
+                         "Global Mix dry vs wet at " + juce::String(rate));
+
+            // A one-sample slip would cost about 2 dB at 10 kHz and 44.1 kHz; the
+            // island's own passband ripple is far below 0.1 dB.
+            const auto tone = sineAt(10000.0, rate, 1.0, 0.05f);
+            const auto level = [&](const std::vector<float>& x)
+            {
+                return toneAmplitude(x, static_cast<size_t>(rate * 0.5), static_cast<size_t>(rate * 0.4), 10000.0, rate);
+            };
+            const double full = level(render(100.0f, 100.0f, tone));
+            expectWithinAbsoluteError(toDb(level(render(50.0f, 100.0f, tone)) / full), 0.0, 0.1,
+                                      "50% Distortion Mix at 10 kHz, " + juce::String(rate));
+            expectWithinAbsoluteError(toDb(level(render(100.0f, 50.0f, tone)) / full), 0.0, 0.1,
+                                      "50% global Mix at 10 kHz, " + juce::String(rate));
+        }
+    }
+
+    beginTest("Sub Guard stays flat through its crossover with a profile loaded");
+    {
+        TempNam identity(linearModelJson("1.0", 1, 48000));
+        for (const double rate : { 44100.0, 96000.0 })
+        {
+            // 200 Hz is the most demanding crossover: a low band left D samples early
+            // would dip the sum there by about 0.5 dB.
+            const auto levelAt200 = [&](float subGuard)
+            {
+                PluginProcessor processor;
+                prepareForProfileTest(processor, rate, 512);
+                configureUnityChain(processor);
+                setParameter(processor.parameters, "subGuardFreq", subGuard);
+                processor.loadProfileBlocking(identity.file);
+                expect(settle(processor), "Identity profile in");
+                const auto out = renderThrough(processor, sineAt(200.0, rate, 1.0, 0.05f));
+                return toneAmplitude(out, static_cast<size_t>(rate * 0.5), static_cast<size_t>(rate * 0.4), 200.0, rate);
+            };
+            expectWithinAbsoluteError(toDb(levelAt200(200.0f) / levelAt200(0.0f)), 0.0, 0.2,
+                                      "Crossover at 200 Hz, " + juce::String(rate) + " Hz host");
+        }
+    }
+
+    beginTest("Crossing into bypass and back leaves no stale audio in the output pad");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor, 44100.0, 512);   // built-in clip type; distortion 60
+
+        // The built-in oversampler's own recursive filter keeps whatever state it
+        // held when frozen through a bypass gap, and rings for a while once it
+        // resumes -- a separate, pre-existing property of that filter, unrelated to
+        // the pad line under test here. Turn oversampling off, and neutralise the
+        // other colouring stages via configureUnityChain, so the shared pad line
+        // dominates whatever state survives the crossing.
+        processor.requestedOversamplingStages.store(0, std::memory_order_release);
+        processor.prepareToPlay(44100.0, 512);
+        configureUnityChain(processor);
+        setParameter(processor.parameters, "distortionAmount", 60.0f);
+        expect(processor.outputPadDelay > 0, "44.1 kHz reserves more than the built-in path's own (zero) latency");
+
+        juce::MidiBuffer midi;
+
+        // A loud tone through the active path: fills the shared pad line with a
+        // signal well above the near-silence threshold checked below.
+        for (int b = 0; b < 20; ++b)
+        {
+            auto buffer = generateSineWave(1000.0, 44100.0, 512, 0.5f);
+            processor.processBlock(buffer, midi);
+        }
+
+        // Cross into true bypass and feed it silence, long enough to flush the pad
+        // line's history if the bypass branch fed it too.
+        setParameter(processor.parameters, "distortionAmount", 0.0f);
+        setParameter(processor.parameters, "compEnabled", 0.0f);
+        for (int b = 0; b < 20; ++b)
+        {
+            juce::AudioBuffer<float> silence(2, 512);
+            silence.clear();
+            processor.processBlock(silence, midi);
+        }
+
+        // Cross back to active. Parameter smoothing may keep the very next block in
+        // bypass (the threshold is on the smoothed value); advance until a block
+        // actually ran the active path, then check that one.
+        setParameter(processor.parameters, "distortionAmount", 60.0f);
+        bool checked = false;
+        for (int b = 0; b < 20 && !checked; ++b)
+        {
+            juce::AudioBuffer<float> silence(2, 512);
+            silence.clear();
+            processor.processBlock(silence, midi);
+            if (processor.pb_modulatedDistortionParam >= 0.5f)
+            {
+                checked = true;
+                float largest = 0.0f;
+                for (int ch = 0; ch < silence.getNumChannels(); ++ch)
+                    for (int i = 0; i < silence.getNumSamples(); ++i)
+                        largest = juce::jmax(largest, std::abs(silence.getSample(ch, i)));
+
+                // Not exactly zero: the always-on input filter ahead of the
+                // distortion stage (a state-variable filter that runs every active
+                // block regardless of its cutoff, even at this "transparent"
+                // setting) carries a little of its own state across the same gap --
+                // measured in isolation (this same scenario, but never crossing to
+                // bypass at all) that settles to exactly 0; measured with the
+                // crossing but the pad line NOT shared it is ~0.62 (the tone's own
+                // amplitude, i.e. a genuine stale replay); measured here, with the
+                // pad line shared, it is ~0.09 -- the input filter's own residual,
+                // not a further contribution from the pad line. The threshold below
+                // sits comfortably above that filter's own residual and well clear of
+                // the stale-replay figure, so it still catches a regression in the
+                // pad-sharing fix without failing on the unrelated, pre-existing
+                // filter behaviour.
+                expect(largest < 0.15f, "No stale tone replays after the crossing: largest=" + juce::String(largest, 8));
+            }
+        }
+        expect(checked, "The active path resumed within the loop's block budget");
+    }
+
+    // A loud tone into a 48 kHz identity profile at 44.1 kHz, where the island and
+    // the dry delays each hold the last D samples they were fed. Returns the
+    // processor ready for whatever the test does next.
+    const auto loudToneThroughIsland = [&](PluginProcessor& processor, const juce::File& model)
+    {
+        prepareForProfileTest(processor, 44100.0, 512);
+        configureUnityChain(processor);
+        processor.loadProfileBlocking(model);
+        expect(settle(processor), "Identity profile in");
+        expect(processor.islandDelay > 0, "44.1 kHz runs the island with a delay");
+        juce::MidiBuffer midi;
+        for (int b = 0; b < 20; ++b)
+        {
+            auto buffer = generateSineWave(1000.0, 44100.0, 512, 0.5f);
+            processor.processBlock(buffer, midi);
+        }
+    };
+    const auto largestAbs = [](const juce::AudioBuffer<float>& buffer)
+    {
+        float largest = 0.0f;
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            for (int i = 0; i < buffer.getNumSamples(); ++i)
+                largest = juce::jmax(largest, std::abs(buffer.getSample(ch, i)));
+        return largest;
+    };
+
+    beginTest("A profile keeps running through true bypass, so resuming replays nothing stale");
+    {
+        TempNam identity(linearModelJson("1.0", 1, 48000));
+        PluginProcessor processor;
+        loudToneThroughIsland(processor, identity.file);
+
+        // Into true bypass, on silence long enough to flush every line fed during it.
+        juce::MidiBuffer midi;
+        setParameter(processor.parameters, "distortionAmount", 0.0f);
+        for (int b = 0; b < 20; ++b)
+        {
+            juce::AudioBuffer<float> silence(2, 512);
+            silence.clear();
+            processor.processBlock(silence, midi);
+        }
+        expect(processor.pb_modulatedDistortionParam < 0.5f, "True bypass is running");
+
+        setParameter(processor.parameters, "distortionAmount", 200.0f / 3.0f);
+        bool checked = false;
+        for (int b = 0; b < 20 && ! checked; ++b)
+        {
+            juce::AudioBuffer<float> silence(2, 512);
+            silence.clear();
+            processor.processBlock(silence, midi);
+            if (processor.pb_modulatedDistortionParam >= 0.5f)
+            {
+                checked = true;
+                // Frozen, the island hands back D samples of the 0.5 tone. What
+                // remains is the input filter's own residual (see the test above).
+                const float largest = largestAbs(silence);
+                expect(largest < 0.15f, "No stale tone after the crossing: largest=" + juce::String(largest, 8));
+            }
+        }
+        expect(checked, "The active path resumed within the loop's block budget");
+    }
+
+    beginTest("A state reset clears the island along with the dry delays");
+    {
+        // A preset or session load mid-playback resets the DSP without a duck; the
+        // island restarting with the dry lines is what keeps the two halves in step.
+        TempNam identity(linearModelJson("1.0", 1, 48000));
+        PluginProcessor processor;
+        loudToneThroughIsland(processor, identity.file);
+
+        processor.stateNeedsReset.store(true);
+        juce::AudioBuffer<float> silence(2, 512);
+        silence.clear();
+        juce::MidiBuffer midi;
+        processor.processBlock(silence, midi);
+        const float largest = largestAbs(silence);
+        expect(largest < 1.0e-3f, "Nothing from before the reset comes out: largest=" + juce::String(largest, 8));
+    }
+
+    beginTest("An offline render never ducks to silence");
+    {
+        // A bounce runs faster than the timer: a duck that waits for its tick would
+        // print that wait into the file as silence, many times over.
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        processor.setNonRealtime(true);
+        expect(processor.loadProfileBlocking(namTestModel("wavenet.nam")), "Loads");
+        processor.timerCallback();   // the switch into profile mode is requested
+
+        ContinuousSine sine;
+        std::vector<float> out;
+        juce::MidiBuffer midi;
+        for (int b = 0; b < 10; ++b)
+        {
+            auto buffer = sine.next(512);
+            processor.processBlock(buffer, midi);
+            appendChannel0(out, buffer);
+        }
+        const int zeros = longestZeroRun(out);
+        expect(zeros <= 8, "No silent gap in the render: longest zero run " + juce::String(zeros));
+
+        expect(settle(processor), "The switch completes");
+        expect(processor.profileMode, "Profile mode is on");
+    }
+
+    beginTest("Host bypass keeps the reported latency");
+    {
+        // The host compensates for the reported latency whether or not it has
+        // bypassed us, so the bypassed signal must arrive exactly that late.
+        for (const double rate : { 44100.0, 96000.0 })
+        {
+            PluginProcessor processor;
+            prepareForProfileTest(processor, rate, 512);   // built-in clip type
+            const int latency = processor.getLatencySamples();
+
+            std::vector<float> out;
+            juce::MidiBuffer midi;
+            for (int b = 0; b < 4; ++b)
+            {
+                juce::AudioBuffer<float> buffer(2, 512);
+                buffer.clear();
+                if (b == 0)
+                {
+                    buffer.setSample(0, 0, 0.25f);
+                    buffer.setSample(1, 0, 0.25f);
+                }
+                processor.processBlockBypassed(buffer, midi);
+                appendChannel0(out, buffer);
+            }
+
+            const auto peak = std::distance(out.begin(), std::max_element(out.begin(), out.end(),
+                [](float a, float b) { return std::abs(a) < std::abs(b); }));
+            expect(latency > 0, "A latency is reported at " + juce::String(rate));
+            expectEquals(static_cast<int>(peak), latency, "Bypassed impulse lands at the reported latency, "
+                                                          + juce::String(rate) + " Hz");
+        }
+    }
+
+    beginTest("A block processBlock gives up on keeps the reported latency and the duck");
+    {
+        // A NaN parameter is one of processBlock's early exits; the others share its tail.
+        PluginProcessor processor;
+        prepareForProfileTest(processor, 44100.0, 512);   // built-in clip type
+        const int latency = processor.getLatencySamples();
+        expect(latency > 0, "A latency is reported at 44.1 kHz");
+        const float distortion = processor.distortionAmountParam->load();
+        processor.distortionAmountParam->store(std::numeric_limits<float>::quiet_NaN());
+
+        std::vector<float> out;
+        juce::MidiBuffer midi;
+        for (int b = 0; b < 4; ++b)
+        {
+            juce::AudioBuffer<float> buffer(2, 512);
+            buffer.clear();
+            if (b == 0)
+            {
+                buffer.setSample(0, 0, 0.25f);
+                buffer.setSample(1, 0, 0.25f);
+            }
+            processor.processBlock(buffer, midi);
+            appendChannel0(out, buffer);
+        }
+        const auto peak = std::distance(out.begin(), std::max_element(out.begin(), out.end(),
+            [](float a, float b) { return std::abs(a) < std::abs(b); }));
+        expectEquals(static_cast<int>(peak), latency, "The impulse lands at the reported latency");
+
+        // Without the duck gain the fade would stall at full level until the timeout.
+        processor.requestOversamplingRebuild(1);
+        expect(processor.duckRequested.load(), "A new setting asks for a duck");
+        for (int b = 0; b < 8 && processor.duckState != PluginProcessor::DuckState::closed; ++b)
+        {
+            auto buffer = generateSineWave(440.0, 44100.0, 512, 0.5f);
+            processor.processBlock(buffer, midi);
+        }
+        expect(processor.duckState == PluginProcessor::DuckState::closed, "The fade reaches silence");
+        processor.distortionAmountParam->store(distortion);
+    }
+
+    beginTest("The output lands exactly at the reported latency with a profile loaded");
+    {
+        // The relative tests line the paths up with each other; this one pins the
+        // whole active path to the figure the host compensates for.
+        TempNam identity(linearModelJson("1.0", 1, 48000));
+        for (const double rate : { 44100.0, 48000.0, 96000.0 })
+        {
+            PluginProcessor processor;
+            prepareForProfileTest(processor, rate, 512);
+            configureUnityChain(processor);
+            processor.loadProfileBlocking(identity.file);
+            expect(settle(processor), "Identity profile in at " + juce::String(rate));
+            expect(processor.profileMode, "Profile mode is on at " + juce::String(rate));
+
+            constexpr size_t impulseAt = 2048;
+            std::vector<float> signal(static_cast<size_t>(rate), 0.0f);
+            signal[impulseAt] = 0.25f;
+            const auto out = renderThrough(processor, signal);
+            const auto peak = std::distance(out.begin(), std::max_element(out.begin(), out.end(),
+                [](float a, float b) { return std::abs(a) < std::abs(b); }));
+            expectEquals(static_cast<int>(peak), static_cast<int>(impulseAt) + processor.getLatencySamples(),
+                         "Impulse peak at 2048 + the reported latency, " + juce::String(rate) + " Hz");
+        }
+    }
+
+    beginTest("A block longer than the host prepared for still runs the profile, in step");
+    {
+        // Prepared for 512, handed 768: the profile runs in pieces instead of the
+        // built-in clip type taking over at zero latency, D ahead of the dry and the
+        // Sub Guard low band. Either way the output matches a 512-sample render.
+        TempNam identity(linearModelJson("1.0", 1, 48000));
+        const auto noise = lowPassedNoise(44100.0, 0.5, 0.05f);   // 22050 samples
+        for (const float subGuard : { 0.0f, 80.0f })
+        {
+            const auto render = [&](int blockSize)
+            {
+                PluginProcessor processor;
+                prepareForProfileTest(processor, 44100.0, 512);
+                configureUnityChain(processor);
+                setParameter(processor.parameters, "subGuardFreq", subGuard);
+                processor.loadProfileBlocking(identity.file);
+                expect(settle(processor), "Identity profile in");
+                expect(processor.islandDelay > 0, "44.1 kHz runs the island with a delay");
+
+                std::vector<float> out;
+                juce::MidiBuffer midi;
+                for (size_t done = 0; done + static_cast<size_t>(blockSize) <= noise.size();
+                     done += static_cast<size_t>(blockSize))
+                {
+                    juce::AudioBuffer<float> buffer(2, blockSize);
+                    for (int ch = 0; ch < 2; ++ch)
+                        buffer.copyFrom(ch, 0, noise.data() + done, blockSize);
+                    processor.processBlock(buffer, midi);
+                    appendChannel0(out, buffer);
+                }
+                return out;
+            };
+
+            const auto prepared = render(512);
+            const auto oversized = render(768);
+            const size_t from = 4410;   // past the first blocks' settling
+            const size_t to = juce::jmin(prepared.size(), oversized.size());
+            float largest = 0.0f;
+            for (size_t i = from; i < to; ++i)
+                largest = juce::jmax(largest, std::abs(prepared[i] - oversized[i]));
+            expect(largest < 1.0e-4f, "768-sample blocks match 512-sample ones, Sub Guard "
+                                      + juce::String(subGuard) + ": largest difference " + juce::String(largest, 8));
+        }
+    }
+
+    beginTest("An older pending profile never comes back over a newer load or a clear");
+    {
+        // The pending profile was prepared for a rate the host has left, which is
+        // the case that sends a still-wanted one back through the staged slot.
+        TempNam older(linearModelJson("0.5", 1, 48000));
+        TempNam newer(linearModelJson("1.0", 1, 48000));
+        for (const bool clear : { false, true })
+        {
+            PluginProcessor processor;
+            prepareForProfileTest(processor, 48000.0, 512);
+            juce::String error;
+            auto* pending = NamProfile::load(older.file, 2, 44100.0, 512, error).release();
+            expect(pending != nullptr && ! processor.isPreparedForHost(*pending), "Older profile left behind by the host");
+            processor.pendingProfile.store(pending);
+            NamProfile* staged = nullptr;
+            if (clear)
+            {
+                processor.clearRequested.store(true);
+            }
+            else
+            {
+                staged = NamProfile::load(newer.file, 2, 48000.0, 512, error).release();
+                expect(staged != nullptr && processor.isPreparedForHost(*staged), "Newer profile ready");
+                processor.stagedProfile.store(staged);
+            }
+
+            std::vector<NamProfile*> toFree;
+            {
+                const juce::ScopedLock sl(processor.getCallbackLock());
+                processor.installRequestedProfile(toFree);
+            }
+            const juce::String what = clear ? "after a clear" : "after a newer load";
+            expect(processor.activeProfile == staged, "The newest intent is installed " + what);
+            expect(processor.stagedProfile.load() == nullptr, "The older profile isn't staged again " + what);
+            expect(std::find(toFree.begin(), toFree.end(), pending) != toFree.end(),
+                   "The older profile is freed " + what);
+            for (auto* profile : toFree)
+                delete profile;
+        }
+    }
+
+    // Spins until `done` holds, for at most two seconds. The races below fire the
+    // clear the moment the other thread is inside its window.
+    const auto spinUntil = [](const std::function<bool()>& done)
+    {
+        const auto deadline = juce::Time::getMillisecondCounter() + 2000;
+        while (! done() && juce::Time::getMillisecondCounter() < deadline)
+            std::this_thread::yield();
+        return done();
+    };
+
+    // Blocks the profile loader until release(), so a test can hold a job queued.
+    struct LoaderGate
+    {
+        explicit LoaderGate(PluginProcessor& processor)
+        {
+            processor.getProfileLoader().addJob([this] { started.signal(); gate.wait(); });
+            started.wait();
+        }
+        ~LoaderGate() { release(); }
+        void release() { gate.signal(); }
+        juce::WaitableEvent started, gate;
+    };
+
+    const auto waitForRefreshes = [&spinUntil](PluginProcessor& processor)
+    {
+        return spinUntil([&] { return processor.stagedRefreshesInFlight.load() == 0; });
+    };
+
+    beginTest("The timer leaves re-preparing a stale staged profile to the loader");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor, 48000.0, 512);
+        const auto model = namTestModel("wavenet.nam");
+        juce::String error;
+        auto stale = NamProfile::load(model, 2, 44100.0, 512, error);
+        expect(stale != nullptr, error);
+        stale->setRequestId(processor.beginProfileRequest(model));
+        auto* staleProfile = stale.get();
+        processor.stagedProfile.store(stale.release());
+
+        // With the loader busy, the tick still returns: nothing was prepared on it.
+        LoaderGate busy(processor);
+        processor.refreshStagedProfile();
+        expectEquals(processor.stagedRefreshesInFlight.load(), 1);
+        expect(processor.stagedProfile.load() == nullptr, "The profile is out with the loader");
+        expect(! processor.isProfileSwitchIdle(), "A refresh in flight isn't idle");
+        expectWithinAbsoluteError(staleProfile->getPreparedSampleRate(), 44100.0, 0.5);
+
+        busy.release();
+        expect(waitForRefreshes(processor), "The loader finishes the refresh");
+        auto* back = processor.stagedProfile.load();
+        expect(back == staleProfile, "The same profile is staged again");
+        if (back != nullptr)
+            expectWithinAbsoluteError(back->getPreparedSampleRate(), 48000.0, 0.5);
+        expect(settle(processor), "The switch completes");
+        expect(processor.profileMode && processor.activeProfile == staleProfile, "The profile is installed");
+    }
+
+    beginTest("A clear while the loader re-prepares a staged profile keeps it cleared");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor, 48000.0, 512);
+        const auto model = namTestModel("wavenet.nam");
+        juce::String error;
+        auto stale = NamProfile::load(model, 2, 44100.0, 512, error);
+        expect(stale != nullptr, error);
+        stale->setRequestId(processor.beginProfileRequest(model));
+        processor.stagedProfile.store(stale.release());
+
+        // The clear lands while the profile is out of its slot, held on the loader.
+        LoaderGate busy(processor);
+        processor.refreshStagedProfile();
+        expectEquals(processor.stagedRefreshesInFlight.load(), 1);
+        processor.clearProfile();   // as setStateInformation on a host thread would
+        busy.release();
+        expect(waitForRefreshes(processor), "The loader finishes the refresh");
+
+        expect(processor.stagedProfile.load() == nullptr, "The cleared profile isn't staged again");
+        expect(settle(processor), "Nothing left to switch");
+        expect(processor.activeProfile == nullptr && ! processor.profileMode, "No profile runs");
+        expect(processor.getProfileStatus().name.isEmpty(), "Nothing is reported loaded");
+    }
+
+    beginTest("A newer load while the loader re-prepares a staged profile wins");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor, 48000.0, 512);
+        const auto model = namTestModel("wavenet.nam");
+        juce::String error;
+        auto stale = NamProfile::load(model, 2, 44100.0, 512, error);
+        expect(stale != nullptr, error);
+        stale->setRequestId(processor.beginProfileRequest(model));
+        processor.stagedProfile.store(stale.release());
+
+        LoaderGate busy(processor);
+        processor.refreshStagedProfile();
+        expect(processor.loadProfileBlocking(namTestModel("lstm.nam")), "lstm.nam loads");
+        busy.release();
+        expect(waitForRefreshes(processor), "The loader finishes the refresh");
+
+        expect(settle(processor), "The switch completes");
+        expect(processor.activeProfile != nullptr && processor.activeProfile->getName() == "lstm",
+               "The newer load is installed, not the refreshed one");
+    }
+
+    beginTest("A clear during a switch into profile mode is served, not lost");
+    {
+        for (int round = 0; round < 5; ++round)
+        {
+            PluginProcessor processor;
+            prepareForProfileTest(processor, 48000.0, 512);
+            expect(processor.loadProfileBlocking(namTestModel("wavenet.nam")), "Loads");
+            processor.timerCallback();   // routes it: entering profile mode asks for a duck
+            expect(processor.duckRequested.load(), "A duck is pending");
+
+            // The clear lands once the switch has installed the profile, while the
+            // switch is still rebuilding and its duck flag is still up.
+            std::thread timer([&] { processor.performSwitch(); });
+            expect(spinUntil([&] { return processor.profileModeInstalled.load(); }),
+                   "The switch installed the profile");
+            processor.clearProfile();
+            timer.join();
+
+            expect(settle(processor), "The clear's own switch completes");
+            expect(processor.activeProfile == nullptr && ! processor.profileMode,
+                   "The clear won: no profile runs");
+        }
+    }
+
+    // Left and right as two tones, each carrying its phase across blocks.
+    const auto stereoBlock = [](ContinuousSine& left, ContinuousSine& right, int numSamples)
+    {
+        auto buffer = left.next(numSamples);
+        const auto r = right.next(numSamples);
+        buffer.copyFrom(1, 0, r, 0, 0, numSamples);
+        return buffer;
+    };
+
+    beginTest("With a mono input, channel 1 shares channel 0's model output and its model rests");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        setParameter(processor.parameters, "monoInput", 1.0f);
+        expect(processor.loadProfileBlocking(namTestModel("wavenet.nam")), "wavenet.nam loads");
+        expect(settle(processor), "Loaded");
+
+        ContinuousSine left { 110.0, 48000.0, 0.25f };
+        ContinuousSine right { 220.0, 48000.0, 0.1f };   // the unused second input
+        juce::MidiBuffer midi;
+        for (int b = 0; b < 10; ++b)
+        {
+            auto buffer = stereoBlock(left, right, 512);
+            processor.processBlock(buffer, midi);
+        }
+        expect(processor.profileRightIdle, "Channel 1's model rests once the fade is done");
+        expectEquals(processor.profileRightWeight, 0.0f);
+
+        int allocations = 0;
+        bool identical = true;
+        for (int b = 0; b < 4; ++b)
+        {
+            auto buffer = stereoBlock(left, right, 512);
+            allocations += allocationsDuring(processor, buffer);
+            for (int i = 0; i < 512; ++i)
+                identical = identical && juce::exactlyEqual(buffer.getSample(0, i), buffer.getSample(1, i));
+        }
+        expect(identical, "Both channels carry the same output");
+        expectEquals(allocations, 0, "processBlock while channel 1 rests");
+
+        // Through true bypass and back, it keeps resting.
+        setParameter(processor.parameters, "distortionAmount", 0.0f);
+        for (int b = 0; b < 10; ++b)
+        {
+            auto buffer = stereoBlock(left, right, 512);
+            processor.processBlock(buffer, midi);
+        }
+        setParameter(processor.parameters, "distortionAmount", 60.0f);
+        for (int b = 0; b < 10; ++b)
+        {
+            auto buffer = stereoBlock(left, right, 512);
+            processor.processBlock(buffer, midi);
+        }
+        expect(processor.profileRightIdle, "Channel 1's model still rests after true bypass");
+    }
+
+    beginTest("Leaving mono, channel 1 warms up and fades back in to what it would have been");
+    {
+        // A runs with Mono Input on, then off. B is stereo throughout and is fed what
+        // A's chain saw: the left input on both channels, then both inputs.
+        PluginProcessor a, b;
+        for (auto* p : { &a, &b })
+        {
+            prepareForProfileTest(*p);
+            expect(p->loadProfileBlocking(namTestModel("wavenet.nam")), "wavenet.nam loads");
+            expect(settle(*p), "Loaded");
+        }
+        setParameter(a.parameters, "monoInput", 1.0f);
+
+        // Mono Input goes off with nothing plugged into the second input: right is
+        // silent. unusedA is what that input carries while Mono Input ignores it.
+        ContinuousSine leftA { 110.0, 48000.0, 0.25f }, rightA { 220.0, 48000.0, 0.0f },
+                       unusedA { 330.0, 48000.0, 0.1f };
+        ContinuousSine leftB { 110.0, 48000.0, 0.25f }, leftB2 { 110.0, 48000.0, 0.25f },
+                       rightB { 220.0, 48000.0, 0.0f };
+        juce::MidiBuffer midi;
+        std::vector<float> a0, a1, b0, b1;
+        const auto run = [&](juce::AudioBuffer<float>& bufA, juce::AudioBuffer<float>& bufB, int& allocations)
+        {
+            allocations += allocationsDuring(a, bufA);
+            b.processBlock(bufB, midi);
+            appendChannel0(a0, bufA);
+            appendChannel0(b0, bufB);
+            a1.insert(a1.end(), bufA.getReadPointer(1), bufA.getReadPointer(1) + 512);
+            b1.insert(b1.end(), bufB.getReadPointer(1), bufB.getReadPointer(1) + 512);
+        };
+
+        int allocations = 0;
+        for (int blk = 0; blk < 20; ++blk)
+        {
+            auto bufA = stereoBlock(leftA, unusedA, 512);
+            auto bufB = stereoBlock(leftB, leftB2, 512);
+            run(bufA, bufB, allocations);
+        }
+        expect(a.profileRightIdle && ! b.profileRightIdle, "Only the mono instance rests channel 1");
+
+        const size_t rejoinAt = a1.size();
+        setParameter(a.parameters, "monoInput", 0.0f);
+        for (int blk = 0; blk < 30; ++blk)
+        {
+            auto bufA = stereoBlock(leftA, rightA, 512);
+            auto bufB = stereoBlock(leftB, rightB, 512);
+            run(bufA, bufB, allocations);
+        }
+        expectEquals(allocations, 0, "processBlock while channel 1 rests and rejoins");
+        expect(! a.profileRightIdle, "Channel 1's model runs again");
+        expectEquals(a.profileRightWeight, 1.0f);
+
+        expect(a0 == b0, "Channel 0 is untouched by the sharing");
+
+        // Channel 1 fades from the tone to silence, stepping no harder than the
+        // tone itself does on channel 0. Switched outright, it would drop at once.
+        const float stepRight = largestStep(a1, rejoinAt);
+        const float stepTone = largestStep(a0, rejoinAt);
+        expect(stepRight <= stepTone * 1.25f,
+               "No click on rejoining: " + juce::String(stepRight, 6) + " vs " + juce::String(stepTone, 6));
+
+        // Settled and faded in, channel 1 is what it would have been had it never rested.
+        float maxDiff = 0.0f;
+        for (size_t i = a1.size() - 10 * 512; i < a1.size(); ++i)
+            maxDiff = juce::jmax(maxDiff, std::abs(a1[i] - b1[i]));
+        expect(maxDiff < 1.0e-4f, "Channel 1 matches the stereo instance: " + juce::String(maxDiff, 8));
+    }
+}
+
 #endif // JUCE_DEBUG
