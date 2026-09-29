@@ -2342,6 +2342,9 @@ void PluginProcessor::setStateInformation(const void* data, int sizeInBytes)
         migrateState(*xmlState);
 
         const juce::String profilePath = xmlState->getStringAttribute(profilePathAttribute);
+        // The path belongs to the session, not the parameters: left in the tree, it
+        // would be copied into every user preset saved from here on.
+        parameters.state.removeProperty(profilePathAttribute, nullptr);
         if (profilePath.isEmpty())
         {
             if (isProfileLoaded() || getProfileStatus().path.isNotEmpty())

@@ -1692,6 +1692,8 @@ void PluginEditor::savePreset(const juce::String& presetName)
     // Stamp the schema version so presets migrate the same way host state does.
     state.setProperty(PluginProcessor::stateVersionAttribute,
                       PluginProcessor::currentStateVersion, nullptr);
+    // Presets don't carry a profile yet; drop any session path a preset loaded earlier left behind.
+    state.removeProperty(PluginProcessor::profilePathAttribute, nullptr);
     auto stateXml = state.createXml();
     if (stateXml != nullptr)
         preset.addChildElement(stateXml.release());

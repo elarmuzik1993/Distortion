@@ -5670,6 +5670,8 @@ void NamProfileTests::runTest()
         restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
         expect(waitForProfileLoad(restored), "Restore finished loading");
         expectEquals(restored.getProfileStatus().name, juce::String("wavenet"));
+        expect(! restored.parameters.state.hasProperty(PluginProcessor::profilePathAttribute),
+               "The session's profile path stays out of the parameter tree, so presets never carry it");
 
         // A session saved without a profile clears one that is loaded.
         juce::MemoryBlock plain;

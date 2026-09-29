@@ -154,7 +154,7 @@ namespace DSPConstants
     constexpr float OUTPUT_LIMITER_KNEE_DB = 1.0f;             // 1dB soft knee (transparent onset)
     constexpr float OUTPUT_LIMITER_CLAMP_SOFTNESS_DB = 1.0f;   // soft zone below ceiling for the hard backstop
 
-    // NAM profiles (docs/superpowers/specs/2026-09-26-nam-profile-resampling-design.md)
+    // NAM profiles (Source/Nam/ResamplingIsland.h; the latency plan is updateLatencyPlan)
     constexpr double PROFILE_RESERVE_MODEL_RATE = 48000.0;   // the latency reserve assumes a 48 kHz model
     constexpr double PROFILE_WARMUP_MAX_S = 0.100;           // longest silent warm-up before a crossfade
     constexpr double PROFILE_CROSSFADE_TIME_S = 0.030;       // profile-to-profile blend
