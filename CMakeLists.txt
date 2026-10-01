@@ -157,6 +157,7 @@ set(PLUGIN_SOURCES
 set(TEST_SOURCES
     Source/Tests/TestRunner.cpp
     Source/Tests/DistortionTests.cpp
+    Source/Tests/CrossingProbe.cpp
     Source/Tests/DistortionTests.h
     Source/Tests/TestUtilities.h
     Source/RTAllocationGuard.h

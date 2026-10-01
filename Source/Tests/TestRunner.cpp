@@ -66,7 +66,12 @@ int main(int argc, char* argv[])
     }
     else
     {
-        runner.runAllTests();
+        // Probes measure rather than check, so a full run leaves them out; name one to run it.
+        juce::Array<juce::UnitTest*> selected;
+        for (auto* test : juce::UnitTest::getAllTests())
+            if (test->getCategory() != "Probe")
+                selected.add(test);
+        runner.runTests(selected);
     }
     std::cout << "Tests completed.\n";
     std::cout.flush();
