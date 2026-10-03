@@ -1708,7 +1708,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Initialize modulated parameter copies (block-level defaults)
     float modulatedDistortionParam = distortionParam;
     float modulatedToneFreq = toneParamValue;
-    float modulatedHighPassFreq = highPassFreq;
     float modulatedShape = shapeValue;
     float modulatedDistMix = distMix;
     float modulatedOutputGain = outGainParam;
@@ -1737,7 +1736,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     }
 
     // Publish preamble parameters to block-scope members for stage helpers (PR-8)
-    pb_modulatedHighPassFreq    = modulatedHighPassFreq;
+    pb_modulatedHighPassFreq    = highPassFreq;  // legacy filter cutoff: the knob value, not modulated
     pb_filterMode               = filterMode;
     pb_shapeTarget              = modulatedShape;
     shapePre.setTarget(pb_shapeTarget);
@@ -4336,22 +4335,22 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         20.0f));  // Default 20 = audible out of the box; 0 is a true bypass (see
                   // applyDistortionStage), so a fresh instance previously did nothing.
 
-    // Input filter cutoff/centre. Full-range so low-pass and band-pass modes are usable
-    // across the spectrum; log-style skew (centre ~1 kHz) keeps the knob musical. The ID
-    // stays "highPassFreq" for state/preset compatibility even though it now drives any mode.
+    // Hidden legacy param: cutoff/centre of the old multimode input filter, kept only so
+    // sessions saved before Shape still sound the same (see LegacyInputFilter.h). Not
+    // shown in the editor; the LFO no longer touches it. The ID stays "highPassFreq".
     {
         juce::NormalisableRange<float> filterFreqRange(20.0f, 20000.0f, 1.0f);
         filterFreqRange.setSkewForCentre(1000.0f);
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
             juce::ParameterID{ "highPassFreq", 1 },
-            "Filter Frequency",
+            "Legacy Filter Freq",
             filterFreqRange,
             DSPConstants::DEFAULT_HIPASS_FREQ));
     }
 
     params.push_back(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID{ "filterMode", 1 },
-        "Filter Mode",
+        "Legacy Filter Mode",
         juce::StringArray{ "High Pass", "Low Pass", "Band Pass" },
         0));  // Default High Pass (preserves prior behaviour)
 
