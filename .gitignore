@@ -53,7 +53,6 @@ __pycache__/
 .claude/
 CLAUDE.md
 GEMINI.md
-AGENTS.md
 RELEASE_CHECKLIST.md
 realtime-audio-safety-checklist.md
 docs/superpowers/
