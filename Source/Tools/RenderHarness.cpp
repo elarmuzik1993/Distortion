@@ -20,6 +20,7 @@
 
 #include <JuceHeader.h>
 #include "../PluginProcessor.h"
+#include "../FactoryPresets.h"
 
 #include <cmath>
 #include <iostream>
@@ -141,6 +142,44 @@ juce::AudioBuffer<float> generateKickBass(int numSamples, double sr, float amp)
 }
 
 //==============================================================================
+// Clean 808: pitch drop 120 -> 45 Hz, 1.2 s decay, retriggered every second.
+// Almost no content above the fundamental, so it shows what the post-drive Shape does.
+juce::AudioBuffer<float> generate808(int numSamples, double sr, float amp)
+{
+    auto b = makeBuffer(numSamples);
+    const double twoPi = 2.0 * juce::MathConstants<double>::pi;
+    double phase = 0.0;
+    for (int n = 0; n < numSamples; ++n)
+    {
+        const double t = std::fmod(n / sr, 1.0);
+        const double freq = 45.0 + 75.0 * std::exp(-t * 25.0);
+        phase += twoPi * freq / sr;
+        const float s = amp * static_cast<float>(std::exp(-t * 2.5) * std::sin(phase));
+        b.setSample(0, n, s);
+        b.setSample(1, n, s);
+    }
+    return b;
+}
+
+// Sustained A1 (55 Hz) bass with a 1/n harmonic series up to 2 kHz: a synth or
+// bass-guitar-like source with real mid content for the pre-drive Shape.
+juce::AudioBuffer<float> generateBassNote(int numSamples, double sr, float amp)
+{
+    auto b = makeBuffer(numSamples);
+    const double twoPi = 2.0 * juce::MathConstants<double>::pi;
+    for (int n = 0; n < numSamples; ++n)
+    {
+        double s = 0.0;
+        for (int h = 1; h * 55.0 < 2000.0; ++h)
+            s += std::sin(twoPi * 55.0 * h * n / sr) / h;
+        const float v = amp * 0.5f * static_cast<float>(s);
+        b.setSample(0, n, v);
+        b.setSample(1, n, v);
+    }
+    return b;
+}
+
+//==============================================================================
 // Run a buffer through the plugin in place, block by block.
 void runPlugin(PluginProcessor& proc, juce::AudioBuffer<float>& buffer)
 {
@@ -233,9 +272,11 @@ int renderToFile(const Args& args)
     {
         const int numSamples = static_cast<int>(seconds * sr);
         juce::Random rng(1);
-        if (signal == "noise")      input = generateWhiteNoise(numSamples, 0.25f, rng);
-        else if (signal == "sweep") input = generateSineSweep(numSamples, sr, 0.5f, 20.0, 20000.0);
-        else                        input = generateKickBass(numSamples, sr, 0.8f);
+        if (signal == "noise")         input = generateWhiteNoise(numSamples, 0.25f, rng);
+        else if (signal == "sweep")    input = generateSineSweep(numSamples, sr, 0.5f, 20.0, 20000.0);
+        else if (signal == "808")      input = generate808(numSamples, sr, 0.8f);
+        else if (signal == "bassnote") input = generateBassNote(numSamples, sr, 0.6f);
+        else                           input = generateKickBass(numSamples, sr, 0.8f);
     }
 
     PluginProcessor proc;
@@ -243,9 +284,23 @@ int renderToFile(const Args& args)
     proc.prepareToPlay(sr, kBlockSize);
 
     setParam(proc.parameters, "globalMix", 100.0f);
-    setParam(proc.parameters, "subGuardFreq", (args.str("subguard", "") == "off") ? 0.0f : sgFreq);
-    setParam(proc.parameters, "distortionAmount", drive);
-    setParam(proc.parameters, "distMix", mix);
+
+    // A preset sets drive etc. first; explicit flags after it still win.
+    const bool hasPreset = args.has("preset");
+    if (hasPreset && ! FactoryPresets::apply(proc.parameters, args.str("preset", "")))
+    {
+        std::cerr << "Unknown factory preset: " << args.str("preset", "") << "\n";
+        return 1;
+    }
+    if (args.has("shape"))
+        setParam(proc.parameters, "shape", args.num("shape", 0.0f));
+
+    if (! hasPreset || args.has("subguard"))
+        setParam(proc.parameters, "subGuardFreq", (args.str("subguard", "") == "off") ? 0.0f : sgFreq);
+    if (! hasPreset || args.has("drive"))
+        setParam(proc.parameters, "distortionAmount", drive);
+    if (! hasPreset || args.has("mix"))
+        setParam(proc.parameters, "distMix", mix);
 
     if (profilePath.isNotEmpty())
     {
@@ -260,9 +315,13 @@ int renderToFile(const Args& args)
     }
 
     // Input filter: --mode hp|lp|bp, --filterfreq <Hz>
-    const auto mode = args.str("mode", "hp");
-    const float filterModeIdx = (mode == "lp") ? 1.0f : (mode == "bp") ? 2.0f : 0.0f;
-    setParam(proc.parameters, "filterMode", filterModeIdx);
+    // Applied only when given, so it never resets a preset's legacy filter.
+    if (args.has("mode"))
+    {
+        const auto mode = args.str("mode", "hp");
+        const float filterModeIdx = (mode == "lp") ? 1.0f : (mode == "bp") ? 2.0f : 0.0f;
+        setParam(proc.parameters, "filterMode", filterModeIdx);
+    }
     if (args.has("filterfreq"))
         setParam(proc.parameters, "highPassFreq", args.num("filterfreq", 20.0f));
 
@@ -296,8 +355,10 @@ int main(int argc, char* argv[])
     {
         std::cout <<
             "Offline render harness for Sledge Distortion (Monolit Beatz)\n\n"
-            "  --signal noise|sweep|kickbass         synthetic input (default kickbass)\n"
-            "  --mode hp|lp|bp  --filterfreq <Hz>    input filter mode / cutoff\n"
+            "  --signal noise|sweep|kickbass|808|bassnote  synthetic input (default kickbass)\n"
+            "  --shape <-100..100>                   Shape (Bark < 0 < Scoop)\n"
+            "  --preset <name>                       load a factory preset first\n"
+            "  --mode hp|lp|bp  --filterfreq <Hz>    legacy v2.3 input filter (hidden param)\n"
             "  --in <file.wav>                       use a WAV file as input\n"
             "  --subguard <Hz|off>                   Sub Guard crossover frequency\n"
             "  --drive <0-100>  --mix <0-100>        distortion amount / wet mix\n"
