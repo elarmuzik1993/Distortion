@@ -5,6 +5,9 @@ CMakeFiles/
 cmake_install.cmake
 Makefile
 
+# Generated into the build tree; older builds wrote it here
+Source/GitVersion.h
+
 # IDE and editor files
 .vscode/
 .idea/
@@ -34,6 +37,9 @@ Builds/
 # Test outputs
 *.test
 test_results/
+# Default outputs of the UI snapshot and render harnesses (written to the CWD)
+ui-shots/
+render.wav
 
 # Binary data
 *.vst3

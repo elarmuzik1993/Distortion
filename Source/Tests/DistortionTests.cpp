@@ -49,7 +49,7 @@ void DistortionDSPTests::runTest()
     testOutputRange(processor);
 }
 
-void DistortionDSPTests::testClipType(PluginProcessor& processor, int clipType, const juce::String& name)
+void DistortionDSPTests::testClipType(PluginProcessor& processor, int clipType, const juce::String& label)
 {
     // Test with various input levels
     const float testInputs[] = { 0.0f, 0.1f, 0.5f, 0.8f, 1.0f, -0.5f, -1.0f };
@@ -65,11 +65,11 @@ void DistortionDSPTests::testClipType(PluginProcessor& processor, int clipType, 
                 float output = processor.applyStudioDistortion(input, gain, drive, clipType, 1.0f);
 
                 // Output should never be NaN or Inf
-                expect(!std::isnan(output), name + ": Output is NaN for input " + juce::String(input));
-                expect(!std::isinf(output), name + ": Output is Inf for input " + juce::String(input));
+                expect(!std::isnan(output), label + ": Output is NaN for input " + juce::String(input));
+                expect(!std::isinf(output), label + ": Output is Inf for input " + juce::String(input));
 
                 // Output should be bounded (allow some headroom for processing)
-                expect(std::abs(output) <= 2.0f, name + ": Output " + juce::String(output) +
+                expect(std::abs(output) <= 2.0f, label + ": Output " + juce::String(output) +
                        " exceeds bounds for input " + juce::String(input));
             }
         }
@@ -77,7 +77,7 @@ void DistortionDSPTests::testClipType(PluginProcessor& processor, int clipType, 
 
     // Test zero input produces near-zero output (except for noise injection)
     float zeroOutput = processor.applyStudioDistortion(0.0f, 1.0f, 1.0f, clipType, 1.0f);
-    expect(std::abs(zeroOutput) < 0.1f, name + ": Zero input should produce near-zero output");
+    expect(std::abs(zeroOutput) < 0.1f, label + ": Zero input should produce near-zero output");
 }
 
 void DistortionDSPTests::testEdgeCases(PluginProcessor& processor)
@@ -739,7 +739,7 @@ void CleanBoostTests::testRuntimeOversamplingChange()
     const auto after = snapshotEmphasis();
 
     float maxDiff = 0.0f;
-    for (int i = 0; i < 5; ++i)
+    for (size_t i = 0; i < before.size(); ++i)
         maxDiff = std::max(maxDiff, std::abs(before[i] - after[i]));
 
     expect(maxDiff > 1e-3f,
@@ -1262,7 +1262,7 @@ void LFOTests::runTest()
     testOutputRange(processor);
 }
 
-void LFOTests::testWaveformShape(PluginProcessor& processor, int waveformType, const juce::String& name)
+void LFOTests::testWaveformShape(PluginProcessor& processor, int waveformType, const juce::String& label)
 {
     // Test key phase points
     const float testPhases[] = { 0.0f, 0.25f, 0.5f, 0.75f, 1.0f };
@@ -1271,10 +1271,10 @@ void LFOTests::testWaveformShape(PluginProcessor& processor, int waveformType, c
     {
         float output = processor.generateLFOWaveform(phase, waveformType);
 
-        expect(!std::isnan(output), name + ": Output is NaN at phase " + juce::String(phase));
-        expect(!std::isinf(output), name + ": Output is Inf at phase " + juce::String(phase));
+        expect(!std::isnan(output), label + ": Output is NaN at phase " + juce::String(phase));
+        expect(!std::isinf(output), label + ": Output is Inf at phase " + juce::String(phase));
         expect(output >= -1.0f && output <= 1.0f,
-               name + ": Output " + juce::String(output) + " out of range [-1, 1]");
+               label + ": Output " + juce::String(output) + " out of range [-1, 1]");
     }
 
     // Test specific expected values for deterministic waveforms
@@ -3276,7 +3276,7 @@ void GoldenAudioTests::testSilencePassthrough()
            "Silence passthrough failed - output is not silent");
 }
 
-void GoldenAudioTests::testDistortionOutput(int clipType, const juce::String& name)
+void GoldenAudioTests::testDistortionOutput(int clipType, const juce::String& label)
 {
     PluginProcessor processor;
     processor.setRateAndBufferSizeDetails(44100.0, 512);
@@ -3293,8 +3293,8 @@ void GoldenAudioTests::testDistortionOutput(int clipType, const juce::String& na
     processor.processBlock(buffer, midi);
 
     // Basic validation - output should be valid and not silent
-    expect(!containsInvalidSamples(buffer), name + " produced invalid samples");
-    expect(!isSilent(buffer), name + " produced silence");
+    expect(!containsInvalidSamples(buffer), label + " produced invalid samples");
+    expect(!isSilent(buffer), label + " produced silence");
 
     // If in generate mode, save reference file
     if (GENERATE_MODE)
@@ -3303,7 +3303,7 @@ void GoldenAudioTests::testDistortionOutput(int clipType, const juce::String& na
         if (!dir.exists())
             dir.createDirectory();
 
-        auto file = dir.getChildFile("golden_" + name + "_44100.wav");
+        auto file = dir.getChildFile("golden_" + label + "_44100.wav");
         if (saveWavFile(buffer, file, 44100.0))
             logMessage("Generated: " + file.getFullPathName());
     }
@@ -3447,7 +3447,7 @@ void StatefulDistortionTests::testTubeBiasShift()
 
     // Reset should clear the envelope
     processor.resetDSPState();
-    expect(processor.tubeBiasEnvelope[0] == 0.0f,
+    expect(juce::exactlyEqual(processor.tubeBiasEnvelope[0], 0.0f),
         "Tube bias envelope not cleared by resetDSPState");
 }
 
@@ -3487,7 +3487,7 @@ void StatefulDistortionTests::testTapeHysteresis()
 
     // Reset should clear the envelope
     processor.resetDSPState();
-    expect(processor.tapeSaturationEnvelope[0] == 0.0f,
+    expect(juce::exactlyEqual(processor.tapeSaturationEnvelope[0], 0.0f),
         "Tape hysteresis envelope not cleared by resetDSPState");
 }
 
@@ -4338,7 +4338,7 @@ void CoefficientPropagationTest::runTest()
         const auto c150 = snapshotLP1(150.0f);
 
         float maxDiff = 0.0f;
-        for (int i = 0; i < 5; ++i)
+        for (size_t i = 0; i < c60.size(); ++i)
             maxDiff = std::max(maxDiff, std::abs(c60[i] - c150[i]));
 
         logMessage(juce::String::formatted(
@@ -4669,7 +4669,7 @@ void GraphicEqTests::runTest()
         a.prepareToPlay(sr, blockSize);
 
         // Distinct values across the bands.
-        std::array<float, DSPConstants::EQ_NUM_BANDS> vals { };
+        float vals[DSPConstants::EQ_NUM_BANDS] { };
         for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
         {
             vals[i] = -10.0f + (float) i * 1.7f;   // spread across the ±12 range

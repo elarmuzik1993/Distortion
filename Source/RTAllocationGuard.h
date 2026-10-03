@@ -43,7 +43,11 @@ namespace rt_guard
     };
 }
 
-#define RT_ASSERT_SCOPE() rt_guard::ScopedRTAssert _rt_assert_scope_instance
+// __LINE__ gives each scope its own name, so a nested RT_ASSERT_SCOPE() does
+// not shadow the enclosing one.
+#define RT_ASSERT_SCOPE_JOIN_(a, b) a##b
+#define RT_ASSERT_SCOPE_JOIN(a, b)  RT_ASSERT_SCOPE_JOIN_(a, b)
+#define RT_ASSERT_SCOPE() rt_guard::ScopedRTAssert RT_ASSERT_SCOPE_JOIN(rtAssertScope_, __LINE__)
 
 #else
 

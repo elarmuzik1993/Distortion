@@ -233,6 +233,7 @@ public:
     // Host bypass: none of the chain runs, but the audio still arrives the reported
     // latency late, as the host's delay compensation expects.
     void processBlockBypassed(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    using AudioProcessor::processBlock;  // keep the double overload visible
 
     //==============================================================================
     // Bug reporting (USE-53)
