@@ -106,16 +106,10 @@ void feedScope(PluginProcessor& proc)
 }
 
 bool snapshot(PluginProcessor& proc, int width, int height, const juce::File& out,
-              bool extreme = false, bool withSignal = false, bool legacy = false)
+              bool extreme = false, bool withSignal = false)
 {
     PluginEditor editor(proc);
     editor.setSize(width, height);
-
-    if (legacy)
-    {
-        // The LEGACY FILTER tag appears from the editor's 60 Hz timer, not at construction.
-        juce::MessageManager::getInstance()->runDispatchLoopUntil(200);
-    }
 
     if (extreme)
     {
@@ -269,7 +263,7 @@ int main(int argc, char* argv[])
             name += "-legacy";
         if (profilePath.isNotEmpty())
             name += "-profile";
-        allOk &= snapshot(proc, w, h, dir.getChildFile(name + ".png"), extreme, signal, legacy);
+        allOk &= snapshot(proc, w, h, dir.getChildFile(name + ".png"), extreme, signal);
     }
 
     scratchRoot.deleteRecursively();

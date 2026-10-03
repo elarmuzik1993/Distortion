@@ -2477,6 +2477,7 @@ private:
 
     void randomizeAllParameters();
     void resetLegacyFilter();
+    void updateLegacyTag();
     bool isParameterLocked(const juce::String& paramID) const;
     void toggleParameterLock(const juce::String& paramID);
     void updateLockIcons();

@@ -100,11 +100,14 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     setupSlider(shapeSlider, shapeLabel, "Shape", shapeAttachment, "shape");
     shapeSlider.setBipolar(true);
     shapeSlider.setDoubleClickReturnValue(true, 0.0);  // Flat (setupSlider defaults to 50)
+    // setupSlider installed an integer text function; Shape reads "Bark 60" / "Flat" / "Scoop 60".
+    shapeSlider.textFromValueFunction = [](double v) { return ShapeFilter::toText((float) v); };
+    shapeSlider.valueFromTextFunction = [](const juce::String& t) { return (double) ShapeFilter::fromText(t); };
+    shapeSlider.updateText();
 
     // The v2.3 input filter survives as hidden params so old sessions sound the same.
     // While it is doing something this tag takes the label slot; clicking offers to
-    // switch it off. Visibility is refreshed in timerCallback.
-    legacyFilterTag.setTooltip("This session uses the old input filter from v2.3. Click to turn it off.");
+    // switch it off. Visibility is refreshed by updateLegacyTag (constructor + timerCallback).
     legacyFilterTag.setColour(juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
     legacyFilterTag.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffff3b3b));
     legacyFilterTag.onClick = [this]
@@ -652,6 +655,9 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     // Set window size AFTER all components are added so resized() can position them all
     setSize(672, 395);
     applyWindowScale(settingsState.windowScalePercent);
+
+    // Decide Shape label vs LEGACY FILTER tag now, so the first frame is right (no flicker).
+    updateLegacyTag();
 
     // Start timer for LFO modulation visual feedback (60Hz)
     startTimerHz(60);
@@ -1433,6 +1439,19 @@ void PluginEditor::updateModulationHighlight()
     outputGainSlider.setLFOArc(destination == 4, lfoPhase, depthNorm);
 }
 
+void PluginEditor::updateLegacyTag()
+{
+    // LEGACY FILTER tag: replaces the "Shape" label while the hidden filter is on.
+    const bool legacy = LegacyInputFilter::isActive(
+        juce::roundToInt(audioProcessor.parameters.getRawParameterValue("filterMode")->load()),
+        audioProcessor.parameters.getRawParameterValue("highPassFreq")->load());
+    if (legacyFilterTag.isVisible() != legacy)
+    {
+        legacyFilterTag.setVisible(legacy);
+        shapeLabel.setVisible(! legacy);
+    }
+}
+
 void PluginEditor::timerCallback()
 {
     // Fold animation runs on its own dedicated 60Hz timer (foldAnimTimer)
@@ -1441,17 +1460,7 @@ void PluginEditor::timerCallback()
     // Update LFO modulation indicator
     updateModulationHighlight();
 
-    // LEGACY FILTER tag: replaces the "Shape" label while the hidden filter is on.
-    {
-        const bool legacy = LegacyInputFilter::isActive(
-            juce::roundToInt(audioProcessor.parameters.getRawParameterValue("filterMode")->load()),
-            audioProcessor.parameters.getRawParameterValue("highPassFreq")->load());
-        if (legacyFilterTag.isVisible() != legacy)
-        {
-            legacyFilterTag.setVisible(legacy);
-            shapeLabel.setVisible(! legacy);
-        }
-    }
+    updateLegacyTag();
 
     // Advance the EXTREME crack crossfade (self-limiting: repaints only while the
     // fade is actually moving).
