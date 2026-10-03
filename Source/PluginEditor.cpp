@@ -107,6 +107,9 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     filterModeComboBox.addItem("Band Pass", 3);
     filterModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.parameters, "filterMode", filterModeComboBox);
+    filterModeSwitch = std::make_unique<FilterModeSwitch::Listener>(
+        *audioProcessor.parameters.getParameter("filterMode"),
+        *audioProcessor.parameters.getParameter("highPassFreq"));
     setupSlider(lfoRateSlider, lfoRateLabel, "LFO Rate",
         lfoRateAttachment, "lfoRate");
     setupSlider(lfoDepthSlider, lfoDepthLabel, "LFO Depth",
