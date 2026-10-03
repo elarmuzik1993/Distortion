@@ -5110,6 +5110,10 @@ void ShapeFilterTests::runTest()
         expectWithinAbsoluteError(ShapeFilter::shelfGainDb(-100.0f, 1.0f), -DSPConstants::SHAPE_SHELF_DB, 1.0e-4f);
         expectWithinAbsoluteError(ShapeFilter::shelfGainDb(100.0f, 1.0f), DSPConstants::SHAPE_SHELF_DB, 1.0e-4f);
         expectWithinAbsoluteError(ShapeFilter::modulated(80.0f, 1.0f), 100.0f, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::postDriveAmount(0.0f), 0.0f, 1.0e-6f);
+        expectWithinAbsoluteError(ShapeFilter::postDriveAmount(0.5f * DSPConstants::SHAPE_POST_FULL_DRIVE),
+                                  0.5f * DSPConstants::SHAPE_POST_AMOUNT, 1.0e-6f);
+        expectWithinAbsoluteError(ShapeFilter::postDriveAmount(100.0f), DSPConstants::SHAPE_POST_AMOUNT, 1.0e-6f);
         expectWithinAbsoluteError(ShapeFilter::modulated(0.0f, -1.0f), -50.0f, 1.0e-4f);
         expectWithinAbsoluteError(ShapeFilter::modulated(-100.0f, -1.0f), -100.0f, 1.0e-4f);
     }
@@ -5223,6 +5227,38 @@ void ShapeFilterTests::runTest()
         expect(jumped < std::max(steadyScoop, steadyBark) * 1.25f,
                "Post-jump step " + juce::String(jumped, 4) + " vs steady Scoop "
                + juce::String(steadyScoop, 4) + " / Bark " + juce::String(steadyBark, 4));
+    }
+
+    beginTest("Settling back to Flat leaves no residual to cut off");
+    {
+        // Worst case: the 20 ms ramp ends on the last sub-block of a block, so the
+        // filter runs only one sub-block at identity before process() starts skipping
+        // and clears the filter memory. Whatever error is still decaying at that point
+        // is dropped in one sample; it must be inaudible.
+        constexpr double sr = 48000.0;
+        constexpr int blockSize = 480;   // 20 ms ramp = exactly two blocks
+        ShapeFilter f;
+        f.prepare({ sr, (juce::uint32) blockSize, 1 }, 60.0f, 1.0f);
+        juce::AudioBuffer<float> buf(1, blockSize), in(1, blockSize);
+        float lastError = 0.0f;
+        int n = 0;
+        for (int b = 0; b < 40; ++b)
+        {
+            if (b == 20)
+                f.setTarget(0.0f);
+            for (int i = 0; i < blockSize; ++i, ++n)
+                buf.setSample(0, i, 0.5f * static_cast<float>(
+                    std::sin(juce::MathConstants<double>::twoPi * 600.0 * n / sr)));
+            in.makeCopyOf(buf);
+            const bool wasActive = f.isActive();
+            juce::dsp::AudioBlock<float> block(buf);
+            f.process(block);
+            if (wasActive)
+                lastError = buf.getSample(0, blockSize - 1) - in.getSample(0, blockSize - 1);
+        }
+        expect(! f.isActive(), "Shape did not settle to Flat");
+        expect(std::abs(lastError) < 1.0e-4f,
+               "Residual cut off when going Flat: " + juce::String(lastError, 7));
     }
 }
 
@@ -5598,6 +5634,70 @@ void ShapeProcessorTests::runTest()
         expectWithinAbsoluteError(value("shape"), 0.0f, 1.0e-3f);
         expectWithinAbsoluteError(value("filterMode"), 1.0f, 1.0e-3f);
         expectWithinAbsoluteError(value("highPassFreq"), 500.0f, 0.5f);
+    }
+
+    beginTest("Shape's mid lift matches across the true-bypass threshold");
+    {
+        // Distortion 0.4% is true bypass (pre-drive Shape only); 0.6% is the active
+        // path. With distMix 0 the drive itself is out of the signal, so the only
+        // difference Shape may make between the two is the post-drive half, which
+        // must fade in with the drive rather than switch on at the threshold.
+        auto barkLift = [&](float drive)
+        {
+            auto band = [&](float shape)
+            {
+                PluginProcessor proc;
+                proc.setRateAndBufferSizeDetails(sr, 512);
+                proc.prepareToPlay(sr, 512);
+                configureCleanProcessor(proc, /*defeatBypass*/ false);
+                setParameter(proc.parameters, "subGuardFreq", 0.0f);
+                setParameter(proc.parameters, "distortionAmount", drive);
+                setParameter(proc.parameters, "shape", shape);
+                auto buf = noise();
+                buf.applyGain(0.2f);   // stay clear of the soft clipper and limiter
+                runInBlocks(proc, buf);
+                return bandEnergyDb(buf, sr, 550.0, 650.0);
+            };
+            return band(-100.0f) - band(0.0f);
+        };
+        const float bypassed = barkLift(0.4f);
+        const float active   = barkLift(0.6f);
+        expect(std::abs(active - bypassed) < 1.5f,
+               "Bark lift jumps from " + juce::String(bypassed, 2) + " dB (bypass) to "
+               + juce::String(active, 2) + " dB (active) at the threshold");
+    }
+
+    beginTest("With Sub Guard on, the post-drive Shape leaves the clean low band alone");
+    {
+        // A quiet 40 Hz sine sits entirely in Sub Guard's clean low band. With the
+        // drive mixed out (distMix 0) and nothing after it pushed into nonlinearity,
+        // the chain is linear, so Bark may move 40 Hz only by what the pre-drive
+        // half does to it before the split. If the post-drive half runs on
+        // low + high before the low band is subtracted, it reaches the sub too.
+        auto subGainDb = [&](float shape)
+        {
+            PluginProcessor proc;
+            proc.setRateAndBufferSizeDetails(sr, 512);
+            proc.prepareToPlay(sr, 512);
+            configureCleanProcessor(proc, /*defeatBypass*/ true);
+            setParameter(proc.parameters, "subGuardFreq", 150.0f);
+            setParameter(proc.parameters, "distortionAmount", 70.0f);   // post-drive half at full amount
+            setParameter(proc.parameters, "shape", shape);
+            juce::AudioBuffer<float> buf(2, numSamples);
+            for (int n = 0; n < numSamples; ++n)
+            {
+                const float s = 0.05f * std::sin(juce::MathConstants<float>::twoPi * 40.0f * n / (float) sr);
+                buf.setSample(0, n, s);
+                buf.setSample(1, n, s);
+            }
+            runInBlocks(proc, buf);
+            return bandEnergyDb(buf, sr, 30.0, 50.0);
+        };
+        const float measured = subGainDb(-100.0f) - subGainDb(0.0f);
+        const float preOnly  = shapeGainDb(sr, -100.0f, DSPConstants::SHAPE_PRE_AMOUNT, 40.0);
+        expect(std::abs(measured - preOnly) < 0.03f,
+               "Bark moved 40 Hz by " + juce::String(measured, 3) + " dB through Sub Guard; the "
+               "pre-drive half alone accounts for " + juce::String(preOnly, 3) + " dB");
     }
 }
 

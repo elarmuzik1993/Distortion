@@ -685,8 +685,7 @@ private:
     size_t pb_numChannels = 0;
     double pb_oversampledSR = 0.0;
 
-    float pb_modulatedHighPassFreq    = 0.0f;
-    float pb_shapeTarget              = 0.0f;  // knob + LFO, clamped
+    float pb_legacyFilterFreq         = 0.0f;  // hidden v2.3 input filter cutoff
     int   pb_filterMode               = 0;   // 0=High Pass, 1=Low Pass, 2=Band Pass
     float pb_modulatedDistortionParam = 0.0f;
     float pb_modulatedToneFreq        = 0.0f;

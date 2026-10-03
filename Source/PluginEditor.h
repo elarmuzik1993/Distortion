@@ -2342,6 +2342,8 @@ private:
     CustomKnob inputGainSlider, distortionAmountSlider, outputGainSlider, shapeSlider, distMixSlider, toneSlider;
     juce::Label inputGainLabel, distortionAmountLabel, outputGainLabel, shapeLabel, distMixLabel, toneLabel;
     juce::TextButton legacyFilterTag { "LEGACY FILTER" };  // shown only while the hidden v2.3 filter is on
+    std::atomic<float>* legacyFilterModeParam = nullptr;  // looked up once; read by updateLegacyTag
+    std::atomic<float>* legacyFilterFreqParam = nullptr;
 
     CustomKnob lfoRateSlider, lfoDepthSlider;
     juce::Label lfoRateLabel, lfoDepthLabel;

@@ -124,6 +124,8 @@ PluginEditor::PluginEditor(PluginProcessor& p)
             });
     };
     addChildComponent(legacyFilterTag);
+    legacyFilterModeParam = audioProcessor.parameters.getRawParameterValue("filterMode");
+    legacyFilterFreqParam = audioProcessor.parameters.getRawParameterValue("highPassFreq");
     setupSlider(lfoRateSlider, lfoRateLabel, "LFO Rate",
         lfoRateAttachment, "lfoRate");
     setupSlider(lfoDepthSlider, lfoDepthLabel, "LFO Depth",
@@ -1443,8 +1445,7 @@ void PluginEditor::updateLegacyTag()
 {
     // LEGACY FILTER tag: replaces the "Shape" label while the hidden filter is on.
     const bool legacy = LegacyInputFilter::isActive(
-        juce::roundToInt(audioProcessor.parameters.getRawParameterValue("filterMode")->load()),
-        audioProcessor.parameters.getRawParameterValue("highPassFreq")->load());
+        juce::roundToInt(legacyFilterModeParam->load()), legacyFilterFreqParam->load());
     if (legacyFilterTag.isVisible() != legacy)
     {
         legacyFilterTag.setVisible(legacy);

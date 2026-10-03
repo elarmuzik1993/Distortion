@@ -837,7 +837,7 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // Seed from the current toggle state so a restored "on" session starts settled.
     emphasisFilter.prepare(spec);
     deEmphasisFilter.prepare(spec);
-    shapePost.prepare(spec, initialShape, DSPConstants::SHAPE_POST_AMOUNT);
+    shapePost.prepare(spec, initialShape, ShapeFilter::postDriveAmount(distortionAmountParam->load()));
     const float boostOn = (cleanBoostParam && cleanBoostParam->load() > 0.5f) ? 1.0f : 0.0f;
     smoothedBoostDepth.reset(spec.sampleRate, DSPConstants::CLEAN_BOOST_SMOOTH_TIME_S);
     smoothedBoostDepth.setCurrentAndTargetValue(boostOn);
@@ -1283,7 +1283,8 @@ void PluginProcessor::rebuildOversampling(double sampleRate, int samplesPerBlock
     // Re-prepare Clean Boost shelves at the new oversampled rate (see prepareToPlay)
     emphasisFilter.prepare(spec);
     deEmphasisFilter.prepare(spec);
-    shapePost.prepare(spec, shapeParam ? shapeParam->load() : 0.0f, DSPConstants::SHAPE_POST_AMOUNT);
+    shapePost.prepare(spec, shapeParam ? shapeParam->load() : 0.0f,
+                      ShapeFilter::postDriveAmount(distortionAmountParam->load()));
     const float boostOn = (cleanBoostParam && cleanBoostParam->load() > 0.5f) ? 1.0f : 0.0f;
     smoothedBoostDepth.reset(spec.sampleRate, DSPConstants::CLEAN_BOOST_SMOOTH_TIME_S);
     smoothedBoostDepth.setCurrentAndTargetValue(boostOn);
@@ -1736,11 +1737,11 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     }
 
     // Publish preamble parameters to block-scope members for stage helpers (PR-8)
-    pb_modulatedHighPassFreq    = highPassFreq;  // legacy filter cutoff: the knob value, not modulated
+    pb_legacyFilterFreq         = highPassFreq;  // legacy filter cutoff: the knob value, not modulated
     pb_filterMode               = filterMode;
-    pb_shapeTarget              = modulatedShape;
-    shapePre.setTarget(pb_shapeTarget);
-    shapePost.setTarget(pb_shapeTarget);
+    shapePre.setTarget(modulatedShape);
+    shapePost.setTarget(modulatedShape);
+    shapePost.setAmount(ShapeFilter::postDriveAmount(modulatedDistortionParam));
     pb_modulatedDistortionParam = modulatedDistortionParam;
     pb_modulatedToneFreq        = modulatedToneFreq;
     pb_distortionParam          = distortionParam;
@@ -1831,6 +1832,9 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             juce::dsp::AudioBlock<float> shapeBlock(buffer);
             shapePre.process(shapeBlock);
         }
+        // The post-drive half is idle here; clear it so leaving bypass does not
+        // replay filter memory from before it.
+        shapePost.reset();
 
         feedProfileWhileBypassed(buffer);   // profile mode only; the output is untouched
 
@@ -1974,10 +1978,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Clean Boost de-emphasis: complementary high-shelf cut restoring spectral balance.
     applyCleanBoostDeEmphasis();
 
-    // Post-drive Shape: shapes the harmonics the drive created (the audible half on
-    // near-sine 808s). Before auto-gain, compression and the soft clipper.
-    applyShapePostDrive();
-
     // ========== SUB GUARD: Remove clean low band before post-distortion processing ==========
     // When Sub Guard is active, subtract the clean low band from oversampledBlock
     // so that waveshaper, tone filter, and compressor only process the high band.
@@ -1995,6 +1995,11 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             }
         }
     }
+
+    // Post-drive Shape: shapes the harmonics the drive created (the audible half on
+    // near-sine 808s). After the Sub Guard subtraction, so the clean low band stays
+    // untouched; before auto-gain, compression and the soft clipper.
+    applyShapePostDrive();
 
     applyAutoGainAndISP(buffer);
 
@@ -2896,7 +2901,7 @@ void PluginProcessor::applyDuckGain(juce::AudioBuffer<float>& buffer) noexcept
 // transparent so a "default" filter still allows true bypass; band-pass always cuts.
 bool PluginProcessor::isInputFilterActive() const
 {
-    return LegacyInputFilter::isActive(pb_filterMode, pb_modulatedHighPassFreq);
+    return LegacyInputFilter::isActive(pb_filterMode, pb_legacyFilterFreq);
 }
 
 // Apply the multimode filter at BASE sample rate. setType/setCutoffFrequency are
@@ -2912,13 +2917,13 @@ void PluginProcessor::applyInputFilter(juce::dsp::AudioBlock<float>& block)
         default: inputFilter.setType(juce::dsp::StateVariableTPTFilterType::highpass); break;
     }
 
-    if (std::abs(pb_modulatedHighPassFreq - lastHighPassFreq) > 0.5f &&
+    if (std::abs(pb_legacyFilterFreq - lastHighPassFreq) > 0.5f &&
         baseSampleRate >= 1000.0 && baseSampleRate <= 500000.0 &&
-        pb_modulatedHighPassFreq >= 1.0f &&
-        pb_modulatedHighPassFreq <= (baseSampleRate * 0.5))
+        pb_legacyFilterFreq >= 1.0f &&
+        pb_legacyFilterFreq <= (baseSampleRate * 0.5))
     {
-        inputFilter.setCutoffFrequency(pb_modulatedHighPassFreq);
-        lastHighPassFreq = pb_modulatedHighPassFreq;
+        inputFilter.setCutoffFrequency(pb_legacyFilterFreq);
+        lastHighPassFreq = pb_legacyFilterFreq;
     }
 
     juce::dsp::ProcessContextReplacing<float> ctx(block);
