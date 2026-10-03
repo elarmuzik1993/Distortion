@@ -106,10 +106,16 @@ void feedScope(PluginProcessor& proc)
 }
 
 bool snapshot(PluginProcessor& proc, int width, int height, const juce::File& out,
-              bool extreme = false, bool withSignal = false)
+              bool extreme = false, bool withSignal = false, bool legacy = false)
 {
     PluginEditor editor(proc);
     editor.setSize(width, height);
+
+    if (legacy)
+    {
+        // The LEGACY FILTER tag appears from the editor's 60 Hz timer, not at construction.
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(200);
+    }
 
     if (extreme)
     {
@@ -176,7 +182,9 @@ int main(int argc, char* argv[])
                 "  --scale <pct>    render one window scale: 70, 80, 90 or 100 (default all)\n"
                 "  --collapsed      scope folded away\n"
                 "  --extreme        EXTREME mode engaged\n"
-                "  --signal         feed a signal so the scope shows a waveform\n";
+                "  --signal         feed a signal so the scope shows a waveform\n"
+                "  --shape <v>      set Shape (-100..100) before rendering\n"
+                "  --legacy         turn the hidden v2.3 input filter on (shows the tag)\n";
             return 0;
         }
     }
@@ -186,6 +194,8 @@ int main(int argc, char* argv[])
     bool collapsed = false;
     bool extreme = false;
     bool signal = false;
+    float shapeValue = 0.0f;
+    bool hasShape = false, legacy = false;
     juce::String profilePath;
     for (int i = 1; i < argc; ++i)
     {
@@ -196,6 +206,8 @@ int main(int argc, char* argv[])
         else if (t == "--collapsed")             collapsed = true;
         else if (t == "--extreme")               extreme   = true;
         else if (t == "--signal")                signal    = true;
+        else if (t == "--shape" && i + 1 < argc) { shapeValue = juce::String(argv[++i]).getFloatValue(); hasShape = true; }
+        else if (t == "--legacy")                legacy    = true;
     }
 
     // Collapsed (scope folded away) is the other fold state. The harness drives it
@@ -214,6 +226,14 @@ int main(int argc, char* argv[])
     PluginProcessor proc;
     proc.setRateAndBufferSizeDetails(44100.0, 512);
     proc.prepareToPlay(44100.0, 512);
+
+    auto setParam = [&proc](const char* id, float v)
+    {
+        if (auto* p = proc.parameters.getParameter(id))
+            p->setValueNotifyingHost(p->convertTo0to1(v));
+    };
+    if (hasShape) setParam("shape", shapeValue);
+    if (legacy)   { setParam("filterMode", 1.0f); setParam("highPassFreq", 800.0f); }
 
     if (profilePath.isNotEmpty()
         && ! proc.loadProfileBlocking(juce::File::getCurrentWorkingDirectory().getChildFile(profilePath)))
@@ -243,9 +263,13 @@ int main(int argc, char* argv[])
             name += "-extreme";
         if (signal)
             name += "-signal";
+        if (hasShape)
+            name += "-shape" + juce::String(shapeValue, 0);
+        if (legacy)
+            name += "-legacy";
         if (profilePath.isNotEmpty())
             name += "-profile";
-        allOk &= snapshot(proc, w, h, dir.getChildFile(name + ".png"), extreme, signal);
+        allOk &= snapshot(proc, w, h, dir.getChildFile(name + ".png"), extreme, signal, legacy);
     }
 
     scratchRoot.deleteRecursively();

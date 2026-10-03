@@ -3,7 +3,6 @@
 #include <JuceHeader.h>
 #include "CustomKnob.h"
 #include "CyclingComboBox.h"
-#include "FilterModeSwitch.h"
 #include "FontHelper.h"
 #include "PluginProcessor.h"
 
@@ -2340,8 +2339,9 @@ private:
     juce::Label versionLabel;  // Build version display at bottom left
 
     // UI Components
-    CustomKnob inputGainSlider, distortionAmountSlider, outputGainSlider, highPassFreqSlider, distMixSlider, toneSlider;
-    juce::Label inputGainLabel, distortionAmountLabel, outputGainLabel, highPassFreqLabel, distMixLabel, toneLabel;
+    CustomKnob inputGainSlider, distortionAmountSlider, outputGainSlider, shapeSlider, distMixSlider, toneSlider;
+    juce::Label inputGainLabel, distortionAmountLabel, outputGainLabel, shapeLabel, distMixLabel, toneLabel;
+    juce::TextButton legacyFilterTag { "LEGACY FILTER" };  // shown only while the hidden v2.3 filter is on
 
     CustomKnob lfoRateSlider, lfoDepthSlider;
     juce::Label lfoRateLabel, lfoDepthLabel;
@@ -2378,10 +2378,6 @@ private:
 
     CyclingComboBox clipTypeComboBox;
     juce::Label clipTypeLabel;
-
-    // Input filter mode selector (High Pass / Low Pass / Band Pass). Sits in the
-    // filter knob's label slot; its selected text labels the column.
-    CyclingComboBox filterModeComboBox;
 
     juce::TextButton extremeButton;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> extremeAttachment;
@@ -2422,7 +2418,7 @@ private:
     juce::ComboBox presetSelector;
 
     // Lock icons for each parameter
-    LockIcon inputGainLock, outputGainLock, distortionAmountLock, highPassFreqLock;
+    LockIcon inputGainLock, outputGainLock, distortionAmountLock, shapeLock;
     LockIcon distMixLock, lfoRateLock, lfoDepthLock, lfoEnableLock;
     LockIcon compPeakReductionLock, compMakeupGainLock;
     LockIcon subGuardLock, clipTypeLock, compRatioLock, compEnableLock;
@@ -2434,13 +2430,11 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> inputGainAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> distortionAmountAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputGainAttachment;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> highPassFreqAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> shapeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> distMixAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> toneAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> subGuardAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> clipTypeAttachment;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> filterModeAttachment;
-    std::unique_ptr<FilterModeSwitch::Listener> filterModeSwitch;
     // UI texture: authored 1:1 against the 960x564 expanded layout (metal at the
     // title strip, red glass across the scope, metal + knob cutouts below), so it
     // is drawn to the full bounds rather than tiled or letterboxed. The source is
@@ -2482,6 +2476,7 @@ private:
         const juce::String& paramID);
 
     void randomizeAllParameters();
+    void resetLegacyFilter();
     bool isParameterLocked(const juce::String& paramID) const;
     void toggleParameterLock(const juce::String& paramID);
     void updateLockIcons();
