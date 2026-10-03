@@ -5,6 +5,7 @@
 #include "../FactoryPresets.h"
 #include "../FilterModeSwitch.h"
 #include "../RTAllocationGuard.h"
+#include "../ShapeFilter.h"
 #include <atomic>
 #include <iostream>
 #include <thread>
@@ -5068,6 +5069,170 @@ void InputFilterModeTest::runTest()
         cutoffParam.setValueNotifyingHost(cutoffParam.convertTo0to1(150.0f));
         box.setSelectedItemIndex(FilterModeSwitch::bandPass, juce::sendNotificationSync);
         expectWithinAbsoluteError(cutoffHz(), 150.0f, 0.5f);
+    }
+}
+
+//==============================================================================
+// ShapeFilterTests — the Shape DSP unit on its own
+//==============================================================================
+
+namespace
+{
+    // Steady-state gain (dB) of a ShapeFilter at one frequency: run a 1 s sine,
+    // compare RMS over the second half (filter settled, smoother finished).
+    float shapeGainDb(double sr, float shape, float amount, double freq)
+    {
+        ShapeFilter f;
+        juce::dsp::ProcessSpec spec { sr, 512, 2 };
+        f.prepare(spec, shape, amount);
+
+        const int n = static_cast<int>(sr);
+        juce::AudioBuffer<float> buf(2, n);
+        for (int i = 0; i < n; ++i)
+        {
+            const float s = 0.25f * static_cast<float>(
+                std::sin(juce::MathConstants<double>::twoPi * freq * i / sr));
+            buf.setSample(0, i, s);
+            buf.setSample(1, i, s);
+        }
+        juce::AudioBuffer<float> in(buf);
+
+        for (int start = 0; start < n; start += 512)
+        {
+            const int len = juce::jmin(512, n - start);
+            juce::dsp::AudioBlock<float> block(buf.getArrayOfWritePointers(), 2,
+                                               (size_t) start, (size_t) len);
+            f.process(block);
+        }
+
+        double eIn = 0.0, eOut = 0.0;
+        for (int i = n / 2; i < n; ++i)
+        {
+            eIn  += in.getSample(0, i)  * in.getSample(0, i);
+            eOut += buf.getSample(0, i) * buf.getSample(0, i);
+        }
+        return static_cast<float>(10.0 * std::log10(eOut / eIn));
+    }
+}
+
+void ShapeFilterTests::runTest()
+{
+    beginTest("Curve maths: taper, end gains, LFO clamp");
+    {
+        expectWithinAbsoluteError(ShapeFilter::taper(0.0f), 0.0f, 1.0e-6f);
+        expectWithinAbsoluteError(ShapeFilter::taper(100.0f), 1.0f, 1.0e-6f);
+        expectWithinAbsoluteError(ShapeFilter::taper(-100.0f), -1.0f, 1.0e-6f);
+        expectWithinAbsoluteError(ShapeFilter::taper(50.0f), std::pow(0.5f, 1.5f), 1.0e-5f);
+        expectWithinAbsoluteError(ShapeFilter::midGainDb(-100.0f, 1.0f), 9.0f, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::midGainDb(100.0f, 1.0f), -12.0f, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::midGainDb(100.0f, 0.5f), -6.0f, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::shelfGainDb(-100.0f, 1.0f), -4.0f, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::shelfGainDb(100.0f, 1.0f), 4.0f, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::modulated(80.0f, 1.0f), 100.0f, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::modulated(0.0f, -1.0f), -50.0f, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::modulated(-100.0f, -1.0f), -100.0f, 1.0e-4f);
+    }
+
+    beginTest("Value text round-trips");
+    {
+        expectEquals(ShapeFilter::toText(0.0f), juce::String("Flat"));
+        expectEquals(ShapeFilter::toText(0.4f), juce::String("Flat"));
+        expectEquals(ShapeFilter::toText(-60.0f), juce::String("Bark 60"));
+        expectEquals(ShapeFilter::toText(40.2f), juce::String("Scoop 40"));
+        expectWithinAbsoluteError(ShapeFilter::fromText("Bark 60"), -60.0f, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::fromText("scoop 40"), 40.0f, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::fromText("Flat"), 0.0f, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::fromText("-25"), -25.0f, 1.0e-4f);
+    }
+
+    beginTest("Shape 0 is bit-transparent and inactive");
+    {
+        ShapeFilter f;
+        f.prepare({ 48000.0, 512, 2 }, 0.0f, 1.0f);
+        expect(! f.isActive(), "Shape 0 reported active");
+
+        juce::Random rng(11);
+        juce::AudioBuffer<float> buf(2, 512);
+        for (int ch = 0; ch < 2; ++ch)
+            for (int i = 0; i < 512; ++i)
+                buf.setSample(ch, i, rng.nextFloat() * 2.0f - 1.0f);
+        juce::AudioBuffer<float> in(buf);
+        juce::dsp::AudioBlock<float> block(buf);
+        f.process(block);
+        expectEquals(calculateMaxDifference(in, buf), 0.0f);
+    }
+
+    beginTest("Bark and Scoop hit their targets at 600 Hz and in the treble");
+    {
+        constexpr double sr = 48000.0;
+        expectWithinAbsoluteError(shapeGainDb(sr, -100.0f, 1.0f, 600.0), 9.0f, 0.5f);
+        expectWithinAbsoluteError(shapeGainDb(sr,  100.0f, 1.0f, 600.0), -12.0f, 0.5f);
+        expect(shapeGainDb(sr, -100.0f, 1.0f, 6000.0) < -2.5f, "Bark did not soften the treble");
+        expect(shapeGainDb(sr,  100.0f, 1.0f, 6000.0) >  2.5f, "Scoop did not lift the treble");
+        expectWithinAbsoluteError(shapeGainDb(sr, 100.0f, 0.5f, 600.0), -6.0f, 0.5f);
+    }
+
+    beginTest("Sub band stays within 1.5 dB at every knob position");
+    {
+        for (float shape : { -100.0f, -50.0f, 0.0f, 50.0f, 100.0f })
+            for (double f : { 40.0, 60.0, 80.0 })
+            {
+                const float g = shapeGainDb(48000.0, shape, 1.0f, f);
+                expect(std::abs(g) < 1.5f, "Shape " + juce::String(shape) + " moved "
+                       + juce::String(f) + " Hz by " + juce::String(g, 2) + " dB");
+            }
+    }
+
+    beginTest("Response holds at 768 kHz (192 kHz x 4, the post-drive worst case)");
+    {
+        expectWithinAbsoluteError(shapeGainDb(768000.0, -100.0f, 1.0f, 600.0), 9.0f, 0.75f);
+        expectWithinAbsoluteError(shapeGainDb(768000.0,  100.0f, 1.0f, 600.0), -12.0f, 0.75f);
+    }
+
+    beginTest("Finite at every supported rate, both extremes");
+    {
+        for (double sr : { 44100.0, 48000.0, 88200.0, 96000.0, 192000.0, 768000.0 })
+            for (float shape : { -100.0f, 100.0f })
+            {
+                const float g = shapeGainDb(sr, shape, 1.0f, 600.0);
+                expect(std::isfinite(g), "Non-finite at " + juce::String(sr) + " Hz");
+            }
+    }
+
+    beginTest("A full Bark-to-Scoop jump is click-free");
+    {
+        constexpr double sr = 48000.0;
+        constexpr int n = 24000;
+        auto maxStep = [&](bool jump)
+        {
+            ShapeFilter f;
+            f.prepare({ sr, 512, 1 }, -100.0f, 1.0f);
+            juce::AudioBuffer<float> buf(1, n);
+            for (int i = 0; i < n; ++i)
+                buf.setSample(0, i, 0.5f * static_cast<float>(
+                    std::sin(juce::MathConstants<double>::twoPi * 200.0 * i / sr)));
+            float worst = 0.0f, prev = 0.0f;
+            for (int start = 0; start < n; start += 512)
+            {
+                if (jump && start == n / 2)
+                    f.setTarget(100.0f);
+                const int len = juce::jmin(512, n - start);
+                juce::dsp::AudioBlock<float> block(buf.getArrayOfWritePointers(), 1,
+                                                   (size_t) start, (size_t) len);
+                f.process(block);
+                for (int i = start; i < start + len; ++i)
+                {
+                    if (i > n / 4)  // skip the start-up transient
+                        worst = std::max(worst, std::abs(buf.getSample(0, i) - prev));
+                    prev = buf.getSample(0, i);
+                }
+            }
+            return worst;
+        };
+        const float steady = maxStep(false);
+        const float jumped = maxStep(true);
+        expect(jumped < steady * 1.5f, "Jump step " + juce::String(jumped, 4)
+               + " vs steady " + juce::String(steady, 4));
     }
 }
 
