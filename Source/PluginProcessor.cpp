@@ -10,6 +10,8 @@
 #include "PluginEditor.h"
 #include "RTAllocationGuard.h"
 #include "FastMath.h"
+#include "FilterCoeffs.h"
+#include "LegacyInputFilter.h"
 #include "Diagnostics/AppPaths.h"
 #include "Diagnostics/ReportComposer.h"
 #include "Diagnostics/ReportEndpoint.h"
@@ -55,33 +57,6 @@ void writeSecondOrderHighPassCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
     coeffs[4] = static_cast<float>(c1 * (1.0 - invQ * n + nSquared));
 }
 
-// RBJ peaking-EQ biquad, written in place (a0-normalized to 5 raw coeffs) so we
-// never allocate on the audio thread. Mirrors juce::dsp::IIR::Coefficients::
-// makePeakFilter(sampleRate, frequency, Q, gainFactor) exactly, so the live
-// coefficient updates match a prepare-time makePeakFilter bit-for-bit.
-// gainFactor is linear (juce::Decibels::decibelsToGain(dB)).
-void writePeakFilterCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
-                           const double sampleRate,
-                           const double frequency,
-                           const double q,
-                           const double gainFactor) noexcept
-{
-    const auto A = std::sqrt(gainFactor);
-    const auto omega = (2.0 * juce::MathConstants<double>::pi * frequency) / sampleRate;
-    const auto alpha = std::sin(omega) / (2.0 * q);
-    const auto c2 = -2.0 * std::cos(omega);
-    const auto alphaTimesA = alpha * A;
-    const auto alphaOverA = alpha / A;
-    const auto a0inv = 1.0 / (1.0 + alphaOverA);
-    auto* coeffs = dest.getRawCoefficients();
-
-    coeffs[0] = static_cast<float>((1.0 + alphaTimesA) * a0inv);  // b0
-    coeffs[1] = static_cast<float>(c2 * a0inv);                   // b1
-    coeffs[2] = static_cast<float>((1.0 - alphaTimesA) * a0inv);  // b2
-    coeffs[3] = static_cast<float>(c2 * a0inv);                   // a1
-    coeffs[4] = static_cast<float>((1.0 - alphaOverA) * a0inv);   // a2
-}
-
 // First-order Butterworth sections, written in place (a0-normalized) so we never
 // allocate on the audio thread. These mirror juce::dsp::IIR::Coefficients
 // makeFirstOrderLowPass / makeFirstOrderHighPass exactly, so live coefficient
@@ -110,38 +85,6 @@ void writeFirstOrderHighPassCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
     coeffs[0] = static_cast<float>( 1.0 * a0inv);
     coeffs[1] = static_cast<float>(-1.0 * a0inv);
     coeffs[2] = static_cast<float>((n - 1.0) * a0inv);
-}
-
-// RBJ high-shelf, written in place (a0-normalized) so we never allocate on the
-// audio thread. gainDb > 0 boosts highs above cutoffHz; < 0 cuts them.
-void writeHighShelfCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
-                          const double sampleRate,
-                          const double cutoffHz,
-                          const double q,
-                          const double gainDb) noexcept
-{
-    const auto A = std::pow(10.0, gainDb / 40.0);
-    const auto w0 = juce::MathConstants<double>::twoPi * cutoffHz / sampleRate;
-    const auto cosw0 = std::cos(w0);
-    const auto alpha = std::sin(w0) / (2.0 * q);
-    const auto twoSqrtAalpha = 2.0 * std::sqrt(A) * alpha;
-    const auto Aplus = A + 1.0;
-    const auto Aminus = A - 1.0;
-
-    const auto b0 =      A * (Aplus + Aminus * cosw0 + twoSqrtAalpha);
-    const auto b1 = -2.0 * A * (Aminus + Aplus * cosw0);
-    const auto b2 =      A * (Aplus + Aminus * cosw0 - twoSqrtAalpha);
-    const auto a0 =          (Aplus - Aminus * cosw0 + twoSqrtAalpha);
-    const auto a1 =  2.0 *   (Aminus - Aplus * cosw0);
-    const auto a2 =          (Aplus - Aminus * cosw0 - twoSqrtAalpha);
-
-    const auto invA0 = 1.0 / a0;
-    auto* coeffs = dest.getRawCoefficients();
-    coeffs[0] = static_cast<float>(b0 * invA0);
-    coeffs[1] = static_cast<float>(b1 * invA0);
-    coeffs[2] = static_cast<float>(b2 * invA0);
-    coeffs[3] = static_cast<float>(a1 * invA0);
-    coeffs[4] = static_cast<float>(a2 * invA0);
 }
 
 // Per-sample LA-2A compressor character: apply the optical-cell gain, blend in
@@ -242,6 +185,7 @@ PluginProcessor::PluginProcessor()
     distortionAmountParam = parameters.getRawParameterValue("distortionAmount");
     highPassFreqParam = parameters.getRawParameterValue("highPassFreq");
     filterModeParam = parameters.getRawParameterValue("filterMode");
+    shapeParam = parameters.getRawParameterValue("shape");
     subGuardFreqParam = parameters.getRawParameterValue("subGuardFreq");
     clipTypeParam = parameters.getRawParameterValue("clipType");
     lfoRateParam = parameters.getRawParameterValue("lfoRate");
@@ -271,7 +215,7 @@ PluginProcessor::PluginProcessor()
     eqEnabledParam = parameters.getRawParameterValue("eqEnabled");
     // Verify all parameters were found
     jassert(inputGainParam && outputGainParam && distortionAmountParam
-        && highPassFreqParam && filterModeParam && subGuardFreqParam && clipTypeParam
+        && highPassFreqParam && filterModeParam && shapeParam && subGuardFreqParam && clipTypeParam
         && lfoRateParam && lfoDepthParam && lfoWaveformParam && lfoEnabledParam && lfoDestinationParam
         && lfoBpmSyncParam && lfoBpmDivisionParam && lfoInvertParam && waveshaperMixParam
         && compPeakReductionParam && compMakeupGainParam && compRatioParam && compEnabledParam
@@ -870,6 +814,10 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     inputFilter.setCutoffFrequency(DSPConstants::DEFAULT_HIPASS_FREQ);
     inputFilter.reset();
 
+    // Shape, pre-drive half (base rate); the post-drive half is prepared with the oversampled spec below
+    const float initialShape = shapeParam ? shapeParam->load() : 0.0f;
+    shapePre.prepare(baseSpec, initialShape, DSPConstants::SHAPE_PRE_AMOUNT);
+
     // Force filter update on first processBlock (especially important for DAW state restoration)
     lastHighPassFreq = -1.0f;
 
@@ -889,6 +837,7 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // Seed from the current toggle state so a restored "on" session starts settled.
     emphasisFilter.prepare(spec);
     deEmphasisFilter.prepare(spec);
+    shapePost.prepare(spec, initialShape, ShapeFilter::postDriveAmount(distortionAmountParam->load()));
     const float boostOn = (cleanBoostParam && cleanBoostParam->load() > 0.5f) ? 1.0f : 0.0f;
     smoothedBoostDepth.reset(spec.sampleRate, DSPConstants::CLEAN_BOOST_SMOOTH_TIME_S);
     smoothedBoostDepth.setCurrentAndTargetValue(boostOn);
@@ -1043,6 +992,8 @@ void PluginProcessor::releaseResources()
     oversampling.reset();
     dryOversampling.reset();
     inputFilter.reset();
+    shapePre.reset();
+    shapePost.reset();
     toneFilter.reset();
     toneFilterLow.reset();
 
@@ -1332,6 +1283,8 @@ void PluginProcessor::rebuildOversampling(double sampleRate, int samplesPerBlock
     // Re-prepare Clean Boost shelves at the new oversampled rate (see prepareToPlay)
     emphasisFilter.prepare(spec);
     deEmphasisFilter.prepare(spec);
+    shapePost.prepare(spec, shapeParam ? shapeParam->load() : 0.0f,
+                      ShapeFilter::postDriveAmount(distortionAmountParam->load()));
     const float boostOn = (cleanBoostParam && cleanBoostParam->load() > 0.5f) ? 1.0f : 0.0f;
     smoothedBoostDepth.reset(spec.sampleRate, DSPConstants::CLEAN_BOOST_SMOOTH_TIME_S);
     smoothedBoostDepth.setCurrentAndTargetValue(boostOn);
@@ -1670,6 +1623,8 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         return;  // Skip this block to prevent NaN propagation
     }
     auto highPassFreq = highPassFreqParam->load();
+    float shapeValue = shapeParam ? shapeParam->load() : 0.0f;
+    if (! std::isfinite(shapeValue)) shapeValue = 0.0f;
     const int filterMode = static_cast<int>(filterModeParam->load());
     const float subGuardFreq = subGuardFreqParam->load();
     const int clipType = static_cast<int>(clipTypeParam->load());
@@ -1721,7 +1676,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     }
 
     // Determine if this destination needs per-sample LFO (0=dist, 3=mix, 4=gain)
-    // or block-level LFO (1=tone, 2=hipass - filter coefficients can't change per-sample)
+    // or block-level LFO (1=tone, 2=shape - filter coefficients can't change per-sample)
     const bool perSampleLFO = (lfoDestination == 0 || lfoDestination == 3 || lfoDestination == 4);
     const float lfoPhaseIncrement = (lfoEnabled && lfoRate > 0.0f && currentSampleRate > 0.0f)
                                    ? (lfoRate / currentSampleRate) : 0.0f;
@@ -1754,7 +1709,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Initialize modulated parameter copies (block-level defaults)
     float modulatedDistortionParam = distortionParam;
     float modulatedToneFreq = toneParamValue;
-    float modulatedHighPassFreq = highPassFreq;
+    float modulatedShape = shapeValue;
     float modulatedDistMix = distMix;
     float modulatedOutputGain = outGainParam;
 
@@ -1772,13 +1727,8 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             }
             break;
 
-        case 2:  // Input Filter cutoff (20-20000 Hz) - Logarithmic
-            {
-                const float centerFreqLog = std::log2(juce::jmax(20.0f, highPassFreq));
-                const float modulatedFreqLog = juce::jlimit(4.32f, 14.29f,
-                    centerFreqLog + (lfoModulation * 1.5f));  // ±1.5 octaves, clamped 20Hz-20kHz
-                modulatedHighPassFreq = std::pow(2.0f, modulatedFreqLog);
-            }
+        case 2:  // Shape (-100..100), block-level: swings the knob by up to ±SHAPE_LFO_RANGE
+            modulatedShape = ShapeFilter::modulated(shapeValue, lfoModulation);
             break;
 
         default:
@@ -1787,8 +1737,11 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     }
 
     // Publish preamble parameters to block-scope members for stage helpers (PR-8)
-    pb_modulatedHighPassFreq    = modulatedHighPassFreq;
+    pb_legacyFilterFreq         = highPassFreq;  // legacy filter cutoff: the knob value, not modulated
     pb_filterMode               = filterMode;
+    shapePre.setTarget(modulatedShape);
+    shapePost.setTarget(modulatedShape);
+    shapePost.setAmount(ShapeFilter::postDriveAmount(modulatedDistortionParam));
     pb_modulatedDistortionParam = modulatedDistortionParam;
     pb_modulatedToneFreq        = modulatedToneFreq;
     pb_distortionParam          = distortionParam;
@@ -1872,6 +1825,16 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             juce::dsp::AudioBlock<float> filterBlock(buffer);
             applyInputFilter(filterBlock);
         }
+
+        // Pre-drive Shape also runs here, so it works as a tone control with the
+        // drive and compressor off. At Flat it is skipped and bypass stays bit-clean.
+        {
+            juce::dsp::AudioBlock<float> shapeBlock(buffer);
+            shapePre.process(shapeBlock);
+        }
+        // The post-drive half is idle here; clear it so leaving bypass does not
+        // replay filter memory from before it.
+        shapePost.reset();
 
         feedProfileWhileBypassed(buffer);   // profile mode only; the output is untouched
 
@@ -2032,6 +1995,11 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             }
         }
     }
+
+    // Post-drive Shape: shapes the harmonics the drive created (the audible half on
+    // near-sine 808s). After the Sub Guard subtraction, so the clean low band stays
+    // untouched; before auto-gain, compression and the soft clipper.
+    applyShapePostDrive();
 
     applyAutoGainAndISP(buffer);
 
@@ -2382,8 +2350,15 @@ void PluginProcessor::migrateState(const juce::XmlElement& xmlState)
             param->setValueNotifyingHost(param->convertTo0to1(migratedFreq));
     }
 
+    // --- v1 -> v2 -------------------------------------------------------------
+    // Shape replaced the visible input filter. A state from before it has no shape
+    // value, and APVTS would keep whatever the instance had: force the default.
+    if (loadedVersion < 2)
+        if (auto* param = parameters.getParameter("shape"))
+            param->setValueNotifyingHost(param->getDefaultValue());
+
     // --- future migrations go here -------------------------------------------
-    // if (loadedVersion < 2) { ... }
+    // if (loadedVersion < 3) { ... }
 
     // Upgrade the live tree to the current version so the next save is written
     // in the latest format regardless of where this state originated.
@@ -2921,17 +2896,12 @@ void PluginProcessor::applyDuckGain(juce::AudioBuffer<float>& buffer) noexcept
 // PR-8: processBlock stage helpers
 // =============================================================================
 
-// Whether the input filter is actually shaping the signal (vs. effectively flat).
+// Whether the legacy input filter (hidden params) is actually shaping the signal (vs. effectively flat).
 // High-pass near the subsonic floor and low-pass near Nyquist are treated as
 // transparent so a "default" filter still allows true bypass; band-pass always cuts.
 bool PluginProcessor::isInputFilterActive() const
 {
-    switch (pb_filterMode)
-    {
-        case 1:  return pb_modulatedHighPassFreq < DSPConstants::LOWPASS_TRANSPARENT_MIN_FREQ;  // Low Pass: cutting highs
-        case 2:  return true;                                                                   // Band Pass: always cuts
-        default: return pb_modulatedHighPassFreq > DSPConstants::HIPASS_TRANSPARENT_MAX_FREQ;   // High Pass: cutting lows
-    }
+    return LegacyInputFilter::isActive(pb_filterMode, pb_legacyFilterFreq);
 }
 
 // Apply the multimode filter at BASE sample rate. setType/setCutoffFrequency are
@@ -2947,13 +2917,13 @@ void PluginProcessor::applyInputFilter(juce::dsp::AudioBlock<float>& block)
         default: inputFilter.setType(juce::dsp::StateVariableTPTFilterType::highpass); break;
     }
 
-    if (std::abs(pb_modulatedHighPassFreq - lastHighPassFreq) > 0.5f &&
+    if (std::abs(pb_legacyFilterFreq - lastHighPassFreq) > 0.5f &&
         baseSampleRate >= 1000.0 && baseSampleRate <= 500000.0 &&
-        pb_modulatedHighPassFreq >= 1.0f &&
-        pb_modulatedHighPassFreq <= (baseSampleRate * 0.5))
+        pb_legacyFilterFreq >= 1.0f &&
+        pb_legacyFilterFreq <= (baseSampleRate * 0.5))
     {
-        inputFilter.setCutoffFrequency(pb_modulatedHighPassFreq);
-        lastHighPassFreq = pb_modulatedHighPassFreq;
+        inputFilter.setCutoffFrequency(pb_legacyFilterFreq);
+        lastHighPassFreq = pb_legacyFilterFreq;
     }
 
     juce::dsp::ProcessContextReplacing<float> ctx(block);
@@ -2964,6 +2934,7 @@ void PluginProcessor::applyPreHighpass(juce::AudioBuffer<float>& buffer)
 {
     pb_inputBlock = juce::dsp::AudioBlock<float>(buffer);
     applyInputFilter(pb_inputBlock);
+    shapePre.process(pb_inputBlock);
 
     pb_oversampledBlock = oversampling
         ? oversampling->processSamplesUp(pb_inputBlock)
@@ -4070,6 +4041,8 @@ void PluginProcessor::resetDSPState()
 {
     // Reset all filters when loading state to prevent stale coefficients/state
     inputFilter.reset();
+    shapePre.reset();
+    shapePost.reset();
     if (lowPassFilter1.state)
         lowPassFilter1.reset();
     if (lowPassFilter2.state)
@@ -4328,6 +4301,11 @@ void PluginProcessor::applyCleanBoostEmphasis()
         emphasisFilter.process(juce::dsp::ProcessContextReplacing<float>(pb_oversampledBlock));
 }
 
+void PluginProcessor::applyShapePostDrive()
+{
+    shapePost.process(pb_oversampledBlock);
+}
+
 void PluginProcessor::applyCleanBoostDeEmphasis()
 {
     if (!pb_boostProcessedThisBlock)
@@ -4362,24 +4340,35 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         20.0f));  // Default 20 = audible out of the box; 0 is a true bypass (see
                   // applyDistortionStage), so a fresh instance previously did nothing.
 
-    // Input filter cutoff/centre. Full-range so low-pass and band-pass modes are usable
-    // across the spectrum; log-style skew (centre ~1 kHz) keeps the knob musical. The ID
-    // stays "highPassFreq" for state/preset compatibility even though it now drives any mode.
+    // Hidden legacy param: cutoff/centre of the old multimode input filter, kept only so
+    // sessions saved before Shape still sound the same (see LegacyInputFilter.h). Not
+    // shown in the editor; the LFO no longer touches it. The ID stays "highPassFreq".
     {
         juce::NormalisableRange<float> filterFreqRange(20.0f, 20000.0f, 1.0f);
         filterFreqRange.setSkewForCentre(1000.0f);
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
             juce::ParameterID{ "highPassFreq", 1 },
-            "Filter Frequency",
+            "Legacy Filter Freq",
             filterFreqRange,
             DSPConstants::DEFAULT_HIPASS_FREQ));
     }
 
     params.push_back(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID{ "filterMode", 1 },
-        "Filter Mode",
+        "Legacy Filter Mode",
         juce::StringArray{ "High Pass", "Low Pass", "Band Pass" },
         0));  // Default High Pass (preserves prior behaviour)
+
+    // Shape: bipolar Orange-style voicing (Bark <-> Scoop). Replaces the visible
+    // input filter; filterMode/highPassFreq above stay registered for old sessions.
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "shape", 2 },
+        "Shape",
+        juce::NormalisableRange<float>(DSPConstants::SHAPE_MIN, DSPConstants::SHAPE_MAX),
+        0.0f,
+        juce::AudioParameterFloatAttributes()
+            .withStringFromValueFunction([](float v, int) { return ShapeFilter::toText(v); })
+            .withValueFromStringFunction([](const juce::String& t) { return ShapeFilter::fromText(t); })));
 
     // Sub Guard continuous crossover frequency (replaces 808-Safe toggle)
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
@@ -4439,7 +4428,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         juce::StringArray{
             "Distortion",   // 0 (default for backward compatibility)
             "Tone Filter",  // 1
-            "Hi-Pass",      // 2
+            "Shape",        // 2
             "Dist Mix",     // 3
             "Output Gain"   // 4
         },

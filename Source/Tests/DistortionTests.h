@@ -17,6 +17,7 @@
 #include "../Diagnostics/ReportSender.h"
 #include "../Diagnostics/PingSender.h"
 #include "../Nam/ResamplingIsland.h"
+#include "../LegacyInputFilter.h"
 
 //==============================================================================
 // Test Categories
@@ -369,6 +370,7 @@ private:
     void testBankSize();
     void testParamIdsExist();
     void testPresetsProduceFiniteOutput();
+    void testPresetsLeaveLegacyFilterOff();
 };
 
 //==============================================================================
@@ -466,6 +468,20 @@ class InputFilterModeTest : public juce::UnitTest
 {
 public:
     InputFilterModeTest() : UnitTest("Input Filter Modes", TestCategories::DSP) {}
+    void runTest() override;
+};
+
+class ShapeFilterTests : public juce::UnitTest
+{
+public:
+    ShapeFilterTests() : UnitTest("Shape Filter", TestCategories::DSP) {}
+    void runTest() override;
+};
+
+class ShapeProcessorTests : public juce::UnitTest
+{
+public:
+    ShapeProcessorTests() : UnitTest("Shape Processor", TestCategories::DSP) {}
     void runTest() override;
 };
 
@@ -1126,6 +1142,8 @@ inline void registerAllTests()
     static StatefulDistortionTests statefulDistortionTests;
     static SubGuardFlatnessTest subGuardFlatnessTest;
     static InputFilterModeTest inputFilterModeTest;
+    static ShapeFilterTests shapeFilterTests;
+    static ShapeProcessorTests shapeProcessorTests;
     static DiagReportJsonTest diagReportJsonTest;
     static DiagReportStoreTest diagReportStoreTest;
     static DiagSinkComposerTest diagSinkComposerTest;

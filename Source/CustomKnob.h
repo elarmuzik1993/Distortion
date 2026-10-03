@@ -18,7 +18,11 @@ public:
         repaint();
     }
 
+    // Bipolar knobs (noon = neutral) draw the value arc outward from 12 o'clock.
+    void setBipolar(bool shouldBeBipolar) { bipolar = shouldBeBipolar; repaint(); }
+
 private:
+    bool bipolar = false;
     bool lfoArcActive = false;
     float lfoArcPhase = 0.0f;   // 0-1, current LFO cycle position
     float lfoArcDepth = 0.0f;   // -1..1, controls arc size; sign sets direction

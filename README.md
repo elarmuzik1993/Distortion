@@ -79,9 +79,14 @@ where a host hands over a stereo bus anyway, the Mono Input switch in Settings c
 source. It never engages on its own; when it spots a one-sided signal it just lights the
 indicator in the title bar.
 
-**Multimode input filter** — High-Pass / Low-Pass / Band-Pass (SVF TPT) ahead of
-the drive. It runs in the true-bypass path too, so it doubles as a standalone
-filter with distortion and compression switched off.
+**Shape** — one bipolar knob that voices the sound toward Bark (a broad boost
+around 600 Hz, with the top end eased back) or Scoop (a mid cut with a brighter
+top). It acts both before the drive and, at half strength, on the harmonics the
+drive creates, which is what makes it audible on near-sine 808s. The pre-drive
+stage also runs in the true-bypass path, so Shape works as a tone control with
+distortion and compression switched off. Sessions saved with the old input filter
+keep it; a LEGACY FILTER tag appears on the knob while it is on and offers to
+switch it off.
 
 **Oscilloscope** — zero-crossing triggered so the waveform doesn't drift,
 anti-alias decimated, and fed by a lock-free SPSC queue that never touches the
@@ -89,7 +94,7 @@ audio thread. One selector decides which overlay owns the surface: Off, XY Morph
 or the graphic EQ.
 
 **LFO modulation** — 5 waveforms (sine, triangle, square, saw, random S&H) into 5
-destinations (distortion amount, tone filter, hi-pass, dist mix, output gain),
+destinations (distortion amount, tone filter, Shape, dist mix, output gain),
 free-running 0.1–50 Hz or BPM-synced to the host from 1/1 to 1/32 including
 triplets, with polarity invert. Modulated knobs pulse so you can see the routing.
 

@@ -152,6 +152,9 @@ set(PLUGIN_SOURCES
     Source/CyclingComboBox.h
     Source/LinearRamp.h
     Source/FactoryPresets.h
+    Source/FilterCoeffs.h
+    Source/ShapeFilter.h
+    Source/LegacyInputFilter.h
     Source/Diagnostics/AppPaths.h
     Source/Diagnostics/Report.h
     Source/Diagnostics/ITransport.h

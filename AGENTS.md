@@ -40,6 +40,7 @@ Obsidian: [[Monolit Distortion]]
   - Two toolbar buttons in the title bar (next to the scope/gear buttons) quick-toggle the overlays: **`XyButton`** (XY↔Off) and **`EqButton`** (EQ↔Off). Each lights up when its overlay is active and dims otherwise; they're mutually exclusive via the shared mode and stay in sync with the Settings selector through `applyScopeOverlayMode` (the same duplicate-toggle pattern the scope button uses). Toolbar order mirrors the dropdown: scope · XY · EQ.
   - **EQ bypass**: a power button in the overlay's top-left corner one-click toggles the `eqEnabled` param — the DSP ramps the applied gains to flat (click-free) while the drawn curve is kept, so it's a true A/B bypass rather than a destructive flatten. The curve dims and the label reads "(BYPASSED)" while off.
   - **Graphic EQ** mode: the `GraphicEqOverlay` lets you free-draw a magnitude curve on the scope (Catmull-Rom spline through 12 control points; double-click flattens). Each control point maps to one output-stage peaking band (`eqBand0..11` APVTS params, log-spaced ~30 Hz–16 kHz, ±12 dB). DSP is a base-rate `ProcessorDuplicator` peaking bank (`processGraphicEq`, inserted after the DC blocker, before the output-gain stage); coefficients are written in place via `writePeakFilterCoeffs` (mirrors JUCE `makePeakFilter`, no `processBlock` allocation) from per-band `SmoothedValue` gains. The whole bank bypasses when the curve is flat (all bands within `EQ_FLAT_EPS_DB` of 0), so a fresh instance is bit-transparent. A peaking biquad goes unstable once its centre reaches Nyquist (`alpha` turns negative and the poles leave the unit circle), so `prepareEqBands` marks bands at/above `EQ_MAX_FREQ_RATIO` (0.45) × base rate unusable — they get no coefficients, never process, and don't keep the bank awake. In practice the 16 kHz band drops out at base rates ≤32 kHz; at 44.1 kHz and above all 12 are live. The overlay is a UI-only view of the params — the EQ engages from the saved curve regardless of the selector, so presets always sound right; "bypass" = flatten.
+- **Shape** (replaces the input filter): one bipolar knob, Bark (mid boost) ↔ Flat ↔ Scoop (mid cut, brighter). `ShapeFilter` (`Source/ShapeFilter.h`, constants `DSPConstants::SHAPE_*`) is a 600 Hz peaking band (Q 0.7; +12 dB at full Bark, −15 dB at full Scoop) plus an opposing 2.5 kHz high shelf (Q 0.707; −6 dB Bark, +6 dB Scoop), with a linear taper (half a turn gives half the effect). These were raised from +9/−12 dB, ±4 dB and a |s|^1.5 taper after a listening pass found the first voicing too subtle. Param `shape` (−100..100, default 0, text "Bark 60"/"Flat"/"Scoop 40"); coefficients are rewritten in place every 32 samples from a smoothed value, and the filter is skipped entirely when flat (bit-transparent), after a 10 ms hold (`SHAPE_FLAT_HOLD_S`) that lets its tail decay so clearing the filter memory cannot click. It runs twice: pre-drive at base rate (`shapePre`) and post-drive in the oversampled domain at up to three-quarter amount (`shapePost`, `SHAPE_POST_AMOUNT` 0.75, faded in with the drive over the first 10%). LFO destination 2 swings it ±50 knob units (clamped ±100, block rate). XY Morph's Y axis drives it (bottom −60 … top +60); Randomize sets ±70. State version is 2; `migrateState` resets `shape` to 0 for older states. Old sessions keep their filter through the hidden `filterMode`/`highPassFreq` params (DSP unchanged; `LegacyInputFilter::isActive` in `Source/LegacyInputFilter.h` says when it is non-transparent): a LEGACY FILTER tag in the label slot appears while it is on and offers to switch it off (`PluginEditor::resetLegacyFilter`). The knob is bipolar (`CustomKnob::setBipolar`, centre-out arc, double-click → 0). Factory presets never touch the legacy params; 13 of them set Shape (and Sub Guard where the old low cut tightened the bass).
 - **LFO BPM Sync**: SYNC button in the LFO panel switches the rate knob from free-running Hz mode to BPM-locked division mode. The rate knob steps through 1/1 → 1/2 → 1/4 → 1/8 → 1/16 → 1/32 → 1/4T → 1/8T → 1/16T; the label below updates live to show the selected division. Falls back to 120 BPM when no host playhead is available.
 - **LFO INV Toggle**: Inverts LFO polarity in both DSP (`lfoSign = -1`) and the arc visualizer (arc sweeps below the knob value instead of above).
 - **CyclingComboBox** (`Source/CyclingComboBox.h`): Custom `juce::ComboBox` subclass — single-click cycles to next item (timer-debounced), double-click opens the full list. Used for clip type, LFO waveform/destination, compression ratio, and settings dropdowns.
@@ -79,24 +80,25 @@ python scripts/fix_moduleinfo_json.py build --all
 ```
 
 ## Architecture & Signal Chain
-1. **Input Stage** → Multimode Input Filter (HP/LP/BP, 20-20kHz, Butterworth TPT).
+1. **Input Stage** → Legacy v2.3 input filter (hidden `filterMode`/`highPassFreq`, transparent unless an old session set it), then **Shape (pre-drive)**: bipolar Bark ↔ Scoop voicing (600 Hz peak/dip + opposing 2.5 kHz shelf, `ShapeFilter`, amount `SHAPE_PRE_AMOUNT`).
 2. **Oversampling** → Polyphase IIR, selectable Off / 2x / 4x (4x default; `oversamplingMode` in `settings.xml`)
 3. **Pre-Distortion Transient Tamer** → Hardcoded (1ms attack, 50ms release, 2.5:1 ratio, -12dB threshold)
 4. **Sub Guard Band-Split** (Optional) → 50-200Hz crossover protecting low band from distortion.
 5. **Distortion Stage** → 7 Professional Clip Types (Brutal Fuzz, Tube, Bit Crusher, Tape, Transformer, Diode, Decimator), or a loaded NAM profile (prototype). In profile mode the chain runs at 1x and each model runs at its trained rate inside a `ResamplingIsland` (`Source/Nam/`), which delays the wet path by a whole number of samples, D. The Distortion Mix dry half, the Sub Guard low band and the global Mix dry wait the same D.
-6. **Tone Filter & Waveshaper** → Order depends on "Clean Mode" toggle. Runs in oversampled domain.
-7. **Auto-Gain Compensation** → RMS-based (±12dB).
-8. **LA2A Compression** → Optical cell simulation in oversampled domain (Attack 10ms, Release 500ms, 2dB knee, Tube harmonics).
-9. **Soft Clipper** → ISP protection at -0.3dBFS (oversampled domain).
-10. **Sub Guard Recombine** → Phase-matched toneFilterLow applied to low band, then summed.
-11. **Downsampling** → Return to original sample rate.
-12. **DC Blocking** → One-pole (~3.5Hz cutoff).
-13. **Graphic EQ** (Optional) → 12-band peaking bank at base rate (`processGraphicEq`); whole bank bypasses while the drawn curve is flat. Bands whose centre sits at/above `EQ_MAX_FREQ_RATIO` (0.45) × sample rate are dropped, so the 16 kHz band is inactive at base rates ≤32 kHz.
-14. **Output Stage** → Final gain staging (±9dB).
-15. **Global Mix** → dry/wet blend, dry phase-aligned through the matched `dryOversampling` instance (comb-free at every frequency).
-16. **Output Limiter** → Safety limiter (-0.5dBFS), **after** the blend so the ceiling bounds the mixed output, not just the wet path. Always the last gain-shaping stage on both the active and bypass paths; only the latency pad and the duck fade follow it.
+6. **Shape (post-drive)** → the same curve at up to `SHAPE_POST_AMOUNT`, oversampled domain. It shapes the harmonics the drive created, which is what makes Shape audible on near-sine 808s. Its amount fades in with the drive (`ShapeFilter::postDriveAmount`: 0 at 0% distortion, full at `SHAPE_POST_FULL_DRIVE` 10%), so crossing the true-bypass threshold, where only the pre-drive half runs, does not jump the EQ; true bypass also clears its memory. Runs after the Clean Boost de-emphasis and **after the Sub Guard low-band subtraction**, so Sub Guard's clean low band is never shaped after the drive; before auto-gain, compression and the soft clipper; re-prepared with the oversampler (1x in NAM profile mode). The global-Mix dry capture precedes both Shape stages, so Shape colours only the wet path.
+7. **Tone Filter & Waveshaper** → Order depends on "Clean Mode" toggle. Runs in oversampled domain.
+8. **Auto-Gain Compensation** → RMS-based (±12dB).
+9. **LA2A Compression** → Optical cell simulation in oversampled domain (Attack 10ms, Release 500ms, 2dB knee, Tube harmonics).
+10. **Soft Clipper** → ISP protection at -0.3dBFS (oversampled domain).
+11. **Sub Guard Recombine** → Phase-matched toneFilterLow applied to low band, then summed.
+12. **Downsampling** → Return to original sample rate.
+13. **DC Blocking** → One-pole (~3.5Hz cutoff).
+14. **Graphic EQ** (Optional) → 12-band peaking bank at base rate (`processGraphicEq`); whole bank bypasses while the drawn curve is flat. Bands whose centre sits at/above `EQ_MAX_FREQ_RATIO` (0.45) × sample rate are dropped, so the 16 kHz band is inactive at base rates ≤32 kHz.
+15. **Output Stage** → Final gain staging (±9dB).
+16. **Global Mix** → dry/wet blend, dry phase-aligned through the matched `dryOversampling` instance (comb-free at every frequency).
+17. **Output Limiter** → Safety limiter (-0.5dBFS), **after** the blend so the ceiling bounds the mixed output, not just the wet path. Always the last gain-shaping stage on both the active and bypass paths; only the latency pad and the duck fade follow it.
 
-Steps 12–14 live inside `applyAutoGainAndISP`; 15–16 are in `processBlock` proper. `docs/Architecture Contract.md` carries the fully expanded ordering — keep the two in step.
+Steps 13–15 live inside `applyAutoGainAndISP`; 16–17 are in `processBlock` proper. `docs/Architecture Contract.md` carries the fully expanded ordering — keep the two in step.
 
 **Latency and rebuilds.** Sledge always reports one figure, R: the larger of the oversampler's latency for the user's setting and the island delay a 48 kHz model needs at the host rate. Every path pads up to R, which adds nothing at 48 kHz. While a profile trained at a rate other than 48 kHz is loaded, R rises to that profile's island delay when it is larger. Every runtime oversampler rebuild (the Oversampling setting, linear phase, NAM profile mode on or off) goes through a duck: a 10 ms fade out, the rebuild under the callback lock, then a 10 ms fade in. Swapping between profiles with the same island delay crossfades instead: a warm-up of at most 100 ms, then a 30 ms blend. `prepareToPlay` holds the callback lock and finishes any pending switch without fading.
 
@@ -125,12 +127,12 @@ Steps 12–14 live inside `applyAutoGainAndISP`; 15–16 are in `processBlock` p
 - **Memory**: No dynamic allocation in `processBlock`.
 - **Thread Safety**: Use `std::atomic` for parameters and a lock-free `juce::AbstractFifo` (SPSC) for Scope data. The scope path holds **no lock** — the old `SpinLock` was removed to keep the audio thread contention-free, so do not reintroduce one.
 - **Smoothing**: Always consume `SmoothedValue` in a **sample-first loop** to avoid buffer exhaustion.
-- **Bypass**: True bypass when `distortion < 0.5%` and `compression OFF`. Skips oversampling and the whole distortion/compression chain. **The multimode input filter still runs** (only when `isInputFilterActive()`), so it works standalone; a filter at its transparent default leaves bypass bit-clean. The bypass branch imposes the path's own latency through `bypassLatencyDelay`, then the shared output pad, reaching R (see Latency and rebuilds) in total, so toggling causes no timing jump. Full ordering in `docs/Architecture Contract.md`.
-- **Namespace**: DSP constants are centralized in the `DSPConstants` namespace in `PluginProcessor.h`.
+- **Bypass**: True bypass when `distortion < 0.5%` and `compression OFF`. Skips oversampling and the whole distortion/compression chain. **The legacy input filter (only when `isInputFilterActive()`) and the pre-drive Shape (only when off Flat) still run**, so Shape works as a standalone tone control; both at their transparent defaults leave bypass bit-clean. The bypass branch imposes the path's own latency through `bypassLatencyDelay`, then the shared output pad, reaching R (see Latency and rebuilds) in total, so toggling causes no timing jump. Full ordering in `docs/Architecture Contract.md`.
+- **Namespace**: DSP constants are centralized in the `DSPConstants` namespace in `PluginProcessor.h`, except the Shape voicing (`SHAPE_*`), which extends the same namespace in `Source/ShapeFilter.h` so the filter header stands alone.
 
 ## Build & Test
 - **Framework**: JUCE UnitTest runner.
-- **Coverage**: 2580+ assertions (100% PASS RATE).
+- **Coverage**: 3800+ assertions (100% PASS RATE).
 - **Categories**: DSP, Compression, LFO, ProcessBlock, ThreadSafety, SampleRate (44.1k-192k), GraphicEq (sweeps 22.05k-192k to cover the Nyquist band-drop), State I/O, FactoryPresets, Diagnostics, Settings Persistence.
 - **Golden Audio**: Reference file comparison tests included.
 - **Host validation**: CI gates on `pluginval --strictness-level 10` (Windows + Linux; xvfb on Linux).
@@ -142,6 +144,8 @@ Steps 12–14 live inside `applyAutoGainAndISP`; 15–16 are in `processBlock` p
   ./DistortionUiSnapshot --collapsed --out shots  # scope folded away
   ./DistortionUiSnapshot --extreme --out shots    # after the EXTREME crack fade settles
   ./DistortionUiSnapshot --signal --out shots     # scope shows a waveform (docs images)
+  ./DistortionUiSnapshot --shape -60 --out shots  # Shape knob at a given value (-100..100)
+  ./DistortionUiSnapshot --legacy --out shots     # a legacy input filter engaged (LEGACY FILTER tag)
   ```
   **`--signal` renders are not bit-comparable across builds.** The trace alpha follows the
   scope's smoothed signal-presence value, and the number of timer ticks fitting the harness's
@@ -228,7 +232,7 @@ Cracked-glass / diamond-plate artwork behind the editor. `Resources/ui_texture.p
 ## Project Layout
 - `Source/`: PluginProcessor, PluginEditor, CustomKnob, `FactoryPresets.h`, and DSP logic.
 - `Source/Diagnostics/`: bug-reporting subsystem (`diag` namespace) — sink, store, composer, sender, transport. See "Diagnostics / Bug Reporting" above.
-- `Source/Tools/`: headless console tools — `RenderHarness` (audition), `SoakHarness` (stress), `UiSnapshot` (editor screenshots).
+- `Source/Tools/`: headless console tools — `RenderHarness` (audition; `--signal 808|bassnote`, `--shape <v>`, `--preset <name>`), `SoakHarness` (stress), `UiSnapshot` (editor screenshots).
 - `Resources/`: embedded binary data — `ui_texture.png` / `ui_texture_extreme.png` (see "UI Texture" below), logo, Orbitron fonts.
 - `installer/`: Inno Setup script for the Windows installer.
 - `library/`: Shared utility code.

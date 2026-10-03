@@ -3,8 +3,9 @@
 #include "DistortionTests.h"
 #include "../CyclingComboBox.h"
 #include "../FactoryPresets.h"
-#include "../FilterModeSwitch.h"
+#include "../LegacyInputFilter.h"
 #include "../RTAllocationGuard.h"
+#include "../ShapeFilter.h"
 #include <atomic>
 #include <iostream>
 #include <thread>
@@ -1356,8 +1357,8 @@ void LFODestinationTests::runTest()
     beginTest("Destination 1: Tone filter modulation");
     testDestination(1, "tone", 8000.0f);
 
-    beginTest("Destination 2: Hi-pass modulation");
-    testDestination(2, "highPassFreq", 100.0f);
+    beginTest("Destination 2: Shape modulation");
+    testDestination(2, "shape", 0.0f);
 
     beginTest("Destination 3: Dist mix modulation");
     testDestination(3, "distMix", 50.0f);
@@ -2689,7 +2690,7 @@ void ParameterTests::testParameterRanges(PluginProcessor& processor)
 {
     // Test that all expected parameters exist
     const char* expectedParams[] = {
-        "inputGain", "outputGain", "distortionAmount", "highPassFreq",
+        "inputGain", "outputGain", "distortionAmount", "highPassFreq", "shape",
         "subGuardFreq", "clipType", "distMix",
         "lfoRate", "lfoDepth", "lfoWaveform",
         "compEnabled", "compPeakReduction", "compMakeupGain",
@@ -3178,6 +3179,9 @@ void FactoryPresetTests::runTest()
 
     beginTest("Every preset produces finite output");
     testPresetsProduceFiniteOutput();
+
+    beginTest("Factory presets leave the legacy input filter transparent");
+    testPresetsLeaveLegacyFilterOff();
 }
 
 void FactoryPresetTests::testBankSize()
@@ -3230,6 +3234,35 @@ void FactoryPresetTests::testPresetsProduceFiniteOutput()
         }
         expect(allFinite, juce::String("Preset '") + preset.name + "' produced non-finite output");
     }
+}
+
+void FactoryPresetTests::testPresetsLeaveLegacyFilterOff()
+{
+    PluginProcessor processor;
+    auto value = [&](const char* id)
+    {
+        auto* p = processor.parameters.getParameter(id);
+        return p->convertFrom0to1(p->getValue());
+    };
+
+    for (const auto& preset : FactoryPresets::all())
+    {
+        for (const auto& pv : preset.overrides)
+            expect(juce::String(pv.id) != "highPassFreq" && juce::String(pv.id) != "filterMode",
+                   juce::String("Preset '") + preset.name + "' sets a legacy filter param");
+
+        // Start from a dirty legacy filter so the baseline must clear it.
+        setParameter(processor.parameters, "filterMode", 2.0f);
+        setParameter(processor.parameters, "highPassFreq", 800.0f);
+        FactoryPresets::apply(processor.parameters, preset.name);
+        expect(! LegacyInputFilter::isActive(juce::roundToInt(value("filterMode")), value("highPassFreq")),
+               juce::String("Preset '") + preset.name + "' left the legacy filter on");
+    }
+
+    expect(FactoryPresets::baseline().end() != std::find_if(
+               FactoryPresets::baseline().begin(), FactoryPresets::baseline().end(),
+               [](const FactoryPresets::ParamValue& pv) { return juce::String(pv.id) == "shape"; }),
+           "Baseline does not reset shape");
 }
 
 //==============================================================================
@@ -5018,56 +5051,653 @@ void InputFilterModeTest::runTest()
                "Band Pass did not attenuate both sides (low=" + juce::String(e.low, 1)
                + " mid=" + juce::String(e.mid, 1) + " high=" + juce::String(e.high, 1) + " dB)");
     }
+}
 
-    beginTest("Switching mode moves a cutoff left at the old mode's default to the new one's");
+//==============================================================================
+// ShapeFilterTests — the Shape DSP unit on its own
+//==============================================================================
+
+namespace
+{
+    // Steady-state gain (dB) of a ShapeFilter at one frequency: run a 1 s sine,
+    // compare RMS over the second half (filter settled, smoother finished).
+    float shapeGainDb(double sr, float shape, float amount, double freq)
     {
-        using namespace FilterModeSwitch;
-        expectEquals(cutoffAfterSwitch(highPass, lowPass, 20.0f), 20000.0f);
-        expectEquals(cutoffAfterSwitch(lowPass, bandPass, 20000.0f), 1000.0f);
-        expectEquals(cutoffAfterSwitch(bandPass, highPass, 1000.0f), 20.0f);
-        expectEquals(cutoffAfterSwitch(lowPass, highPass, 19500.0f), 20.0f);   // anywhere flat counts
-        expectEquals(cutoffAfterSwitch(highPass, bandPass, 20.0f), 1000.0f);
+        ShapeFilter f;
+        juce::dsp::ProcessSpec spec { sr, 512, 2 };
+        f.prepare(spec, shape, amount);
 
-        // A cutoff the user chose stays put.
-        expectEquals(cutoffAfterSwitch(highPass, lowPass, 150.0f), 150.0f);
-        expectEquals(cutoffAfterSwitch(lowPass, highPass, 5000.0f), 5000.0f);
-        expectEquals(cutoffAfterSwitch(bandPass, lowPass, 800.0f), 800.0f);
-        expectEquals(cutoffAfterSwitch(lowPass, lowPass, 20000.0f), 20000.0f);
+        const int n = static_cast<int>(sr);
+        juce::AudioBuffer<float> buf(2, n);
+        for (int i = 0; i < n; ++i)
+        {
+            const float s = 0.25f * static_cast<float>(
+                std::sin(juce::MathConstants<double>::twoPi * freq * i / sr));
+            buf.setSample(0, i, s);
+            buf.setSample(1, i, s);
+        }
+        juce::AudioBuffer<float> in(buf);
 
-        // Clicking through all three modes lands back on the transparent high-pass.
-        float hz = DSPConstants::DEFAULT_HIPASS_FREQ;
-        hz = cutoffAfterSwitch(highPass, lowPass, hz);
-        hz = cutoffAfterSwitch(lowPass, bandPass, hz);
-        hz = cutoffAfterSwitch(bandPass, highPass, hz);
-        expectEquals(hz, DSPConstants::DEFAULT_HIPASS_FREQ);
+        for (int start = 0; start < n; start += 512)
+        {
+            const int len = juce::jmin(512, n - start);
+            juce::dsp::AudioBlock<float> block(buf.getArrayOfWritePointers(), 2,
+                                               (size_t) start, (size_t) len);
+            f.process(block);
+        }
+
+        double eIn = 0.0, eOut = 0.0;
+        for (int i = n / 2; i < n; ++i)
+        {
+            eIn  += in.getSample(0, i)  * in.getSample(0, i);
+            eOut += buf.getSample(0, i) * buf.getSample(0, i);
+        }
+        return static_cast<float>(10.0 * std::log10(eOut / eIn));
+    }
+}
+
+void ShapeFilterTests::runTest()
+{
+    beginTest("Curve maths: taper, end gains, LFO clamp");
+    {
+        expectWithinAbsoluteError(ShapeFilter::taper(0.0f), 0.0f, 1.0e-6f);
+        expectWithinAbsoluteError(ShapeFilter::taper(100.0f), 1.0f, 1.0e-6f);
+        expectWithinAbsoluteError(ShapeFilter::taper(-100.0f), -1.0f, 1.0e-6f);
+        expectWithinAbsoluteError(ShapeFilter::taper(50.0f), std::pow(0.5f, DSPConstants::SHAPE_TAPER), 1.0e-5f);
+        expectWithinAbsoluteError(ShapeFilter::midGainDb(-100.0f, 1.0f), DSPConstants::SHAPE_MID_BOOST_DB, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::midGainDb(100.0f, 1.0f), -DSPConstants::SHAPE_MID_CUT_DB, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::midGainDb(100.0f, 0.5f), -0.5f * DSPConstants::SHAPE_MID_CUT_DB, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::shelfGainDb(-100.0f, 1.0f), -DSPConstants::SHAPE_SHELF_DB, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::shelfGainDb(100.0f, 1.0f), DSPConstants::SHAPE_SHELF_DB, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::modulated(80.0f, 1.0f), 100.0f, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::postDriveAmount(0.0f), 0.0f, 1.0e-6f);
+        expectWithinAbsoluteError(ShapeFilter::postDriveAmount(0.5f * DSPConstants::SHAPE_POST_FULL_DRIVE),
+                                  0.5f * DSPConstants::SHAPE_POST_AMOUNT, 1.0e-6f);
+        expectWithinAbsoluteError(ShapeFilter::postDriveAmount(100.0f), DSPConstants::SHAPE_POST_AMOUNT, 1.0e-6f);
+        expectWithinAbsoluteError(ShapeFilter::modulated(0.0f, -1.0f), -50.0f, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::modulated(-100.0f, -1.0f), -100.0f, 1.0e-4f);
     }
 
-    beginTest("Only a user's mode switch moves the cutoff; presets and automation do not");
+    beginTest("Value text round-trips");
+    {
+        expectEquals(ShapeFilter::toText(0.0f), juce::String("Flat"));
+        expectEquals(ShapeFilter::toText(0.4f), juce::String("Flat"));
+        expectEquals(ShapeFilter::toText(-60.0f), juce::String("Bark 60"));
+        expectEquals(ShapeFilter::toText(40.2f), juce::String("Scoop 40"));
+        expectWithinAbsoluteError(ShapeFilter::fromText("Bark 60"), -60.0f, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::fromText("scoop 40"), 40.0f, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::fromText("Flat"), 0.0f, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::fromText("-25"), -25.0f, 1.0e-4f);
+    }
+
+    beginTest("Shape 0 is bit-transparent and inactive");
+    {
+        ShapeFilter f;
+        f.prepare({ 48000.0, 512, 2 }, 0.0f, 1.0f);
+        expect(! f.isActive(), "Shape 0 reported active");
+
+        juce::Random rng(11);
+        juce::AudioBuffer<float> buf(2, 512);
+        for (int ch = 0; ch < 2; ++ch)
+            for (int i = 0; i < 512; ++i)
+                buf.setSample(ch, i, rng.nextFloat() * 2.0f - 1.0f);
+        juce::AudioBuffer<float> in(buf);
+        juce::dsp::AudioBlock<float> block(buf);
+        f.process(block);
+        expectEquals(calculateMaxDifference(in, buf), 0.0f);
+    }
+
+    beginTest("Bark and Scoop hit their targets at 600 Hz and in the treble");
+    {
+        constexpr double sr = 48000.0;
+        expectWithinAbsoluteError(shapeGainDb(sr, -100.0f, 1.0f, 600.0), DSPConstants::SHAPE_MID_BOOST_DB, 0.5f);
+        expectWithinAbsoluteError(shapeGainDb(sr,  100.0f, 1.0f, 600.0), -DSPConstants::SHAPE_MID_CUT_DB, 0.5f);
+        expect(shapeGainDb(sr, -100.0f, 1.0f, 6000.0) < -(DSPConstants::SHAPE_SHELF_DB - 1.5f), "Bark did not soften the treble");
+        expect(shapeGainDb(sr,  100.0f, 1.0f, 6000.0) >  DSPConstants::SHAPE_SHELF_DB - 1.5f, "Scoop did not lift the treble");
+        expectWithinAbsoluteError(shapeGainDb(sr, 100.0f, 0.5f, 600.0), -0.5f * DSPConstants::SHAPE_MID_CUT_DB, 0.5f);
+    }
+
+    beginTest("Sub band stays within 1.5 dB at every knob position");
+    {
+        for (float shape : { -100.0f, -50.0f, 0.0f, 50.0f, 100.0f })
+            for (double f : { 40.0, 60.0, 80.0 })
+            {
+                const float g = shapeGainDb(48000.0, shape, 1.0f, f);
+                expect(std::abs(g) < 1.5f, "Shape " + juce::String(shape) + " moved "
+                       + juce::String(f) + " Hz by " + juce::String(g, 2) + " dB");
+            }
+    }
+
+    beginTest("Response holds at 768 kHz (192 kHz x 4, the post-drive worst case)");
+    {
+        expectWithinAbsoluteError(shapeGainDb(768000.0, -100.0f, 1.0f, 600.0), DSPConstants::SHAPE_MID_BOOST_DB, 0.75f);
+        expectWithinAbsoluteError(shapeGainDb(768000.0,  100.0f, 1.0f, 600.0), -DSPConstants::SHAPE_MID_CUT_DB, 0.75f);
+    }
+
+    beginTest("Finite at every supported rate, both extremes");
+    {
+        for (double sr : { 44100.0, 48000.0, 88200.0, 96000.0, 192000.0, 768000.0 })
+            for (float shape : { -100.0f, 100.0f })
+            {
+                const float g = shapeGainDb(sr, shape, 1.0f, 600.0);
+                expect(std::isfinite(g), "Non-finite at " + juce::String(sr) + " Hz");
+            }
+    }
+
+    beginTest("A full Bark-to-Scoop jump is click-free");
+    {
+        constexpr double sr = 48000.0;
+        constexpr int n = 24000;
+        // Max sample-to-sample step over the window AFTER the switch point only, so the
+        // loud pre-jump Bark section cannot dominate the figure. The reference is a
+        // filter that sat at Scoop the whole time, measured over the same window.
+        auto maxStepAfter = [&](float startShape, bool jump)
+        {
+            ShapeFilter f;
+            f.prepare({ sr, 512, 1 }, startShape, 1.0f);
+            juce::AudioBuffer<float> buf(1, n);
+            for (int i = 0; i < n; ++i)
+                buf.setSample(0, i, 0.5f * static_cast<float>(
+                    std::sin(juce::MathConstants<double>::twoPi * 200.0 * i / sr)));
+            float worst = 0.0f, prev = 0.0f;
+            for (int start = 0; start < n; start += 512)
+            {
+                if (jump && start == n / 2)
+                    f.setTarget(100.0f);
+                const int len = juce::jmin(512, n - start);
+                juce::dsp::AudioBlock<float> block(buf.getArrayOfWritePointers(), 1,
+                                                   (size_t) start, (size_t) len);
+                f.process(block);
+                for (int i = start; i < start + len; ++i)
+                {
+                    if (i >= n / 2)
+                        worst = std::max(worst, std::abs(buf.getSample(0, i) - prev));
+                    prev = buf.getSample(0, i);
+                }
+            }
+            return worst;
+        };
+        // A 200 Hz sine's own max step scales with its amplitude, and Bark passes it louder
+        // than Scoop, so the post-jump window legitimately starts at the Bark step size
+        // and decays to the Scoop one. A click would add a discontinuity on top of that,
+        // so the reference is the larger of the two steady-state steps over the same window.
+        const float steadyScoop = maxStepAfter(100.0f, false);
+        const float steadyBark  = maxStepAfter(-100.0f, false);
+        const float jumped      = maxStepAfter(-100.0f, true);
+        expect(jumped < std::max(steadyScoop, steadyBark) * 1.25f,
+               "Post-jump step " + juce::String(jumped, 4) + " vs steady Scoop "
+               + juce::String(steadyScoop, 4) + " / Bark " + juce::String(steadyBark, 4));
+    }
+
+    beginTest("Settling back to Flat leaves no residual to cut off");
+    {
+        // Worst case: the 20 ms ramp ends on the last sub-block of a block, so the
+        // filter runs only one sub-block at identity before process() starts skipping
+        // and clears the filter memory. Whatever error is still decaying at that point
+        // is dropped in one sample; it must be inaudible.
+        constexpr double sr = 48000.0;
+        constexpr int blockSize = 480;   // 20 ms ramp = exactly two blocks
+        ShapeFilter f;
+        f.prepare({ sr, (juce::uint32) blockSize, 1 }, 60.0f, 1.0f);
+        juce::AudioBuffer<float> buf(1, blockSize), in(1, blockSize);
+        float lastError = 0.0f;
+        int n = 0;
+        for (int b = 0; b < 40; ++b)
+        {
+            if (b == 20)
+                f.setTarget(0.0f);
+            for (int i = 0; i < blockSize; ++i, ++n)
+                buf.setSample(0, i, 0.5f * static_cast<float>(
+                    std::sin(juce::MathConstants<double>::twoPi * 600.0 * n / sr)));
+            in.makeCopyOf(buf);
+            const bool wasActive = f.isActive();
+            juce::dsp::AudioBlock<float> block(buf);
+            f.process(block);
+            if (wasActive)
+                lastError = buf.getSample(0, blockSize - 1) - in.getSample(0, blockSize - 1);
+        }
+        expect(! f.isActive(), "Shape did not settle to Flat");
+        expect(std::abs(lastError) < 1.0e-4f,
+               "Residual cut off when going Flat: " + juce::String(lastError, 7));
+    }
+}
+
+//==============================================================================
+// ShapeProcessorTests — Shape inside the plugin
+//==============================================================================
+
+void ShapeProcessorTests::runTest()
+{
+    constexpr double sr = 44100.0;
+    const int numSamples = 1 << 16;
+
+    auto noise = [&]
+    {
+        juce::Random rng(7);
+        juce::AudioBuffer<float> buf(2, numSamples);
+        for (int ch = 0; ch < 2; ++ch)
+            for (int n = 0; n < numSamples; ++n)
+                buf.setSample(ch, n, 0.25f * (rng.nextFloat() * 2.0f - 1.0f));
+        return buf;
+    };
+
+    // True bypass (distortion and comp off): only the pre-drive half runs.
+    auto bypassBand = [&](float shape, double lo, double hi)
     {
         PluginProcessor proc;
-        auto& mode = *proc.parameters.getParameter("filterMode");
-        auto& cutoffParam = *proc.parameters.getParameter("highPassFreq");
-        auto cutoffHz = [&] { return cutoffParam.convertFrom0to1(cutoffParam.getValue()); };
-        auto modeValue = [&](int m) { return mode.convertTo0to1(static_cast<float>(m)); };
+        proc.setRateAndBufferSizeDetails(sr, 512);
+        proc.prepareToPlay(sr, 512);
+        configureCleanProcessor(proc, /*defeatBypass*/ false);
+        setParameter(proc.parameters, "shape", shape);
+        auto buf = noise();
+        runInBlocks(proc, buf);
+        return bandEnergyDb(buf, sr, lo, hi);
+    };
 
-        FilterModeSwitch::Listener listener(mode, cutoffParam);
-        juce::ComboBox box;
-        box.addItemList({ "High Pass", "Low Pass", "Band Pass" }, 1);
-        juce::AudioProcessorValueTreeState::ComboBoxAttachment attachment(proc.parameters, "filterMode", box);
+    beginTest("Parameter exists with default 0 and Bark/Flat/Scoop text");
+    {
+        PluginProcessor proc;
+        auto* p = proc.parameters.getParameter("shape");
+        expect(p != nullptr, "shape parameter missing");
+        if (p != nullptr)
+        {
+            expectWithinAbsoluteError(p->convertFrom0to1(p->getDefaultValue()), 0.0f, 1.0e-4f);
+            expectEquals(p->getText(p->convertTo0to1(-60.0f), 32), juce::String("Bark 60"));
+            expectEquals(p->getText(p->convertTo0to1(0.0f), 32), juce::String("Flat"));
+        }
+    }
 
-        // A pick in the plugin window: the attachment wraps it in a gesture.
-        box.setSelectedItemIndex(FilterModeSwitch::lowPass, juce::sendNotificationSync);
-        expectWithinAbsoluteError(cutoffHz(), 20000.0f, 0.5f);
+    beginTest("Pre-drive Shape works in true bypass: Bark lifts and Scoop cuts 600 Hz");
+    {
+        const float flat  = bypassBand(0.0f,    550.0, 650.0);
+        const float bark  = bypassBand(-100.0f, 550.0, 650.0);
+        const float scoop = bypassBand(100.0f,  550.0, 650.0);
+        expectWithinAbsoluteError(bark - flat,  DSPConstants::SHAPE_MID_BOOST_DB * DSPConstants::SHAPE_PRE_AMOUNT, 1.5f);
+        expectWithinAbsoluteError(scoop - flat, -DSPConstants::SHAPE_MID_CUT_DB * DSPConstants::SHAPE_PRE_AMOUNT, 1.5f);
+    }
 
-        // Automation or a preset: no gesture, so the cutoff it sets is kept.
-        cutoffParam.setValueNotifyingHost(cutoffParam.convertTo0to1(20000.0f));
-        mode.setValueNotifyingHost(modeValue(FilterModeSwitch::highPass));
-        expectWithinAbsoluteError(cutoffHz(), 20000.0f, 0.5f);
+    beginTest("Sub band below 80 Hz moves less than 1.5 dB through the plugin");
+    {
+        const float flat = bypassBand(0.0f, 30.0, 80.0);
+        for (float shape : { -100.0f, -50.0f, 50.0f, 100.0f })
+            expect(std::abs(bypassBand(shape, 30.0, 80.0) - flat) < 1.5f,
+                   "Sub band moved at Shape " + juce::String(shape));
+    }
 
-        // A cutoff the user set survives their own mode switch.
-        cutoffParam.setValueNotifyingHost(cutoffParam.convertTo0to1(150.0f));
-        box.setSelectedItemIndex(FilterModeSwitch::bandPass, juce::sendNotificationSync);
-        expectWithinAbsoluteError(cutoffHz(), 150.0f, 0.5f);
+    beginTest("Post-drive half shapes a clean 50 Hz sine (808 case)");
+    {
+        auto render = [&](float shape)
+        {
+            PluginProcessor proc;
+            proc.setRateAndBufferSizeDetails(sr, 512);
+            proc.prepareToPlay(sr, 512);
+            setParameter(proc.parameters, "distortionAmount", 70.0f);
+            setParameter(proc.parameters, "clipType", 1.0f);       // Tube: deterministic
+            setParameter(proc.parameters, "waveshaperMix", 0.0f);
+            setParameter(proc.parameters, "subGuardFreq", 0.0f);
+            setParameter(proc.parameters, "autoGainEnabled", 0.0f);
+            setParameter(proc.parameters, "shape", shape);
+            juce::AudioBuffer<float> buf(2, numSamples);
+            for (int n = 0; n < numSamples; ++n)
+            {
+                const float s = 0.7f * std::sin(juce::MathConstants<float>::twoPi * 50.0f * n / (float) sr);
+                buf.setSample(0, n, s);
+                buf.setSample(1, n, s);
+            }
+            runInBlocks(proc, buf);
+            return bandEnergyDb(buf, sr, 400.0, 800.0) - bandEnergyDb(buf, sr, 40.0, 60.0);
+        };
+        const float bark  = render(-100.0f);
+        const float scoop = render(100.0f);
+        expect(bark - scoop > 4.0f, "Bark vs Scoop changed the 400-800 Hz harmonics by only "
+               + juce::String(bark - scoop, 2) + " dB on a clean sine");
+    }
+
+    beginTest("No allocation with Shape engaged and the LFO on it");
+    {
+        PluginProcessor proc;
+        proc.setRateAndBufferSizeDetails(48000.0, 512);
+        proc.prepareToPlay(48000.0, 512);
+        setParameter(proc.parameters, "shape", -100.0f);
+        setParameter(proc.parameters, "distortionAmount", 60.0f);
+        setParameter(proc.parameters, "lfoEnabled", 1.0f);
+        setParameter(proc.parameters, "lfoDestination", 2.0f);
+        setParameter(proc.parameters, "lfoRate", 5.0f);
+        setParameter(proc.parameters, "lfoDepth", 100.0f);
+        juce::AudioBuffer<float> buffer(2, 512);
+        juce::MidiBuffer midi;
+        buffer.clear();
+        proc.processBlock(buffer, midi);
+        rt_guard::resetAllocationCounter();
+        proc.processBlock(buffer, midi);
+        expectEquals(rt_guard::getAllocationCount(), 0, "Shape allocated on the audio thread");
+    }
+
+    beginTest("Finite at every rate with a fast LFO sweep on Shape");
+    {
+        for (double rate : { 44100.0, 48000.0, 88200.0, 96000.0, 192000.0 })
+            for (float shape : { -100.0f, 100.0f })
+            {
+                PluginProcessor proc;
+                proc.setRateAndBufferSizeDetails(rate, 512);
+                proc.prepareToPlay(rate, 512);
+                setParameter(proc.parameters, "shape", shape);
+                setParameter(proc.parameters, "distortionAmount", 80.0f);
+                setParameter(proc.parameters, "lfoEnabled", 1.0f);
+                setParameter(proc.parameters, "lfoDestination", 2.0f);
+                setParameter(proc.parameters, "lfoRate", 10.0f);
+                setParameter(proc.parameters, "lfoDepth", 100.0f);
+                auto buf = noise();
+                runInBlocks(proc, buf);
+                expect(! containsInvalidSamples(buf), "Non-finite at " + juce::String(rate));
+            }
+    }
+
+    beginTest("Full Bark, hot input stays finite and under the ceiling");
+    {
+        PluginProcessor proc;
+        proc.setRateAndBufferSizeDetails(sr, 512);
+        proc.prepareToPlay(sr, 512);
+        setParameter(proc.parameters, "shape", -100.0f);
+        setParameter(proc.parameters, "inputGain", 100.0f);
+        setParameter(proc.parameters, "distortionAmount", 100.0f);
+        setParameter(proc.parameters, "outputGain", 100.0f);
+        auto buf = noise();
+        buf.applyGain(4.0f);
+        runInBlocks(proc, buf);
+        expect(! containsInvalidSamples(buf), "Non-finite at full Bark");
+        const float ceiling = juce::Decibels::decibelsToGain(DSPConstants::OUTPUT_LIMITER_THRESHOLD_DB) + 1.0e-3f;
+        expect(calculatePeak(buf) <= ceiling, "Peak " + juce::String(calculatePeak(buf))
+               + " above the output limiter ceiling " + juce::String(ceiling));
+    }
+
+    beginTest("Mono-in stereo-out with Shape is finite");
+    {
+        PluginProcessor proc;
+        juce::AudioProcessor::BusesLayout layout;
+        layout.inputBuses.add(juce::AudioChannelSet::mono());
+        layout.outputBuses.add(juce::AudioChannelSet::stereo());
+        expect(proc.setBusesLayout(layout), "mono->stereo layout refused");
+        proc.setRateAndBufferSizeDetails(sr, 512);
+        proc.prepareToPlay(sr, 512);
+        setParameter(proc.parameters, "shape", 100.0f);
+        setParameter(proc.parameters, "distortionAmount", 60.0f);
+        auto buf = noise();
+        runInBlocks(proc, buf);
+        expect(! containsInvalidSamples(buf), "Non-finite under mono->stereo");
+    }
+
+    beginTest("Oversampling rebuild keeps Shape finite");
+    {
+        PluginProcessor proc;
+        proc.setRateAndBufferSizeDetails(sr, 512);
+        proc.prepareToPlay(sr, 512);
+        setParameter(proc.parameters, "shape", -80.0f);
+        setParameter(proc.parameters, "distortionAmount", 60.0f);
+        auto buf = noise();
+        runInBlocks(proc, buf);
+        proc.prepareToPlay(96000.0, 256);   // new rate: both instances re-prepare
+        auto buf2 = noise();
+        runInBlocks(proc, buf2, 256);
+        expect(! containsInvalidSamples(buf2), "Non-finite after re-prepare");
+    }
+
+    beginTest("Shape keeps its response after re-preparing at 96 kHz");
+    {
+        // Prepared at 44.1 kHz first, then re-prepared: a shapePre prepared at the
+        // wrong rate would put the 600 Hz lift somewhere else.
+        auto band = [&](float shape)
+        {
+            PluginProcessor proc;
+            proc.setRateAndBufferSizeDetails(sr, 512);
+            proc.prepareToPlay(sr, 512);
+            proc.setRateAndBufferSizeDetails(96000.0, 512);
+            proc.prepareToPlay(96000.0, 512);
+            configureCleanProcessor(proc, /*defeatBypass*/ false);
+            setParameter(proc.parameters, "shape", shape);
+            auto buf = noise();
+            runInBlocks(proc, buf);
+            return bandEnergyDb(buf, 96000.0, 550.0, 650.0, 16);
+        };
+        const float flat = band(0.0f);
+        expectWithinAbsoluteError(band(-100.0f) - flat, DSPConstants::SHAPE_MID_BOOST_DB * DSPConstants::SHAPE_PRE_AMOUNT, 1.5f);
+        expectWithinAbsoluteError(band(100.0f) - flat, -DSPConstants::SHAPE_MID_CUT_DB * DSPConstants::SHAPE_PRE_AMOUNT, 1.5f);
+    }
+
+    beginTest("Runtime oversampling rebuild keeps the post-drive half working");
+    {
+        // The post-drive bank lives at the oversampled rate, so a runtime rebuild
+        // (no prepareToPlay) must re-prepare it. 4x -> 2x, then check Bark vs Scoop
+        // still reshapes the harmonics of a clean 50 Hz sine.
+        auto render = [&](float shape)
+        {
+            PluginProcessor proc;
+            proc.setRateAndBufferSizeDetails(sr, 512);
+            proc.prepareToPlay(sr, 512);
+            setParameter(proc.parameters, "distortionAmount", 70.0f);
+            setParameter(proc.parameters, "clipType", 1.0f);
+            setParameter(proc.parameters, "waveshaperMix", 0.0f);
+            setParameter(proc.parameters, "subGuardFreq", 0.0f);
+            setParameter(proc.parameters, "autoGainEnabled", 0.0f);
+            setParameter(proc.parameters, "shape", shape);
+            proc.requestOversamplingRebuild(1);
+            proc.handleAsyncUpdate();
+            juce::AudioBuffer<float> buf(2, numSamples);
+            for (int n = 0; n < numSamples; ++n)
+            {
+                const float v = 0.7f * std::sin(juce::MathConstants<float>::twoPi * 50.0f * n / (float) sr);
+                buf.setSample(0, n, v);
+                buf.setSample(1, n, v);
+            }
+            runInBlocks(proc, buf);
+            expect(! containsInvalidSamples(buf), "Non-finite after runtime rebuild");
+            return bandEnergyDb(buf, sr, 400.0, 800.0) - bandEnergyDb(buf, sr, 40.0, 60.0);
+        };
+        const float diff = render(-100.0f) - render(100.0f);
+        expect(diff > 4.0f, "Bark vs Scoop changed the harmonics by only "
+               + juce::String(diff, 2) + " dB after a runtime oversampling rebuild");
+    }
+
+    beginTest("True bypass at Shape 0 is bit-clean");
+    {
+        PluginProcessor proc;
+        proc.setRateAndBufferSizeDetails(sr, 512);
+        proc.prepareToPlay(sr, 512);
+        configureCleanProcessor(proc, /*defeatBypass*/ false);
+        setParameter(proc.parameters, "shape", 0.0f);
+        setParameter(proc.parameters, "filterMode", 0.0f);
+        setParameter(proc.parameters, "highPassFreq", 20.0f);
+        const int latency = proc.getLatencySamples();
+        const auto in = noise();
+        auto out = in;
+        runInBlocks(proc, out);
+        float worst = 0.0f;
+        for (int ch = 0; ch < 2; ++ch)
+            for (int i = 4096; i + latency < numSamples; ++i)
+                worst = std::max(worst, std::abs(out.getSample(ch, i + latency) - in.getSample(ch, i)));
+        expectEquals(worst, 0.0f, "Shape 0 in true bypass altered the signal");
+    }
+
+    beginTest("LFO destination 2 moves Shape");
+    {
+        // True bypass, Shape 0, Square LFO at 2 Hz (half-period 11025 samples), depth 100:
+        // Shape alternates between about +50 (Scoop) and -50 (Bark). Short-window band
+        // energy at 600 Hz must therefore swing by more than 3 dB; with the LFO doing
+        // nothing the spread stays near zero.
+        auto windowSpread = [&](bool lfoOn)
+        {
+            PluginProcessor proc;
+            proc.setRateAndBufferSizeDetails(sr, 512);
+            proc.prepareToPlay(sr, 512);
+            configureCleanProcessor(proc, /*defeatBypass*/ false);
+            setParameter(proc.parameters, "shape", 0.0f);
+            setParameter(proc.parameters, "lfoEnabled", lfoOn ? 1.0f : 0.0f);
+            setParameter(proc.parameters, "lfoDestination", 2.0f);
+            setParameter(proc.parameters, "lfoWaveform", 2.0f);   // Square
+            setParameter(proc.parameters, "lfoRate", 2.0f);
+            setParameter(proc.parameters, "lfoDepth", 100.0f);
+            // A steady 600 Hz sine, not noise: its band energy follows the filter gain
+            // exactly, so the static spread is ~0 and any swing is the LFO's.
+            juce::AudioBuffer<float> buf(2, numSamples);
+            for (int n = 0; n < numSamples; ++n)
+            {
+                const float v = 0.25f * std::sin(juce::MathConstants<float>::twoPi * 600.0f * n / (float) sr);
+                buf.setSample(0, n, v);
+                buf.setSample(1, n, v);
+            }
+            runInBlocks(proc, buf);
+            constexpr int win = 4096;
+            float lo = 1.0e9f, hi = -1.0e9f;
+            for (int start = 4096; start + win <= numSamples; start += win)
+            {
+                juce::AudioBuffer<float> w(2, win);
+                for (int ch = 0; ch < 2; ++ch)
+                    w.copyFrom(ch, 0, buf, ch, start, win);
+                const float e = bandEnergyDb(w, sr, 550.0, 650.0, 12);
+                lo = std::min(lo, e);
+                hi = std::max(hi, e);
+            }
+            return hi - lo;
+        };
+        const float moving = windowSpread(true);
+        const float still = windowSpread(false);
+        expect(moving > 3.0f, "LFO on Shape swung the 600 Hz band by only "
+               + juce::String(moving, 2) + " dB");
+        expect(moving > still + 2.0f, "LFO spread " + juce::String(moving, 2)
+               + " dB not clearly above the static spread " + juce::String(still, 2));
+    }
+
+    beginTest("Legacy predicate matches the transparent thresholds");
+    {
+        expect(! LegacyInputFilter::isActive(0, 20.0f));
+        expect(! LegacyInputFilter::isActive(0, DSPConstants::HIPASS_TRANSPARENT_MAX_FREQ));
+        expect(LegacyInputFilter::isActive(0, 80.0f));
+        expect(LegacyInputFilter::isActive(1, 5000.0f));
+        expect(! LegacyInputFilter::isActive(1, 20000.0f));
+        expect(LegacyInputFilter::isActive(2, 1000.0f));
+    }
+
+    beginTest("Legacy cutoff is not LFO-modulated any more");
+    {
+        // Destination 2 used to sweep highPassFreq up to 1.5 octaves (20 Hz -> ~57 Hz),
+        // which cut the 25-45 Hz band by several dB. Now it sweeps Shape (±50), which
+        // barely touches that band, and the legacy filter stays at 20 Hz.
+        const float still = bypassBand(0.0f, 25.0, 45.0);
+        PluginProcessor proc;
+        proc.setRateAndBufferSizeDetails(sr, 512);
+        proc.prepareToPlay(sr, 512);
+        configureCleanProcessor(proc, false);
+        setParameter(proc.parameters, "lfoEnabled", 1.0f);
+        setParameter(proc.parameters, "lfoDestination", 2.0f);
+        setParameter(proc.parameters, "lfoWaveform", 2.0f);    // Square: full swing half the time
+        setParameter(proc.parameters, "lfoRate", 0.5f);
+        setParameter(proc.parameters, "lfoDepth", 100.0f);
+        auto buf = noise();
+        runInBlocks(proc, buf);
+        expectWithinAbsoluteError(bandEnergyDb(buf, sr, 25.0, 45.0), still, 0.5f);
+    }
+
+    beginTest("A pre-Shape state loads with Shape 0 and the legacy filter intact");
+    {
+        PluginProcessor src;
+        setParameter(src.parameters, "filterMode", 1.0f);
+        setParameter(src.parameters, "highPassFreq", 500.0f);
+        juce::MemoryBlock saved;
+        src.getStateInformation(saved);
+
+        // Turn it into a v1 state: no shape PARAM, stateVersion 1.
+        std::unique_ptr<juce::XmlElement> xml(juce::AudioProcessor::getXmlFromBinary(
+            saved.getData(), (int) saved.getSize()));
+        expect(xml != nullptr);
+        if (xml == nullptr)
+            return;
+        for (auto* child = xml->getFirstChildElement(); child != nullptr;)
+        {
+            auto* next = child->getNextElement();
+            if (child->getStringAttribute("id") == "shape")
+                xml->removeChildElement(child, true);
+            child = next;
+        }
+        xml->setAttribute(PluginProcessor::stateVersionAttribute, 1);
+        juce::MemoryBlock v1;
+        juce::AudioProcessor::copyXmlToBinary(*xml, v1);
+
+        PluginProcessor dst;
+        setParameter(dst.parameters, "shape", 70.0f);   // must not survive the load
+        dst.setStateInformation(v1.getData(), (int) v1.getSize());
+
+        auto value = [&](const char* id)
+        {
+            auto* p = dst.parameters.getParameter(id);
+            return p->convertFrom0to1(p->getValue());
+        };
+        expectWithinAbsoluteError(value("shape"), 0.0f, 1.0e-3f);
+        expectWithinAbsoluteError(value("filterMode"), 1.0f, 1.0e-3f);
+        expectWithinAbsoluteError(value("highPassFreq"), 500.0f, 0.5f);
+    }
+
+    beginTest("Shape's mid lift matches across the true-bypass threshold");
+    {
+        // Distortion 0.4% is true bypass (pre-drive Shape only); 0.6% is the active
+        // path. With distMix 0 the drive itself is out of the signal, so the only
+        // difference Shape may make between the two is the post-drive half, which
+        // must fade in with the drive rather than switch on at the threshold.
+        auto barkLift = [&](float drive)
+        {
+            auto band = [&](float shape)
+            {
+                PluginProcessor proc;
+                proc.setRateAndBufferSizeDetails(sr, 512);
+                proc.prepareToPlay(sr, 512);
+                configureCleanProcessor(proc, /*defeatBypass*/ false);
+                setParameter(proc.parameters, "subGuardFreq", 0.0f);
+                setParameter(proc.parameters, "distortionAmount", drive);
+                setParameter(proc.parameters, "shape", shape);
+                auto buf = noise();
+                buf.applyGain(0.2f);   // stay clear of the soft clipper and limiter
+                runInBlocks(proc, buf);
+                return bandEnergyDb(buf, sr, 550.0, 650.0);
+            };
+            return band(-100.0f) - band(0.0f);
+        };
+        const float bypassed = barkLift(0.4f);
+        const float active   = barkLift(0.6f);
+        expect(std::abs(active - bypassed) < 1.5f,
+               "Bark lift jumps from " + juce::String(bypassed, 2) + " dB (bypass) to "
+               + juce::String(active, 2) + " dB (active) at the threshold");
+    }
+
+    beginTest("With Sub Guard on, the post-drive Shape leaves the clean low band alone");
+    {
+        // A quiet 40 Hz sine sits entirely in Sub Guard's clean low band. With the
+        // drive mixed out (distMix 0) and nothing after it pushed into nonlinearity,
+        // the chain is linear, so Bark may move 40 Hz only by what the pre-drive
+        // half does to it before the split. If the post-drive half runs on
+        // low + high before the low band is subtracted, it reaches the sub too.
+        auto subGainDb = [&](float shape)
+        {
+            PluginProcessor proc;
+            proc.setRateAndBufferSizeDetails(sr, 512);
+            proc.prepareToPlay(sr, 512);
+            configureCleanProcessor(proc, /*defeatBypass*/ true);
+            setParameter(proc.parameters, "subGuardFreq", 150.0f);
+            setParameter(proc.parameters, "distortionAmount", 70.0f);   // post-drive half at full amount
+            setParameter(proc.parameters, "shape", shape);
+            juce::AudioBuffer<float> buf(2, numSamples);
+            for (int n = 0; n < numSamples; ++n)
+            {
+                const float s = 0.05f * std::sin(juce::MathConstants<float>::twoPi * 40.0f * n / (float) sr);
+                buf.setSample(0, n, s);
+                buf.setSample(1, n, s);
+            }
+            runInBlocks(proc, buf);
+            return bandEnergyDb(buf, sr, 30.0, 50.0);
+        };
+        const float measured = subGainDb(-100.0f) - subGainDb(0.0f);
+        const float preOnly  = shapeGainDb(sr, -100.0f, DSPConstants::SHAPE_PRE_AMOUNT, 40.0);
+        expect(std::abs(measured - preOnly) < 0.03f,
+               "Bark moved 40 Hz by " + juce::String(measured, 3) + " dB through Sub Guard; the "
+               "pre-drive half alone accounts for " + juce::String(preOnly, 3) + " dB");
     }
 }
 

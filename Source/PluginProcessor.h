@@ -12,6 +12,7 @@
 
 #include <JuceHeader.h>
 #include <juce_dsp/juce_dsp.h>
+#include "ShapeFilter.h"
 #include "LinearRamp.h"
 #include <atomic>
 #include <array>
@@ -56,8 +57,6 @@ namespace DSPConstants
 
     // Default parameter values
     constexpr float DEFAULT_HIPASS_FREQ = 20.0f;              // Default hi-pass filter frequency (subsonic only)
-    constexpr float DEFAULT_LOWPASS_FREQ = 20000.0f;          // Low-pass default: fully open
-    constexpr float DEFAULT_BANDPASS_FREQ = 1000.0f;          // Band-pass default: mid-range centre
     constexpr float HIPASS_TRANSPARENT_MAX_FREQ = 25.0f;      // High-pass at/below this counts as flat
     constexpr float LOWPASS_TRANSPARENT_MIN_FREQ = 19000.0f;  // Low-pass at/above this counts as flat
 
@@ -217,6 +216,7 @@ class PluginProcessor : public juce::AudioProcessor,
     friend class CoefficientPropagationTest;
     friend class ProcessBlockDecompTest;
     friend class NamProfileTests;
+    friend class ShapeProcessorTests;
 #endif
 
 public:
@@ -279,7 +279,7 @@ public:
     // step in migrateState(). State saved before this stamp existed carries no
     // attribute and is treated as version 0 (the bare/legacy format).
     static constexpr const char* stateVersionAttribute = "stateVersion";
-    static constexpr int currentStateVersion = 1;
+    static constexpr int currentStateVersion = 2;
 
     // Reads the schema version from a freshly-restored state element and applies
     // any migrations needed to bring the live parameter tree up to
@@ -380,6 +380,7 @@ private:
     void updateCleanBoostCoefficients(float depth, double sampleRate);
     void applyCleanBoostEmphasis();
     void applyCleanBoostDeEmphasis();
+    void applyShapePostDrive();
 
     std::unique_ptr<juce::dsp::Oversampling<float>> oversampling;
     size_t oversamplingFactor = 4;
@@ -388,6 +389,10 @@ private:
     // Input multimode filter (high-pass / low-pass / band-pass). State-variable TPT
     // topology: one structure switches type cleanly and stays stable under LFO sweeps.
     juce::dsp::StateVariableTPTFilter<float> inputFilter;
+    // Shape (Bark <-> Scoop): one instance before the drive at base rate, one after
+    // it in the oversampled domain (see applyShapePostDrive). Legacy filter runs first.
+    ShapeFilter shapePre;
+    ShapeFilter shapePost;
 
     // Manual DC blocker state (simple one-pole, extremely stable)
     // y[n] = x[n] - x[n-1] + R * y[n-1]; R is derived from the sample rate so the
@@ -563,6 +568,7 @@ private:
     std::atomic<float>* outputGainParam = nullptr;
     std::atomic<float>* distortionAmountParam = nullptr;
     std::atomic<float>* highPassFreqParam = nullptr;
+    std::atomic<float>* shapeParam = nullptr;
     std::atomic<float>* filterModeParam = nullptr;
     std::atomic<float>* clipTypeParam = nullptr;
     std::atomic<float>* subGuardFreqParam = nullptr;  // Sub Guard crossover frequency (50-200Hz)
@@ -570,7 +576,7 @@ private:
     std::atomic<float>* lfoDepthParam = nullptr;
     std::atomic<float>* lfoWaveformParam = nullptr;  // LFO waveform type
     std::atomic<float>* lfoEnabledParam = nullptr;   // LFO on/off toggle
-    std::atomic<float>* lfoDestinationParam = nullptr;  // LFO destination (0-4: Dist, Tone, Hi-Pass, Mix, Gain)
+    std::atomic<float>* lfoDestinationParam = nullptr;  // LFO destination (0-4: Dist, Tone, Shape, Mix, Gain)
     std::atomic<float>* lfoBpmSyncParam = nullptr;       // BPM sync toggle
     std::atomic<float>* lfoBpmDivisionParam = nullptr;   // Note division when BPM sync is ON
     std::atomic<float>* lfoInvertParam = nullptr;        // Invert LFO polarity
@@ -679,7 +685,7 @@ private:
     size_t pb_numChannels = 0;
     double pb_oversampledSR = 0.0;
 
-    float pb_modulatedHighPassFreq    = 0.0f;
+    float pb_legacyFilterFreq         = 0.0f;  // hidden v2.3 input filter cutoff
     int   pb_filterMode               = 0;   // 0=High Pass, 1=Low Pass, 2=Band Pass
     float pb_modulatedDistortionParam = 0.0f;
     float pb_modulatedToneFreq        = 0.0f;
