@@ -476,6 +476,13 @@ public:
     void runTest() override;
 };
 
+class ShapeProcessorTests : public juce::UnitTest
+{
+public:
+    ShapeProcessorTests() : UnitTest("Shape Processor", TestCategories::DSP) {}
+    void runTest() override;
+};
+
 //==============================================================================
 // Test Runner Function
 //==============================================================================
@@ -1134,6 +1141,7 @@ inline void registerAllTests()
     static SubGuardFlatnessTest subGuardFlatnessTest;
     static InputFilterModeTest inputFilterModeTest;
     static ShapeFilterTests shapeFilterTests;
+    static ShapeProcessorTests shapeProcessorTests;
     static DiagReportJsonTest diagReportJsonTest;
     static DiagReportStoreTest diagReportStoreTest;
     static DiagSinkComposerTest diagSinkComposerTest;

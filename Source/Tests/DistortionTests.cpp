@@ -4,6 +4,7 @@
 #include "../CyclingComboBox.h"
 #include "../FactoryPresets.h"
 #include "../FilterModeSwitch.h"
+#include "../LegacyInputFilter.h"
 #include "../RTAllocationGuard.h"
 #include "../ShapeFilter.h"
 #include <atomic>
@@ -1357,8 +1358,8 @@ void LFODestinationTests::runTest()
     beginTest("Destination 1: Tone filter modulation");
     testDestination(1, "tone", 8000.0f);
 
-    beginTest("Destination 2: Hi-pass modulation");
-    testDestination(2, "highPassFreq", 100.0f);
+    beginTest("Destination 2: Shape modulation");
+    testDestination(2, "shape", 0.0f);
 
     beginTest("Destination 3: Dist mix modulation");
     testDestination(3, "distMix", 50.0f);
@@ -2690,7 +2691,7 @@ void ParameterTests::testParameterRanges(PluginProcessor& processor)
 {
     // Test that all expected parameters exist
     const char* expectedParams[] = {
-        "inputGain", "outputGain", "distortionAmount", "highPassFreq",
+        "inputGain", "outputGain", "distortionAmount", "highPassFreq", "shape",
         "subGuardFreq", "clipType", "distMix",
         "lfoRate", "lfoDepth", "lfoWaveform",
         "compEnabled", "compPeakReduction", "compMakeupGain",
@@ -5233,6 +5234,254 @@ void ShapeFilterTests::runTest()
         const float jumped = maxStep(true);
         expect(jumped < steady * 1.5f, "Jump step " + juce::String(jumped, 4)
                + " vs steady " + juce::String(steady, 4));
+    }
+}
+
+//==============================================================================
+// ShapeProcessorTests — Shape inside the plugin
+//==============================================================================
+
+void ShapeProcessorTests::runTest()
+{
+    constexpr double sr = 44100.0;
+    const int numSamples = 1 << 16;
+
+    auto noise = [&]
+    {
+        juce::Random rng(7);
+        juce::AudioBuffer<float> buf(2, numSamples);
+        for (int ch = 0; ch < 2; ++ch)
+            for (int n = 0; n < numSamples; ++n)
+                buf.setSample(ch, n, 0.25f * (rng.nextFloat() * 2.0f - 1.0f));
+        return buf;
+    };
+
+    // True bypass (distortion and comp off): only the pre-drive half runs.
+    auto bypassBand = [&](float shape, double lo, double hi)
+    {
+        PluginProcessor proc;
+        proc.setRateAndBufferSizeDetails(sr, 512);
+        proc.prepareToPlay(sr, 512);
+        configureCleanProcessor(proc, /*defeatBypass*/ false);
+        setParameter(proc.parameters, "shape", shape);
+        auto buf = noise();
+        runInBlocks(proc, buf);
+        return bandEnergyDb(buf, sr, lo, hi);
+    };
+
+    beginTest("Parameter exists with default 0 and Bark/Flat/Scoop text");
+    {
+        PluginProcessor proc;
+        auto* p = proc.parameters.getParameter("shape");
+        expect(p != nullptr, "shape parameter missing");
+        if (p != nullptr)
+        {
+            expectWithinAbsoluteError(p->convertFrom0to1(p->getDefaultValue()), 0.0f, 1.0e-4f);
+            expectEquals(p->getText(p->convertTo0to1(-60.0f), 32), juce::String("Bark 60"));
+            expectEquals(p->getText(p->convertTo0to1(0.0f), 32), juce::String("Flat"));
+        }
+    }
+
+    beginTest("Pre-drive Shape works in true bypass: Bark lifts and Scoop cuts 600 Hz");
+    {
+        const float flat  = bypassBand(0.0f,    550.0, 650.0);
+        const float bark  = bypassBand(-100.0f, 550.0, 650.0);
+        const float scoop = bypassBand(100.0f,  550.0, 650.0);
+        expectWithinAbsoluteError(bark - flat,  9.0f, 1.5f);
+        expectWithinAbsoluteError(scoop - flat, -12.0f, 1.5f);
+    }
+
+    beginTest("Sub band below 80 Hz moves less than 1.5 dB through the plugin");
+    {
+        const float flat = bypassBand(0.0f, 30.0, 80.0);
+        for (float shape : { -100.0f, -50.0f, 50.0f, 100.0f })
+            expect(std::abs(bypassBand(shape, 30.0, 80.0) - flat) < 1.5f,
+                   "Sub band moved at Shape " + juce::String(shape));
+    }
+
+    beginTest("Post-drive half shapes a clean 50 Hz sine (808 case)");
+    {
+        auto render = [&](float shape)
+        {
+            PluginProcessor proc;
+            proc.setRateAndBufferSizeDetails(sr, 512);
+            proc.prepareToPlay(sr, 512);
+            setParameter(proc.parameters, "distortionAmount", 70.0f);
+            setParameter(proc.parameters, "clipType", 1.0f);       // Tube: deterministic
+            setParameter(proc.parameters, "waveshaperMix", 0.0f);
+            setParameter(proc.parameters, "subGuardFreq", 0.0f);
+            setParameter(proc.parameters, "autoGainEnabled", 0.0f);
+            setParameter(proc.parameters, "shape", shape);
+            juce::AudioBuffer<float> buf(2, numSamples);
+            for (int n = 0; n < numSamples; ++n)
+            {
+                const float s = 0.7f * std::sin(juce::MathConstants<float>::twoPi * 50.0f * n / (float) sr);
+                buf.setSample(0, n, s);
+                buf.setSample(1, n, s);
+            }
+            runInBlocks(proc, buf);
+            return bandEnergyDb(buf, sr, 400.0, 800.0) - bandEnergyDb(buf, sr, 40.0, 60.0);
+        };
+        const float bark  = render(-100.0f);
+        const float scoop = render(100.0f);
+        expect(bark - scoop > 4.0f, "Bark vs Scoop changed the 400-800 Hz harmonics by only "
+               + juce::String(bark - scoop, 2) + " dB on a clean sine");
+    }
+
+    beginTest("No allocation with Shape engaged and the LFO on it");
+    {
+        PluginProcessor proc;
+        proc.setRateAndBufferSizeDetails(48000.0, 512);
+        proc.prepareToPlay(48000.0, 512);
+        setParameter(proc.parameters, "shape", -100.0f);
+        setParameter(proc.parameters, "distortionAmount", 60.0f);
+        setParameter(proc.parameters, "lfoEnabled", 1.0f);
+        setParameter(proc.parameters, "lfoDestination", 2.0f);
+        setParameter(proc.parameters, "lfoRate", 5.0f);
+        setParameter(proc.parameters, "lfoDepth", 100.0f);
+        juce::AudioBuffer<float> buffer(2, 512);
+        juce::MidiBuffer midi;
+        buffer.clear();
+        proc.processBlock(buffer, midi);
+        rt_guard::resetAllocationCounter();
+        proc.processBlock(buffer, midi);
+        expectEquals(rt_guard::getAllocationCount(), 0, "Shape allocated on the audio thread");
+    }
+
+    beginTest("Finite at every rate with a fast LFO sweep on Shape");
+    {
+        for (double rate : { 44100.0, 48000.0, 88200.0, 96000.0, 192000.0 })
+            for (float shape : { -100.0f, 100.0f })
+            {
+                PluginProcessor proc;
+                proc.setRateAndBufferSizeDetails(rate, 512);
+                proc.prepareToPlay(rate, 512);
+                setParameter(proc.parameters, "shape", shape);
+                setParameter(proc.parameters, "distortionAmount", 80.0f);
+                setParameter(proc.parameters, "lfoEnabled", 1.0f);
+                setParameter(proc.parameters, "lfoDestination", 2.0f);
+                setParameter(proc.parameters, "lfoRate", 10.0f);
+                setParameter(proc.parameters, "lfoDepth", 100.0f);
+                auto buf = noise();
+                runInBlocks(proc, buf);
+                expect(! containsInvalidSamples(buf), "Non-finite at " + juce::String(rate));
+            }
+    }
+
+    beginTest("Full Bark, hot input stays finite and under the ceiling");
+    {
+        PluginProcessor proc;
+        proc.setRateAndBufferSizeDetails(sr, 512);
+        proc.prepareToPlay(sr, 512);
+        setParameter(proc.parameters, "shape", -100.0f);
+        setParameter(proc.parameters, "inputGain", 100.0f);
+        setParameter(proc.parameters, "distortionAmount", 100.0f);
+        setParameter(proc.parameters, "outputGain", 100.0f);
+        auto buf = noise();
+        buf.applyGain(4.0f);
+        runInBlocks(proc, buf);
+        expect(! containsInvalidSamples(buf), "Non-finite at full Bark");
+        expect(calculatePeak(buf) <= 1.0f, "Peak " + juce::String(calculatePeak(buf)) + " above full scale");
+    }
+
+    beginTest("Mono-in stereo-out with Shape is finite");
+    {
+        PluginProcessor proc;
+        juce::AudioProcessor::BusesLayout layout;
+        layout.inputBuses.add(juce::AudioChannelSet::mono());
+        layout.outputBuses.add(juce::AudioChannelSet::stereo());
+        expect(proc.setBusesLayout(layout), "mono->stereo layout refused");
+        proc.setRateAndBufferSizeDetails(sr, 512);
+        proc.prepareToPlay(sr, 512);
+        setParameter(proc.parameters, "shape", 100.0f);
+        setParameter(proc.parameters, "distortionAmount", 60.0f);
+        auto buf = noise();
+        runInBlocks(proc, buf);
+        expect(! containsInvalidSamples(buf), "Non-finite under mono->stereo");
+    }
+
+    beginTest("Oversampling rebuild keeps Shape finite");
+    {
+        PluginProcessor proc;
+        proc.setRateAndBufferSizeDetails(sr, 512);
+        proc.prepareToPlay(sr, 512);
+        setParameter(proc.parameters, "shape", -80.0f);
+        setParameter(proc.parameters, "distortionAmount", 60.0f);
+        auto buf = noise();
+        runInBlocks(proc, buf);
+        proc.prepareToPlay(96000.0, 256);   // new rate: both instances re-prepare
+        auto buf2 = noise();
+        runInBlocks(proc, buf2, 256);
+        expect(! containsInvalidSamples(buf2), "Non-finite after re-prepare");
+    }
+
+    beginTest("Legacy predicate matches the transparent thresholds");
+    {
+        expect(! LegacyInputFilter::isActive(0, 20.0f));
+        expect(! LegacyInputFilter::isActive(0, DSPConstants::HIPASS_TRANSPARENT_MAX_FREQ));
+        expect(LegacyInputFilter::isActive(0, 80.0f));
+        expect(LegacyInputFilter::isActive(1, 5000.0f));
+        expect(! LegacyInputFilter::isActive(1, 20000.0f));
+        expect(LegacyInputFilter::isActive(2, 1000.0f));
+    }
+
+    beginTest("Legacy cutoff is not LFO-modulated any more");
+    {
+        // Destination 2 used to sweep highPassFreq up to 1.5 octaves (20 Hz -> ~57 Hz),
+        // which cut the 25-45 Hz band by several dB. Now it sweeps Shape (±50), which
+        // barely touches that band, and the legacy filter stays at 20 Hz.
+        const float still = bypassBand(0.0f, 25.0, 45.0);
+        PluginProcessor proc;
+        proc.setRateAndBufferSizeDetails(sr, 512);
+        proc.prepareToPlay(sr, 512);
+        configureCleanProcessor(proc, false);
+        setParameter(proc.parameters, "lfoEnabled", 1.0f);
+        setParameter(proc.parameters, "lfoDestination", 2.0f);
+        setParameter(proc.parameters, "lfoWaveform", 2.0f);    // Square: full swing half the time
+        setParameter(proc.parameters, "lfoRate", 0.5f);
+        setParameter(proc.parameters, "lfoDepth", 100.0f);
+        auto buf = noise();
+        runInBlocks(proc, buf);
+        expectWithinAbsoluteError(bandEnergyDb(buf, sr, 25.0, 45.0), still, 0.5f);
+    }
+
+    beginTest("A pre-Shape state loads with Shape 0 and the legacy filter intact");
+    {
+        PluginProcessor src;
+        setParameter(src.parameters, "filterMode", 1.0f);
+        setParameter(src.parameters, "highPassFreq", 500.0f);
+        juce::MemoryBlock saved;
+        src.getStateInformation(saved);
+
+        // Turn it into a v1 state: no shape PARAM, stateVersion 1.
+        std::unique_ptr<juce::XmlElement> xml(juce::AudioProcessor::getXmlFromBinary(
+            saved.getData(), (int) saved.getSize()));
+        expect(xml != nullptr);
+        if (xml == nullptr)
+            return;
+        for (auto* child = xml->getFirstChildElement(); child != nullptr;)
+        {
+            auto* next = child->getNextElement();
+            if (child->getStringAttribute("id") == "shape")
+                xml->removeChildElement(child, true);
+            child = next;
+        }
+        xml->setAttribute(PluginProcessor::stateVersionAttribute, 1);
+        juce::MemoryBlock v1;
+        juce::AudioProcessor::copyXmlToBinary(*xml, v1);
+
+        PluginProcessor dst;
+        setParameter(dst.parameters, "shape", 70.0f);   // must not survive the load
+        dst.setStateInformation(v1.getData(), (int) v1.getSize());
+
+        auto value = [&](const char* id)
+        {
+            auto* p = dst.parameters.getParameter(id);
+            return p->convertFrom0to1(p->getValue());
+        };
+        expectWithinAbsoluteError(value("shape"), 0.0f, 1.0e-3f);
+        expectWithinAbsoluteError(value("filterMode"), 1.0f, 1.0e-3f);
+        expectWithinAbsoluteError(value("highPassFreq"), 500.0f, 0.5f);
     }
 }
 

@@ -12,6 +12,7 @@
 
 #include <JuceHeader.h>
 #include <juce_dsp/juce_dsp.h>
+#include "ShapeFilter.h"
 #include "LinearRamp.h"
 #include <atomic>
 #include <array>
@@ -279,7 +280,7 @@ public:
     // step in migrateState(). State saved before this stamp existed carries no
     // attribute and is treated as version 0 (the bare/legacy format).
     static constexpr const char* stateVersionAttribute = "stateVersion";
-    static constexpr int currentStateVersion = 1;
+    static constexpr int currentStateVersion = 2;
 
     // Reads the schema version from a freshly-restored state element and applies
     // any migrations needed to bring the live parameter tree up to
@@ -380,6 +381,7 @@ private:
     void updateCleanBoostCoefficients(float depth, double sampleRate);
     void applyCleanBoostEmphasis();
     void applyCleanBoostDeEmphasis();
+    void applyShapePostDrive();
 
     std::unique_ptr<juce::dsp::Oversampling<float>> oversampling;
     size_t oversamplingFactor = 4;
@@ -388,6 +390,10 @@ private:
     // Input multimode filter (high-pass / low-pass / band-pass). State-variable TPT
     // topology: one structure switches type cleanly and stays stable under LFO sweeps.
     juce::dsp::StateVariableTPTFilter<float> inputFilter;
+    // Shape (Bark <-> Scoop): one instance before the drive at base rate, one after
+    // it in the oversampled domain (see applyShapePostDrive). Legacy filter runs first.
+    ShapeFilter shapePre;
+    ShapeFilter shapePost;
 
     // Manual DC blocker state (simple one-pole, extremely stable)
     // y[n] = x[n] - x[n-1] + R * y[n-1]; R is derived from the sample rate so the
@@ -563,6 +569,7 @@ private:
     std::atomic<float>* outputGainParam = nullptr;
     std::atomic<float>* distortionAmountParam = nullptr;
     std::atomic<float>* highPassFreqParam = nullptr;
+    std::atomic<float>* shapeParam = nullptr;
     std::atomic<float>* filterModeParam = nullptr;
     std::atomic<float>* clipTypeParam = nullptr;
     std::atomic<float>* subGuardFreqParam = nullptr;  // Sub Guard crossover frequency (50-200Hz)
@@ -680,6 +687,7 @@ private:
     double pb_oversampledSR = 0.0;
 
     float pb_modulatedHighPassFreq    = 0.0f;
+    float pb_shapeTarget              = 0.0f;  // knob + LFO, clamped
     int   pb_filterMode               = 0;   // 0=High Pass, 1=Low Pass, 2=Band Pass
     float pb_modulatedDistortionParam = 0.0f;
     float pb_modulatedToneFreq        = 0.0f;
