@@ -1,25 +1,26 @@
 # State
 
 ## Now
-- `chore/repo-kit` (off `origin/main` `75e1348`, PR #55 merged) adds `scripts/verify.sh`, tracks
-  `AGENTS.md` (removed from `.gitignore`) with the kit sections, and sets `*.sh` to LF: awaiting review.
-- Verified 2026-10-03 on the kit branch, Windows MSVC Debug: `bash scripts/verify.sh` passes,
-  `DistortionTests` 3615 assertions; `--quick` is silent and takes under a second.
-- Unverified (from the previous handoff, local machine only): `fix/filter-mode-switch-cutoff`
-  (`ff0ad79`, worktree `~/Distortion-filterfix`) and PR #54.
+- `main` at `f8737f2`: PR #55 (NAM resampling) and PR #59 (repo kit: `scripts/verify.sh`, tracked
+  `AGENTS.md`, LF shell scripts) are merged; CI green on #59.
+- Verified 2026-10-03, Windows MSVC Debug: `bash scripts/verify.sh` passes, `DistortionTests` 3615
+  assertions; `--quick` is silent.
+- Open PRs: #54 (`chore/housekeeping-debug`, 4 commits) and #56 (`fix/filter-mode-switch-cutoff`, 1 commit,
+  worktree `~/Distortion-filterfix`). Both predate this handoff and are unverified.
 
 ## Next
 1. Owner: ASIO standalone at 44.1 and 96 kHz: load, swap and clear profiles while playing, with
    Mono Input on and off; Reaper latency display stays put; A/B
    `build-rel/nam-regression/sd1_{44100,48000,96000}.wav` (local files, unverified).
-2. Review and merge `chore/repo-kit`. Check `AGENTS.md` before it goes public: it is now tracked
-   (it was gitignored); `CLAUDE.md`, `GEMINI.md` and `docs/Architecture Contract.md` stay local.
-3. Follow-ups predating the branch: host bypass still freezes the island and delay lines, and the
+2. Decide on #54 and #56, and on the unmerged remote branches: `claude/ui-screenshot-readme-6vbm01` (1),
+   `docs/profile-morph`, `-design`, `-review` (2 each), `fix/transition-clicks` (3), `test/crossing-probe` (1).
+3. Follow-ups predating the NAM branch: host bypass still freezes the island and delay lines, and the
    input filter and oversampler IIR ring after any bypass gap; a block longer than prepared + 64
    skips the dry capture, so global Mix < 100% blends stale dry.
-4. Delete the stale remote branch `origin/feat/nam-profile-prototype` (recreated by a push after
-   PR #55 merged; all its commits are already in `main`).
-5. Owner (unverified, local): filter modes in `~/Distortion-filterfix`; re-test #44.
+4. Then dispatch "Build VST3 Plugin" for macOS and Linux; the Linux and macOS branches of
+   `verify.sh` are untested by hand too.
+5. Owner: decide on the 41 `origin/main` commits authored `Claude <noreply@anthropic.com>`
+   (not rechecked since the last handoff).
 
 ## Decisions
 - Reported latency is always R = max(user oversampler latency, island delay for a 48 kHz model).
