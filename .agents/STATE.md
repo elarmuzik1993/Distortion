@@ -15,6 +15,8 @@
    unchanged and show the LEGACY FILTER tag. Check each factory preset's Shape value by ear
    (`build-rel/shape-renders{,-v2}/`, local renders; Screamer is ~6 dB louder than the rest).
 2. Bump the version (CMake `VERSION 2.3.0`; CHANGELOG `Unreleased` already describes Shape) before tagging.
+   Re-test #44 first (pluginval Automation segfault at 96 kHz / 64-sample blocks, Release) and
+   close it if it no longer reproduces.
 3. Owner: ASIO standalone at 44.1 and 96 kHz: load, swap and clear NAM profiles while playing, with
    Mono Input on and off; Reaper latency display stays put; A/B
    `build-rel/nam-regression/sd1_{44100,48000,96000}.wav` (local files, unverified).
@@ -39,6 +41,7 @@
 - Profile loader thread created on first load; stale staged profiles re-prepare there (prepare prewarms),
   tracked by `stagedRefreshesInFlight`; lock order: callback lock, then `profileStatusLock`.
 - A block longer than the scratch runs the profile in pieces, never the zero-latency built-in clip.
+- The build stays warning-free on MSVC; a PR that adds a warning gets fixed before merge.
 - Offline renders never duck. NAM Core pinned `0b3d3c9`. ASIO opt-in. Sessions remember a profile by path.
 
 ## Known issues
