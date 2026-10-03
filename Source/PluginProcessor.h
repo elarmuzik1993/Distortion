@@ -216,6 +216,7 @@ class PluginProcessor : public juce::AudioProcessor,
     friend class CoefficientPropagationTest;
     friend class ProcessBlockDecompTest;
     friend class NamProfileTests;
+    friend class ShapeProcessorTests;
 #endif
 
 public:
@@ -575,7 +576,7 @@ private:
     std::atomic<float>* lfoDepthParam = nullptr;
     std::atomic<float>* lfoWaveformParam = nullptr;  // LFO waveform type
     std::atomic<float>* lfoEnabledParam = nullptr;   // LFO on/off toggle
-    std::atomic<float>* lfoDestinationParam = nullptr;  // LFO destination (0-4: Dist, Tone, Hi-Pass, Mix, Gain)
+    std::atomic<float>* lfoDestinationParam = nullptr;  // LFO destination (0-4: Dist, Tone, Shape, Mix, Gain)
     std::atomic<float>* lfoBpmSyncParam = nullptr;       // BPM sync toggle
     std::atomic<float>* lfoBpmDivisionParam = nullptr;   // Note division when BPM sync is ON
     std::atomic<float>* lfoInvertParam = nullptr;        // Invert LFO polarity
