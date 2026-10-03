@@ -132,7 +132,7 @@ Steps 13–15 live inside `applyAutoGainAndISP`; 16–17 are in `processBlock` p
 
 ## Build & Test
 - **Framework**: JUCE UnitTest runner.
-- **Coverage**: 2580+ assertions (100% PASS RATE).
+- **Coverage**: 3800+ assertions (100% PASS RATE).
 - **Categories**: DSP, Compression, LFO, ProcessBlock, ThreadSafety, SampleRate (44.1k-192k), GraphicEq (sweeps 22.05k-192k to cover the Nyquist band-drop), State I/O, FactoryPresets, Diagnostics, Settings Persistence.
 - **Golden Audio**: Reference file comparison tests included.
 - **Host validation**: CI gates on `pluginval --strictness-level 10` (Windows + Linux; xvfb on Linux).
