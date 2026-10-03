@@ -5103,12 +5103,12 @@ void ShapeFilterTests::runTest()
         expectWithinAbsoluteError(ShapeFilter::taper(0.0f), 0.0f, 1.0e-6f);
         expectWithinAbsoluteError(ShapeFilter::taper(100.0f), 1.0f, 1.0e-6f);
         expectWithinAbsoluteError(ShapeFilter::taper(-100.0f), -1.0f, 1.0e-6f);
-        expectWithinAbsoluteError(ShapeFilter::taper(50.0f), std::pow(0.5f, 1.5f), 1.0e-5f);
-        expectWithinAbsoluteError(ShapeFilter::midGainDb(-100.0f, 1.0f), 9.0f, 1.0e-4f);
-        expectWithinAbsoluteError(ShapeFilter::midGainDb(100.0f, 1.0f), -12.0f, 1.0e-4f);
-        expectWithinAbsoluteError(ShapeFilter::midGainDb(100.0f, 0.5f), -6.0f, 1.0e-4f);
-        expectWithinAbsoluteError(ShapeFilter::shelfGainDb(-100.0f, 1.0f), -4.0f, 1.0e-4f);
-        expectWithinAbsoluteError(ShapeFilter::shelfGainDb(100.0f, 1.0f), 4.0f, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::taper(50.0f), std::pow(0.5f, DSPConstants::SHAPE_TAPER), 1.0e-5f);
+        expectWithinAbsoluteError(ShapeFilter::midGainDb(-100.0f, 1.0f), DSPConstants::SHAPE_MID_BOOST_DB, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::midGainDb(100.0f, 1.0f), -DSPConstants::SHAPE_MID_CUT_DB, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::midGainDb(100.0f, 0.5f), -0.5f * DSPConstants::SHAPE_MID_CUT_DB, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::shelfGainDb(-100.0f, 1.0f), -DSPConstants::SHAPE_SHELF_DB, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::shelfGainDb(100.0f, 1.0f), DSPConstants::SHAPE_SHELF_DB, 1.0e-4f);
         expectWithinAbsoluteError(ShapeFilter::modulated(80.0f, 1.0f), 100.0f, 1.0e-4f);
         expectWithinAbsoluteError(ShapeFilter::modulated(0.0f, -1.0f), -50.0f, 1.0e-4f);
         expectWithinAbsoluteError(ShapeFilter::modulated(-100.0f, -1.0f), -100.0f, 1.0e-4f);
@@ -5146,11 +5146,11 @@ void ShapeFilterTests::runTest()
     beginTest("Bark and Scoop hit their targets at 600 Hz and in the treble");
     {
         constexpr double sr = 48000.0;
-        expectWithinAbsoluteError(shapeGainDb(sr, -100.0f, 1.0f, 600.0), 9.0f, 0.5f);
-        expectWithinAbsoluteError(shapeGainDb(sr,  100.0f, 1.0f, 600.0), -12.0f, 0.5f);
-        expect(shapeGainDb(sr, -100.0f, 1.0f, 6000.0) < -2.5f, "Bark did not soften the treble");
-        expect(shapeGainDb(sr,  100.0f, 1.0f, 6000.0) >  2.5f, "Scoop did not lift the treble");
-        expectWithinAbsoluteError(shapeGainDb(sr, 100.0f, 0.5f, 600.0), -6.0f, 0.5f);
+        expectWithinAbsoluteError(shapeGainDb(sr, -100.0f, 1.0f, 600.0), DSPConstants::SHAPE_MID_BOOST_DB, 0.5f);
+        expectWithinAbsoluteError(shapeGainDb(sr,  100.0f, 1.0f, 600.0), -DSPConstants::SHAPE_MID_CUT_DB, 0.5f);
+        expect(shapeGainDb(sr, -100.0f, 1.0f, 6000.0) < -(DSPConstants::SHAPE_SHELF_DB - 1.5f), "Bark did not soften the treble");
+        expect(shapeGainDb(sr,  100.0f, 1.0f, 6000.0) >  DSPConstants::SHAPE_SHELF_DB - 1.5f, "Scoop did not lift the treble");
+        expectWithinAbsoluteError(shapeGainDb(sr, 100.0f, 0.5f, 600.0), -0.5f * DSPConstants::SHAPE_MID_CUT_DB, 0.5f);
     }
 
     beginTest("Sub band stays within 1.5 dB at every knob position");
@@ -5166,8 +5166,8 @@ void ShapeFilterTests::runTest()
 
     beginTest("Response holds at 768 kHz (192 kHz x 4, the post-drive worst case)");
     {
-        expectWithinAbsoluteError(shapeGainDb(768000.0, -100.0f, 1.0f, 600.0), 9.0f, 0.75f);
-        expectWithinAbsoluteError(shapeGainDb(768000.0,  100.0f, 1.0f, 600.0), -12.0f, 0.75f);
+        expectWithinAbsoluteError(shapeGainDb(768000.0, -100.0f, 1.0f, 600.0), DSPConstants::SHAPE_MID_BOOST_DB, 0.75f);
+        expectWithinAbsoluteError(shapeGainDb(768000.0,  100.0f, 1.0f, 600.0), -DSPConstants::SHAPE_MID_CUT_DB, 0.75f);
     }
 
     beginTest("Finite at every supported rate, both extremes");
@@ -5276,8 +5276,8 @@ void ShapeProcessorTests::runTest()
         const float flat  = bypassBand(0.0f,    550.0, 650.0);
         const float bark  = bypassBand(-100.0f, 550.0, 650.0);
         const float scoop = bypassBand(100.0f,  550.0, 650.0);
-        expectWithinAbsoluteError(bark - flat,  9.0f, 1.5f);
-        expectWithinAbsoluteError(scoop - flat, -12.0f, 1.5f);
+        expectWithinAbsoluteError(bark - flat,  DSPConstants::SHAPE_MID_BOOST_DB * DSPConstants::SHAPE_PRE_AMOUNT, 1.5f);
+        expectWithinAbsoluteError(scoop - flat, -DSPConstants::SHAPE_MID_CUT_DB * DSPConstants::SHAPE_PRE_AMOUNT, 1.5f);
     }
 
     beginTest("Sub band below 80 Hz moves less than 1.5 dB through the plugin");
@@ -5424,8 +5424,8 @@ void ShapeProcessorTests::runTest()
             return bandEnergyDb(buf, 96000.0, 550.0, 650.0, 16);
         };
         const float flat = band(0.0f);
-        expectWithinAbsoluteError(band(-100.0f) - flat, 9.0f, 1.5f);
-        expectWithinAbsoluteError(band(100.0f) - flat, -12.0f, 1.5f);
+        expectWithinAbsoluteError(band(-100.0f) - flat, DSPConstants::SHAPE_MID_BOOST_DB * DSPConstants::SHAPE_PRE_AMOUNT, 1.5f);
+        expectWithinAbsoluteError(band(100.0f) - flat, -DSPConstants::SHAPE_MID_CUT_DB * DSPConstants::SHAPE_PRE_AMOUNT, 1.5f);
     }
 
     beginTest("Runtime oversampling rebuild keeps the post-drive half working");
