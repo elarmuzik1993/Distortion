@@ -1,25 +1,27 @@
 # State
 
 ## Now
-- `main` at `f8737f2`: PR #55 (NAM resampling) and PR #59 (repo kit: `scripts/verify.sh`, tracked
-  `AGENTS.md`, LF shell scripts) are merged; CI green on #59.
-- Verified 2026-10-03, Windows MSVC Debug: `bash scripts/verify.sh` passes, `DistortionTests` 3615
-  assertions; `--quick` is silent.
-- Open PRs: #54 (`chore/housekeeping-debug`, 4 commits) and #56 (`fix/filter-mode-switch-cutoff`, 1 commit,
-  worktree `~/Distortion-filterfix`). Both predate this handoff and are unverified.
+- `main` at `87f02e1`: PRs #55 (NAM resampling), #59 (repo kit), #60 (state) and #54 (housekeeping:
+  `GitVersion.h` generated in the build tree, warning-free build) are merged; CI green on each.
+- Verified 2026-10-03 at `87f02e1`, Windows MSVC Debug: `bash scripts/verify.sh` passes,
+  `DistortionTests` 3615 assertions.
+- Open PR: #56 (`fix/filter-mode-switch-cutoff`, 1 commit `ff0ad79`, worktree `~/Distortion-filterfix`).
+  CI was green when last checked; it predates the #54 merge, so re-check it against `main`.
 
 ## Next
-1. Owner: ASIO standalone at 44.1 and 96 kHz: load, swap and clear profiles while playing, with
+1. Owner: listen to the filter modes in `~/Distortion-filterfix`, re-test #44, then merge #56
+   (rebase on `main` first if GitHub reports a conflict).
+2. Owner: ASIO standalone at 44.1 and 96 kHz: load, swap and clear profiles while playing, with
    Mono Input on and off; Reaper latency display stays put; A/B
    `build-rel/nam-regression/sd1_{44100,48000,96000}.wav` (local files, unverified).
-2. Decide on #54 and #56, and on the unmerged remote branches: `claude/ui-screenshot-readme-6vbm01` (1),
+3. Decide on the unmerged remote branches: `claude/ui-screenshot-readme-6vbm01` (1 commit),
    `docs/profile-morph`, `-design`, `-review` (2 each), `fix/transition-clicks` (3), `test/crossing-probe` (1).
-3. Follow-ups predating the NAM branch: host bypass still freezes the island and delay lines, and the
+4. Follow-ups predating the NAM branch: host bypass still freezes the island and delay lines, and the
    input filter and oversampler IIR ring after any bypass gap; a block longer than prepared + 64
    skips the dry capture, so global Mix < 100% blends stale dry.
-4. Then dispatch "Build VST3 Plugin" for macOS and Linux; the Linux and macOS branches of
+5. Then dispatch "Build VST3 Plugin" for macOS and Linux; the Linux and macOS branches of
    `verify.sh` are untested by hand too.
-5. Owner: decide on the 41 `origin/main` commits authored `Claude <noreply@anthropic.com>`
+6. Owner: decide on the 41 `origin/main` commits authored `Claude <noreply@anthropic.com>`
    (not rechecked since the last handoff).
 
 ## Decisions
@@ -42,5 +44,5 @@
 - The clear-during-switch race test is timing-based (spins on a flag); the staged-refresh races are gated.
 - `resetDSPState` clears a profile's islands, not its model state (NAM's reset allocates).
 - Default renders aren't repeatable (time-seeded `juce::Random`): baselines need clipType != 0, waveshaperMix 0.
-- Windows: close `Sledge Distortion.exe` before rebuilding (LNK1104). `Source/GitVersion.h` is skip-worktree.
+- Windows: close `Sledge Distortion.exe` before rebuilding (LNK1104).
 - `docs/Architecture Contract.md` is gitignored (local only), as are `CLAUDE.md` and `GEMINI.md`.
