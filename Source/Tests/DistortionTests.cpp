@@ -5046,11 +5046,11 @@ void InputFilterModeTest::runTest()
     {
         PluginProcessor proc;
         auto& mode = *proc.parameters.getParameter("filterMode");
-        auto& cutoff = *proc.parameters.getParameter("highPassFreq");
-        auto cutoffHz = [&] { return cutoff.convertFrom0to1(cutoff.getValue()); };
+        auto& cutoffParam = *proc.parameters.getParameter("highPassFreq");
+        auto cutoffHz = [&] { return cutoffParam.convertFrom0to1(cutoffParam.getValue()); };
         auto modeValue = [&](int m) { return mode.convertTo0to1(static_cast<float>(m)); };
 
-        FilterModeSwitch::Listener listener(mode, cutoff);
+        FilterModeSwitch::Listener listener(mode, cutoffParam);
         juce::ComboBox box;
         box.addItemList({ "High Pass", "Low Pass", "Band Pass" }, 1);
         juce::AudioProcessorValueTreeState::ComboBoxAttachment attachment(proc.parameters, "filterMode", box);
@@ -5060,12 +5060,12 @@ void InputFilterModeTest::runTest()
         expectWithinAbsoluteError(cutoffHz(), 20000.0f, 0.5f);
 
         // Automation or a preset: no gesture, so the cutoff it sets is kept.
-        cutoff.setValueNotifyingHost(cutoff.convertTo0to1(20000.0f));
+        cutoffParam.setValueNotifyingHost(cutoffParam.convertTo0to1(20000.0f));
         mode.setValueNotifyingHost(modeValue(FilterModeSwitch::highPass));
         expectWithinAbsoluteError(cutoffHz(), 20000.0f, 0.5f);
 
         // A cutoff the user set survives their own mode switch.
-        cutoff.setValueNotifyingHost(cutoff.convertTo0to1(150.0f));
+        cutoffParam.setValueNotifyingHost(cutoffParam.convertTo0to1(150.0f));
         box.setSelectedItemIndex(FilterModeSwitch::bandPass, juce::sendNotificationSync);
         expectWithinAbsoluteError(cutoffHz(), 150.0f, 0.5f);
     }
