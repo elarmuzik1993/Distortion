@@ -17,6 +17,7 @@
 #include "../Diagnostics/ReportSender.h"
 #include "../Diagnostics/PingSender.h"
 #include "../Nam/ResamplingIsland.h"
+#include "../LegacyInputFilter.h"
 
 //==============================================================================
 // Test Categories
@@ -369,6 +370,7 @@ private:
     void testBankSize();
     void testParamIdsExist();
     void testPresetsProduceFiniteOutput();
+    void testPresetsLeaveLegacyFilterOff();
 };
 
 //==============================================================================

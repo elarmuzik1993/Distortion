@@ -3180,6 +3180,9 @@ void FactoryPresetTests::runTest()
 
     beginTest("Every preset produces finite output");
     testPresetsProduceFiniteOutput();
+
+    beginTest("Factory presets leave the legacy input filter transparent");
+    testPresetsLeaveLegacyFilterOff();
 }
 
 void FactoryPresetTests::testBankSize()
@@ -3232,6 +3235,35 @@ void FactoryPresetTests::testPresetsProduceFiniteOutput()
         }
         expect(allFinite, juce::String("Preset '") + preset.name + "' produced non-finite output");
     }
+}
+
+void FactoryPresetTests::testPresetsLeaveLegacyFilterOff()
+{
+    PluginProcessor processor;
+    auto value = [&](const char* id)
+    {
+        auto* p = processor.parameters.getParameter(id);
+        return p->convertFrom0to1(p->getValue());
+    };
+
+    for (const auto& preset : FactoryPresets::all())
+    {
+        for (const auto& pv : preset.overrides)
+            expect(juce::String(pv.id) != "highPassFreq" && juce::String(pv.id) != "filterMode",
+                   juce::String("Preset '") + preset.name + "' sets a legacy filter param");
+
+        // Start from a dirty legacy filter so the baseline must clear it.
+        setParameter(processor.parameters, "filterMode", 2.0f);
+        setParameter(processor.parameters, "highPassFreq", 800.0f);
+        FactoryPresets::apply(processor.parameters, preset.name);
+        expect(! LegacyInputFilter::isActive(juce::roundToInt(value("filterMode")), value("highPassFreq")),
+               juce::String("Preset '") + preset.name + "' left the legacy filter on");
+    }
+
+    expect(FactoryPresets::baseline().end() != std::find_if(
+               FactoryPresets::baseline().begin(), FactoryPresets::baseline().end(),
+               [](const FactoryPresets::ParamValue& pv) { return juce::String(pv.id) == "shape"; }),
+           "Baseline does not reset shape");
 }
 
 //==============================================================================
