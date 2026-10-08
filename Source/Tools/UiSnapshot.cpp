@@ -16,6 +16,7 @@
       DistortionUiSnapshot --scale 70 --out shots
       DistortionUiSnapshot --signal --out shots   # scope shows a waveform
       DistortionUiSnapshot --profile drive.nam    # a NAM profile loaded
+      DistortionUiSnapshot --profile drive.nam --profile-card   # the browser's name card
 
   ==============================================================================
 */
@@ -106,7 +107,7 @@ void feedScope(PluginProcessor& proc)
 }
 
 bool snapshot(PluginProcessor& proc, int width, int height, const juce::File& out,
-              bool extreme = false, bool withSignal = false)
+              bool extreme = false, bool withSignal = false, bool profileCard = false)
 {
     PluginEditor editor(proc);
     editor.setSize(width, height);
@@ -139,6 +140,14 @@ bool snapshot(PluginProcessor& proc, int width, int height, const juce::File& ou
     // The profile button picks up the loaded profile on the editor's UI tick.
     if (proc.isProfileLoaded())
         juce::MessageManager::getInstance()->runDispatchLoopUntil(100);
+
+    // Last, so the card is captured settled: in after its slide, well before it
+    // starts to fade.
+    if (profileCard)
+    {
+        editor.showProfileCardForSnapshot(1);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(400);
+    }
 
     // Lay out and paint synchronously into an offscreen image.
     juce::Image image(juce::Image::ARGB, width, height, true);
@@ -178,7 +187,9 @@ int main(int argc, char* argv[])
                 "  --extreme        EXTREME mode engaged\n"
                 "  --signal         feed a signal so the scope shows a waveform\n"
                 "  --shape <v>      set Shape (-100..100) before rendering\n"
-                "  --legacy         turn the hidden v2.3 input filter on (shows the tag)\n";
+                "  --legacy         turn the hidden v2.3 input filter on (shows the tag)\n"
+                "  --profile <f>    load a NAM profile (copied into a scratch library)\n"
+                "  --profile-card   show the profile browser's name card\n";
             return 0;
         }
     }
@@ -189,7 +200,7 @@ int main(int argc, char* argv[])
     bool extreme = false;
     bool signal = false;
     float shapeValue = 0.0f;
-    bool hasShape = false, legacy = false;
+    bool hasShape = false, legacy = false, profileCard = false;
     juce::String profilePath;
     for (int i = 1; i < argc; ++i)
     {
@@ -202,6 +213,7 @@ int main(int argc, char* argv[])
         else if (t == "--signal")                signal    = true;
         else if (t == "--shape" && i + 1 < argc) { shapeValue = juce::String(argv[++i]).getFloatValue(); hasShape = true; }
         else if (t == "--legacy")                legacy    = true;
+        else if (t == "--profile-card")          profileCard = true;
     }
 
     // Collapsed (scope folded away) is the other fold state. The harness drives it
@@ -229,8 +241,18 @@ int main(int argc, char* argv[])
     if (hasShape) setParam("shape", shapeValue);
     if (legacy)   { setParam("filterMode", 1.0f); setParam("highPassFreq", 800.0f); }
 
-    if (profilePath.isNotEmpty()
-        && ! proc.loadProfileBlocking(juce::File::getCurrentWorkingDirectory().getChildFile(profilePath)))
+    // The profile library lives in the scratch root too, so the card's position
+    // ("1 / 1") never depends on what this machine has collected.
+    proc.setProfileLibraryRoot(scratchRoot.getChildFile("Profiles"));
+    juce::File profileFile;
+    if (profilePath.isNotEmpty())
+    {
+        juce::String importError;
+        profileFile = proc.getProfileLibrary().import(
+            juce::File::getCurrentWorkingDirectory().getChildFile(profilePath), importError);
+    }
+
+    if (profilePath.isNotEmpty() && ! proc.loadProfileBlocking(profileFile))
     {
         std::cout << "Profile failed to load: " << proc.getProfileStatus().error << "\n";
         return 1;
@@ -263,7 +285,9 @@ int main(int argc, char* argv[])
             name += "-legacy";
         if (profilePath.isNotEmpty())
             name += "-profile";
-        allOk &= snapshot(proc, w, h, dir.getChildFile(name + ".png"), extreme, signal);
+        if (profileCard)
+            name += "-card";
+        allOk &= snapshot(proc, w, h, dir.getChildFile(name + ".png"), extreme, signal, profileCard);
     }
 
     scratchRoot.deleteRecursively();

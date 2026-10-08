@@ -4,6 +4,7 @@
 #include "../CyclingComboBox.h"
 #include "../FactoryPresets.h"
 #include "../LegacyInputFilter.h"
+#include "../ProfileCardAnimation.h"
 #include "../RTAllocationGuard.h"
 #include "../ShapeFilter.h"
 #include <atomic>
@@ -6380,6 +6381,172 @@ void NamProfileTests::runTest()
         expectEquals(restored.getProfileStatus().path, missing, "The path is kept for the next save");
     }
 
+    const auto savedProfilePath = [](const juce::MemoryBlock& state)
+    {
+        auto xml = juce::AudioProcessor::getXmlFromBinary(state.getData(), static_cast<int>(state.getSize()));
+        return xml != nullptr ? xml->getStringAttribute(PluginProcessor::profilePathAttribute) : juce::String();
+    };
+
+    beginTest("A session restored before the host prepares the plugin keeps its profile");
+    {
+        // The standalone app and some hosts restore state first and start audio
+        // afterwards, so the load runs before any sample rate is known.
+        const auto model = namTestModel("wavenet.nam");
+        juce::MemoryBlock saved;
+        {
+            PluginProcessor processor;
+            prepareForProfileTest(processor);
+            processor.loadProfileBlocking(model);
+            processor.getStateInformation(saved);
+        }
+
+        PluginProcessor restored;
+        restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+
+        // Saved again before the load finishes, the session still names the profile.
+        juce::MemoryBlock early;
+        restored.getStateInformation(early);
+        expectEquals(savedProfilePath(early), model.getFullPathName(), "A save mid-load keeps the path");
+
+        expect(waitForProfileLoad(restored), "Restore finished loading");
+        prepareForProfileTest(restored);
+        expect(settle(restored), "The profile goes in once the host prepares");
+        expect(restored.profileMode, "The restored profile plays");
+        juce::AudioBuffer<float> out;
+        processSine(restored, 4, &out);
+        expect(! containsInvalidSamples(out), "Output is finite");
+
+        juce::MemoryBlock resaved;
+        restored.getStateInformation(resaved);
+        expectEquals(savedProfilePath(resaved), model.getFullPathName(), "The next save keeps the path");
+
+        // Hosts may restore the same state twice; the loaded profile is kept as is.
+        restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+        expect(! restored.getProfileStatus().loading, "The same profile is not loaded again");
+        expect(restored.isProfileLoaded(), "It stays loaded");
+    }
+
+    beginTest("Clicking through profiles quickly loads only the last one");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+
+        // Hold the loader's one thread so every request queues behind it, as they
+        // do when clicks arrive faster than a model parses.
+        juce::WaitableEvent gate;
+        processor.getProfileLoader().addJob([&gate] { gate.wait(10000); });
+
+        const char* models[] = { "wavenet.nam", "lstm.nam", "wavenet.nam", "lstm.nam", "wavenet.nam" };
+        for (const auto* model : models)
+            processor.loadProfileAsync(namTestModel(model));
+        gate.signal();
+
+        expect(waitForProfileLoad(processor), "The last request finished");
+        expectEquals(processor.profileFilesRead.load(), 1, "Superseded requests never read their file");
+        expectEquals(processor.getProfileStatus().name, juce::String("wavenet"), "The last click's profile is loaded");
+        expect(settle(processor), "It goes in");
+        expect(processor.profileMode, "And plays");
+    }
+
+    beginTest("A new instance starts with the last profile once the host prepares it");
+    {
+        PluginProcessor processor;
+        processor.setStartupProfile(namTestModel("wavenet.nam"));
+        expect(processor.getProfileStatus().path.isEmpty(), "Nothing before the host prepares");
+
+        prepareForProfileTest(processor);
+        expect(waitForProfileLoad(processor), "Startup load finished");
+        expectEquals(processor.getProfileStatus().name, juce::String("wavenet"));
+        expect(settle(processor), "It goes in");
+        expect(processor.profileMode, "And plays");
+
+        prepareForProfileTest(processor, 44100.0, 256);   // the host changes rate
+        expectEquals(processor.profileFilesRead.load(), 1, "Only the first prepare loads it");
+    }
+
+    beginTest("A restored session decides for itself, whatever the last profile was");
+    {
+        juce::MemoryBlock plain, withLstm;
+        {
+            PluginProcessor source;
+            prepareForProfileTest(source);
+            source.getStateInformation(plain);
+            source.loadProfileBlocking(namTestModel("lstm.nam"));
+            source.getStateInformation(withLstm);
+        }
+
+        PluginProcessor noProfile;   // restored, then prepared: the usual order
+        noProfile.setStartupProfile(namTestModel("wavenet.nam"));
+        noProfile.setStateInformation(plain.getData(), static_cast<int>(plain.getSize()));
+        prepareForProfileTest(noProfile);
+        expect(! noProfile.getProfileStatus().loading && ! noProfile.isProfileLoaded(),
+               "A session saved without a profile stays without one");
+        expectEquals(noProfile.profileFilesRead.load(), 0, "The last profile is never even read");
+
+        PluginProcessor ownProfile;
+        ownProfile.setStartupProfile(namTestModel("wavenet.nam"));
+        ownProfile.setStateInformation(withLstm.getData(), static_cast<int>(withLstm.getSize()));
+        prepareForProfileTest(ownProfile);
+        expect(waitForProfileLoad(ownProfile), "Restore finished");
+        expectEquals(ownProfile.getProfileStatus().name, juce::String("lstm"), "The session's own profile");
+
+        // Some hosts prepare before they restore: the last profile starts loading,
+        // and the session then takes it out again.
+        PluginProcessor prepareFirst;
+        prepareFirst.setStartupProfile(namTestModel("wavenet.nam"));
+        prepareForProfileTest(prepareFirst);
+        prepareFirst.setStateInformation(plain.getData(), static_cast<int>(plain.getSize()));
+        expect(waitForProfileLoad(prepareFirst), "Nothing left loading");
+        expect(settle(prepareFirst), "Settles");
+        expect(! prepareFirst.isProfileLoaded() && ! prepareFirst.profileMode,
+               "The session's built-in clip type wins");
+    }
+
+    beginTest("A last profile that has gone, or a clear before prepare, loads nothing");
+    {
+        PluginProcessor gone;
+        gone.setStartupProfile(namTestModel("deleted-since.nam"));
+        prepareForProfileTest(gone);
+        const auto status = gone.getProfileStatus();
+        expect(status.path.isEmpty() && status.error.isEmpty(), "No error about a file nobody asked for");
+
+        PluginProcessor cleared;
+        cleared.setStartupProfile(namTestModel("wavenet.nam"));
+        cleared.clearProfile();
+        prepareForProfileTest(cleared);
+        expect(! cleared.getProfileStatus().loading && ! cleared.isProfileLoaded(), "The clear wins");
+    }
+
+    beginTest("Reopening a session whose profile failed to load tries again");
+    {
+        // A drive that wasn't mounted, a file being synced: the first attempt fails,
+        // and reopening the same session once the file is back must load it.
+        const auto file = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                              .getChildFile("sledge-retry-test.nam");
+        file.replaceWithText("not a model");
+
+        PluginProcessor source;
+        prepareForProfileTest(source);
+        auto xml = source.parameters.copyState().createXml();
+        xml->setAttribute(PluginProcessor::profilePathAttribute, file.getFullPathName());
+        juce::MemoryBlock state;
+        juce::AudioProcessor::copyXmlToBinary(*xml, state);
+
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        processor.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+        expect(waitForProfileLoad(processor), "First attempt finished");
+        expect(! processor.isProfileLoaded(), "A broken file does not load");
+        expect(processor.getProfileStatus().error.isNotEmpty(), "The failure is reported");
+
+        expect(namTestModel("wavenet.nam").copyFileTo(file), "The file comes back");
+        processor.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+        expect(waitForProfileLoad(processor), "Second attempt finished");
+        expect(processor.isProfileLoaded(), "The same session loads it now");
+        expect(processor.getProfileStatus().error.isEmpty(), "The old error is gone");
+        file.deleteFile();
+    }
+
     beginTest("A profile at 44.1, 88.2, 96 and 192 kHz sounds as it does at 48 kHz");
     {
         const std::vector<double> harmonics { 1000.0, 2000.0, 3000.0, 4000.0, 5000.0 };
@@ -7493,6 +7660,299 @@ void NamProfileTests::runTest()
         for (size_t i = a1.size() - 10 * 512; i < a1.size(); ++i)
             maxDiff = juce::jmax(maxDiff, std::abs(a1[i] - b1[i]));
         expect(maxDiff < 1.0e-4f, "Channel 1 matches the stereo instance: " + juce::String(maxDiff, 8));
+    }
+}
+
+//==============================================================================
+// Profile library
+//==============================================================================
+
+namespace
+{
+    // A folder for one test, removed with everything in it afterwards.
+    struct ScratchFolder
+    {
+        explicit ScratchFolder(const juce::String& name)
+            : dir(juce::File::getSpecialLocation(juce::File::tempDirectory).getNonexistentChildFile(name, {}, false))
+        {
+            dir.createDirectory();
+        }
+        ~ScratchFolder() { dir.deleteRecursively(); }
+
+        juce::File write(const juce::String& relativePath, const juce::String& content) const
+        {
+            auto file = dir.getChildFile(relativePath);
+            file.getParentDirectory().createDirectory();
+            file.replaceWithText(content);
+            return file;
+        }
+
+        juce::File dir;
+    };
+
+    juce::StringArray relativeNames(const juce::Array<juce::File>& files, const juce::File& root)
+    {
+        juce::StringArray names;
+        for (const auto& f : files)
+            names.add(f.getRelativePathFrom(root).replaceCharacter('\\', '/'));
+        return names;
+    }
+}
+
+void ProfileLibraryTests::runTest()
+{
+    beginTest("Lists .nam files in natural order, subfolders included");
+    {
+        ScratchFolder scratch("sledge-library");
+        scratch.write("amp 10.nam", "10");
+        scratch.write("amp 2.nam", "2");
+        scratch.write("Fender/clean.nam", "clean");
+        scratch.write("notes.txt", "not a profile");
+
+        ProfileLibrary library(scratch.dir);
+        expectEquals(relativeNames(library.list(), scratch.dir).joinIntoString("|"),
+                     juce::String("amp 2.nam|amp 10.nam|Fender/clean.nam"));
+        expect(ProfileLibrary(scratch.dir.getChildFile("missing")).list().isEmpty(),
+               "A library that doesn't exist yet is empty");
+    }
+
+    beginTest("Steps wrap at both ends and start from an end outside the library");
+    {
+        ScratchFolder scratch("sledge-library");
+        const auto a = scratch.write("a.nam", "a");
+        const auto b = scratch.write("b.nam", "b");
+        const auto c = scratch.write("sub/c.nam", "c");
+        ProfileLibrary library(scratch.dir);
+
+        expect(library.step(a, 1) == b, "Forward");
+        expect(library.step(b, -1) == a, "Back");
+        expect(library.step(c, 1) == a, "Forward from the last wraps to the first");
+        expect(library.step(a, -1) == c, "Back from the first wraps to the last");
+        expect(library.step({}, 1) == a, "Forward from nothing starts at the first");
+        expect(library.step(juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("x.nam"), -1) == c,
+               "Back from outside starts at the last");
+
+        const auto position = library.positionOf(b);
+        expectEquals(position.index, 1);
+        expectEquals(position.count, 3);
+        expectEquals(library.positionOf({}).index, -1);
+
+        ScratchFolder empty("sledge-library-empty");
+        expect(ProfileLibrary(empty.dir).step(a, 1) == juce::File(), "An empty library has nowhere to go");
+    }
+
+    beginTest("Importing copies in, reuses the same content and numbers different content");
+    {
+        ScratchFolder scratch("sledge-library");
+        ScratchFolder outside("sledge-downloads");
+        ProfileLibrary library(scratch.dir.getChildFile("Profiles"));   // created by the first import
+        juce::String error;
+
+        const auto first = outside.write("jcm.nam", "model A");
+        const auto copied = library.import(first, error);
+        expect(copied == library.getRoot().getChildFile("jcm.nam"), "Copied under its own name: " + error);
+        expectEquals(copied.loadFileAsString(), juce::String("model A"));
+        expect(first.existsAsFile(), "The original stays where it was");
+
+        expect(library.import(first, error) == copied, "The same content again is reused");
+        expect(library.import(copied, error) == copied, "A library file comes back as it is");
+
+        const auto other = outside.write("other/jcm.nam", "model B");
+        const auto numbered = library.import(other, error);
+        expect(numbered == library.getRoot().getChildFile("jcm (2).nam"), "Different content gets a number");
+        expectEquals(numbered.loadFileAsString(), juce::String("model B"));
+        expect(library.import(other, error) == numbered, "And is reused under that number");
+
+        expect(library.import(outside.dir.getChildFile("gone.nam"), error) == juce::File(), "A missing file fails");
+        expect(error.isNotEmpty(), "With a reason");
+    }
+
+    beginTest("Fingerprints identify content, wherever the file is");
+    {
+        ScratchFolder scratch("sledge-library");
+        const auto a = scratch.write("a.nam", "same bytes");
+        const auto b = scratch.write("sub/b.nam", "same bytes");
+        const auto c = scratch.write("c.nam", "different!");   // same size, different content
+        const auto print = ProfileLibrary::fingerprint(a);
+
+        expect(print.isNotEmpty(), "A readable file has one");
+        expectEquals(ProfileLibrary::fingerprint(b), print, "Same content, same fingerprint");
+        expect(ProfileLibrary::fingerprint(c) != print, "Same size alone doesn't match");
+        expect(ProfileLibrary::fingerprint(scratch.dir.getChildFile("none.nam")).isEmpty(), "No file, no fingerprint");
+
+        ProfileLibrary library(scratch.dir);
+        expect(library.findByFingerprint(print, "b.nam") == b, "The preferred name wins among matches");
+        expect(library.findByFingerprint(print) == a, "Otherwise the first in order");
+        expect(library.findByFingerprint(ProfileLibrary::fingerprint(c), "a.nam") == c,
+               "A same-named file with other content is skipped");
+        expect(library.findByFingerprint({}) == juce::File(), "No fingerprint finds nothing");
+    }
+
+    beginTest("A session whose profile file moved loads the library's copy");
+    {
+        ScratchFolder libraryFolder("sledge-library");
+        ScratchFolder downloads("sledge-downloads");
+        const auto original = downloads.dir.getChildFile("wavenet.nam");
+        expect(namTestModel("wavenet.nam").copyFileTo(original), "Test model copied");
+
+        juce::MemoryBlock saved;
+        {
+            PluginProcessor processor;
+            prepareForProfileTest(processor);
+            expect(processor.loadProfileBlocking(original), "Loads from where it was downloaded");
+            expect(processor.getProfileStatus().fingerprint.isNotEmpty(), "The loaded profile has a fingerprint");
+            processor.getStateInformation(saved);
+        }
+        auto savedXml = juce::AudioProcessor::getXmlFromBinary(saved.getData(), static_cast<int>(saved.getSize()));
+        expect(savedXml->getStringAttribute(PluginProcessor::profileFingerprintAttribute).isNotEmpty(),
+               "The session saves the fingerprint");
+
+        juce::String error;
+        const auto copy = ProfileLibrary(libraryFolder.dir).import(original, error);
+        expect(copy.existsAsFile(), "Imported: " + error);
+        original.deleteFile();
+
+        PluginProcessor restored;
+        restored.setProfileLibraryRoot(libraryFolder.dir);
+        prepareForProfileTest(restored);
+        restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+        expect(waitForProfileLoad(restored), "Restore finished");
+        expect(restored.isProfileLoaded(), "The library's copy stands in for the missing file");
+        expectEquals(restored.getProfileStatus().path, copy.getFullPathName(), "The session now points at the copy");
+        expect(! restored.parameters.state.hasProperty(PluginProcessor::profileFingerprintAttribute),
+               "The fingerprint stays out of the parameter tree, so presets never carry it");
+
+        juce::MemoryBlock resaved;
+        restored.getStateInformation(resaved);
+        auto resavedXml = juce::AudioProcessor::getXmlFromBinary(resaved.getData(), static_cast<int>(resaved.getSize()));
+        expectEquals(resavedXml->getStringAttribute(PluginProcessor::profilePathAttribute), copy.getFullPathName());
+
+        restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+        expect(! restored.getProfileStatus().loading, "Restoring the same session again keeps the copy loaded");
+    }
+
+    beginTest("A missing profile with no copy in the library stays missing, and remembered");
+    {
+        ScratchFolder libraryFolder("sledge-library");
+        ScratchFolder downloads("sledge-downloads");
+        const auto original = downloads.dir.getChildFile("wavenet.nam");
+        expect(namTestModel("wavenet.nam").copyFileTo(original), "Test model copied");
+
+        juce::MemoryBlock saved;
+        {
+            PluginProcessor processor;
+            prepareForProfileTest(processor);
+            processor.loadProfileBlocking(original);
+            processor.getStateInformation(saved);
+        }
+        original.deleteFile();
+
+        // A different model under the same name must not stand in for it.
+        expect(namTestModel("lstm.nam").copyFileTo(libraryFolder.dir.getChildFile("wavenet.nam")), "Impostor copied");
+
+        PluginProcessor restored;
+        restored.setProfileLibraryRoot(libraryFolder.dir);
+        prepareForProfileTest(restored);
+        restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+        expect(waitForProfileLoad(restored), "Restore finished");
+        expect(! restored.isProfileLoaded(), "A same-named file with other content is not loaded");
+        expect(restored.getProfileStatus().error.isNotEmpty(), "The missing file is reported");
+
+        juce::MemoryBlock resaved;
+        restored.getStateInformation(resaved);
+        auto savedXml = juce::AudioProcessor::getXmlFromBinary(saved.getData(), static_cast<int>(saved.getSize()));
+        auto resavedXml = juce::AudioProcessor::getXmlFromBinary(resaved.getData(), static_cast<int>(resaved.getSize()));
+        expectEquals(resavedXml->getStringAttribute(PluginProcessor::profilePathAttribute), original.getFullPathName(),
+                     "The path is kept for when the file comes back");
+        expectEquals(resavedXml->getStringAttribute(PluginProcessor::profileFingerprintAttribute),
+                     savedXml->getStringAttribute(PluginProcessor::profileFingerprintAttribute),
+                     "So is the fingerprint");
+    }
+}
+
+//==============================================================================
+// Profile card animation
+//==============================================================================
+
+void ProfileCardAnimationTests::runTest()
+{
+    using A = ProfileCardAnimation;
+    const double t0 = 100.0;
+    const double settled = A::slideSeconds + 0.01;
+
+    beginTest("A click slides the card in from its arrow's side, holds, then fades");
+    {
+        A next;
+        expect(! next.isActive(t0), "Hidden before any click");
+        next.trigger(1, t0);
+        expect(next.isActive(t0), "Shown from the click");
+        expectWithinAbsoluteError(next.getCardAlpha(t0), 0.0f, 1.0e-6f, "Starts transparent");
+        expectWithinAbsoluteError(next.getCardOffset(t0), 1.0f, 1.0e-6f, "Next enters from the right");
+        expect(next.isMoving(t0 + A::slideSeconds * 0.5), "Moving while it slides in");
+
+        expectWithinAbsoluteError(next.getCardAlpha(t0 + settled), 1.0f, 1.0e-6f, "Opaque once in");
+        expectWithinAbsoluteError(next.getCardOffset(t0 + settled), 0.0f, 1.0e-6f, "In place once in");
+        expect(! next.isMoving(t0 + settled), "Settled: nothing to repaint while it holds");
+        expectWithinAbsoluteError(next.getCardAlpha(t0 + A::holdSeconds - 0.01), 1.0f, 1.0e-6f, "Holds");
+
+        const double midFade = t0 + A::holdSeconds + A::fadeSeconds * 0.5;
+        expect(next.getCardAlpha(midFade) > 0.0f && next.getCardAlpha(midFade) < 1.0f, "Fading");
+        expect(next.isMoving(midFade), "Moving while it fades");
+        expect(! next.isActive(t0 + A::holdSeconds + A::fadeSeconds + 0.01), "Gone after the fade");
+
+        A previous;
+        previous.trigger(-1, t0);
+        expectWithinAbsoluteError(previous.getCardOffset(t0), -1.0f, 1.0e-6f, "Previous enters from the left");
+
+        A menu;
+        menu.trigger(0, t0);
+        expectWithinAbsoluteError(menu.getCardOffset(t0), 0.0f, 1.0e-6f, "A menu pick fades in place");
+    }
+
+    beginTest("Clicks while the card shows slide the name and restart the hold");
+    {
+        A card;
+        card.trigger(1, t0);
+        const double t1 = t0 + 1.0;
+        card.trigger(-1, t1);
+        expectWithinAbsoluteError(card.getCardAlpha(t1), 1.0f, 1.0e-6f, "The card stays up");
+        expectWithinAbsoluteError(card.getCardOffset(t1), 0.0f, 1.0e-6f, "And does not slide in again");
+        expectEquals(card.getNameDirection(), -1);
+        expectWithinAbsoluteError(card.getNameProgress(t1), 0.0f, 1.0e-6f, "The new name starts its slide");
+        expect(card.isNameSliding(t1) && card.isMoving(t1), "Moving while the name slides");
+        expectWithinAbsoluteError(card.getNameProgress(t1 + settled), 1.0f, 1.0e-6f, "And settles");
+        expectWithinAbsoluteError(card.getCardAlpha(t0 + A::holdSeconds + A::fadeSeconds), 1.0f, 1.0e-6f,
+                                  "The hold restarts from the latest click");
+        expect(! card.isActive(t1 + A::holdSeconds + A::fadeSeconds + 0.01), "Then fades as usual");
+    }
+
+    beginTest("A click while the card fades brings it back without a jump");
+    {
+        A card;
+        card.trigger(1, t0);
+        const double t1 = t0 + A::holdSeconds + A::fadeSeconds * 0.5;
+        const float before = card.getCardAlpha(t1);
+        card.trigger(1, t1);
+        expectWithinAbsoluteError(card.getCardAlpha(t1), before, 1.0e-4f, "Opacity continues from where it was");
+        expectWithinAbsoluteError(card.getCardOffset(t1), 0.0f, 1.0e-6f, "No second slide-in");
+        expectWithinAbsoluteError(card.getCardAlpha(t1 + settled), 1.0f, 1.0e-6f, "Back to opaque");
+    }
+
+    beginTest("The card waits for a slow load, and keepAlive never revives a fading card");
+    {
+        A card;
+        card.trigger(1, t0);
+        for (double t = t0; t < t0 + 3.0; t += 0.1)
+            card.keepAlive(t);   // the profile is still loading
+        expectWithinAbsoluteError(card.getCardAlpha(t0 + 3.0), 1.0f, 1.0e-6f, "Still up while loading");
+        expect(! card.isActive(t0 + 3.0 + A::holdSeconds + A::fadeSeconds), "Fades once the load is done");
+
+        A fading;
+        fading.trigger(1, t0);
+        const double t1 = t0 + A::holdSeconds + 0.1;
+        const float before = fading.getCardAlpha(t1);
+        fading.keepAlive(t1);
+        expectWithinAbsoluteError(fading.getCardAlpha(t1), before, 1.0e-6f, "Already fading: unchanged");
     }
 }
 

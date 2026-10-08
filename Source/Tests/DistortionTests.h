@@ -989,6 +989,7 @@ public:
         saved.scopeLength         = 1024;
         saved.bugReportsEnabled   = false;
         saved.scopeOverlayMode    = 2;
+        saved.recallLastProfile   = false;
         saved.saveToFile (file);
 
         SettingsState loaded;
@@ -1001,6 +1002,21 @@ public:
         expectEquals (loaded.scopeLength,        saved.scopeLength);
         expectEquals (loaded.scopeOverlayMode,   saved.scopeOverlayMode);
         expect (! loaded.bugReportsEnabled, "revoked consent did not survive a reload");
+        expect (! loaded.recallLastProfile, "Recall Profile off did not survive a reload");
+        expect (SettingsState().recallLastProfile, "Recall Profile defaults on");
+
+        beginTest ("saving keeps attributes written on their own");
+        // lastProfile and profileImportFolder are written as profiles load, not
+        // from SettingsState; an editor saving its settings must not drop them.
+        {
+            auto xml = juce::parseXML (file);
+            xml->setAttribute ("lastProfile", "/profiles/amp.nam");
+            xml->writeTo (file);
+            saved.saveToFile (file);
+            auto after = juce::parseXML (file);
+            expectEquals (after->getStringAttribute ("lastProfile"), juce::String ("/profiles/amp.nam"));
+            expect (! after->getBoolAttribute ("recallLastProfile", true), "And the processor sees the toggle");
+        }
 
         beginTest ("processor reads the consent attribute the editor wrote");
         // Mirrors PluginProcessor's ctor exactly (parseXML + getBoolAttribute),
@@ -1092,6 +1108,20 @@ public:
     void runTest() override;
 };
 
+class ProfileLibraryTests : public juce::UnitTest
+{
+public:
+    ProfileLibraryTests() : UnitTest("Profile Library", TestCategories::StateIO) {}
+    void runTest() override;
+};
+
+class ProfileCardAnimationTests : public juce::UnitTest
+{
+public:
+    ProfileCardAnimationTests() : UnitTest("Profile Card Animation", TestCategories::Parameters) {}
+    void runTest() override;
+};
+
 // Force static test registration
 inline void registerAllTests()
 {
@@ -1153,6 +1183,8 @@ inline void registerAllTests()
     static SettingsPersistenceTest settingsPersistenceTest;
     static ResamplingIslandTests resamplingIslandTests;
     static NamProfileTests namProfileTests;
+    static ProfileLibraryTests profileLibraryTests;
+    static ProfileCardAnimationTests profileCardAnimationTests;
 }
 
 #endif // JUCE_DEBUG

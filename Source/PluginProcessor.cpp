@@ -249,8 +249,19 @@ PluginProcessor::PluginProcessor()
     // Bug reporting (USE-53). Gated out of unit-test builds so construction does no
     // appdata I/O and starts no drain; tests opt in via initDiagnosticsForTesting().
    #if ! (defined (DISTORTION_UNIT_TEST) && DISTORTION_UNIT_TEST)
+    profileLibraryRoot = ProfileLibrary::defaultRoot();
+
     if (auto xml = juce::parseXML (diag::settingsFile()))
+    {
         bugReportsEnabled.store (xml->getBoolAttribute ("bugReports", true));
+
+        // Never in the console tools (no wrapper): renders and soaks must not
+        // depend on what this machine last loaded.
+        const auto lastProfile = xml->getStringAttribute ("lastProfile");
+        if (wrapperType != wrapperType_Undefined && xml->getBoolAttribute ("recallLastProfile", true)
+            && juce::File::isAbsolutePath (lastProfile))
+            startupProfile = juce::File (lastProfile);
+    }
 
     installId = diag::ReportComposer::loadOrCreateInstallId (diag::installIdFile());
     buildReportPipeline (diag::reportsDir(), defaultTransport);
@@ -983,6 +994,9 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     dryBuffer.setSize(numChannels, samplesPerBlock + 64, false, false, true);
 
     sink.reset();   // start each prepared session with clean anomaly counters
+
+    // Now the host has said how it will run: a new instance picks up the last profile.
+    loadStartupProfileOnce();
 }
 
 
@@ -2295,7 +2309,11 @@ void PluginProcessor::getStateInformation(juce::MemoryBlock& destData)
     state.setProperty(stateVersionAttribute, currentStateVersion, nullptr);
     // The profile is remembered by path. A session opened where the file is
     // missing keeps the path and falls back to the built-in clip type.
-    state.setProperty(profilePathAttribute, getProfileStatus().path, nullptr);
+    // The fingerprint lets a session whose file has moved find the library's copy.
+    const auto status = getProfileStatus();
+    state.setProperty(profilePathAttribute, status.path, nullptr);
+    if (status.path.isNotEmpty() && status.fingerprint.isNotEmpty())
+        state.setProperty(profileFingerprintAttribute, status.fingerprint, nullptr);
     std::unique_ptr<juce::XmlElement> xml(state.createXml());
     copyXmlToBinary(*xml, destData);
 }
@@ -2309,22 +2327,32 @@ void PluginProcessor::setStateInformation(const void* data, int sizeInBytes)
 
         migrateState(*xmlState);
 
+        profileIntentKnown.store(true);   // the session decides, not the startup profile
         const juce::String profilePath = xmlState->getStringAttribute(profilePathAttribute);
+        const juce::String fingerprint = xmlState->getStringAttribute(profileFingerprintAttribute);
         // The path belongs to the session, not the parameters: left in the tree, it
         // would be copied into every user preset saved from here on.
         parameters.state.removeProperty(profilePathAttribute, nullptr);
+        parameters.state.removeProperty(profileFingerprintAttribute, nullptr);
+        const auto current = getProfileStatus();
+        // Loaded or on its way: a host restoring the same state twice keeps it. A
+        // path whose last load failed is tried again, since the file may be back.
+        // The fingerprint matches too when the library's copy stood in for the file.
+        const bool sameProfile = profilePath == current.path
+                              || (fingerprint.isNotEmpty() && fingerprint == current.fingerprint);
+        const bool alreadyHeld = sameProfile && (current.loading || current.name.isNotEmpty());
         if (profilePath.isEmpty())
         {
-            if (isProfileLoaded() || getProfileStatus().path.isNotEmpty())
+            if (current.name.isNotEmpty() || current.path.isNotEmpty())
                 clearProfile();
         }
-        else if (juce::File::isAbsolutePath(profilePath) && profilePath != getProfileStatus().path)
+        else if (juce::File::isAbsolutePath(profilePath) && ! alreadyHeld)
         {
             // Drop the current profile first, so a session whose file is missing
             // falls back to the built-in clip type rather than keeping this one.
             if (isProfileLoaded())
                 clearProfile();
-            loadProfileAsync(juce::File(profilePath));
+            loadProfileAsync(juce::File(profilePath), fingerprint);
         }
 
         // Signal audio thread to reset state (thread-safe handoff)
@@ -2369,19 +2397,31 @@ void PluginProcessor::migrateState(const juce::XmlElement& xmlState)
 // NAM profile (prototype)
 // =============================================================================
 
-int PluginProcessor::beginProfileRequest(const juce::File& file)
+void PluginProcessor::loadStartupProfileOnce()
 {
+    if (profileIntentKnown.exchange(true))
+        return;
+    // A last profile that has gone is skipped quietly: a new instance should not
+    // open with an error about a file nobody asked for this time.
+    if (startupProfile.existsAsFile())
+        loadProfileAsync(startupProfile);
+}
+
+int PluginProcessor::beginProfileRequest(const juce::File& file, const juce::String& fingerprint)
+{
+    profileIntentKnown.store(true);
     const juce::ScopedLock sl(profileStatusLock);
     profileStatus.path = file.getFullPathName();
+    profileStatus.fingerprint = fingerprint;   // kept for the next save if the load fails
     profileStatus.error = {};
     profileStatus.loading = true;
     return ++profileRequestId;
 }
 
-void PluginProcessor::loadProfileAsync(const juce::File& file)
+void PluginProcessor::loadProfileAsync(const juce::File& file, const juce::String& fingerprint)
 {
-    const int requestId = beginProfileRequest(file);
-    getProfileLoader().addJob([this, file, requestId] { loadProfileNow(file, requestId); });
+    const int requestId = beginProfileRequest(file, fingerprint);
+    getProfileLoader().addJob([this, file, fingerprint, requestId] { loadProfileNow(file, fingerprint, requestId); });
 }
 
 juce::ThreadPool& PluginProcessor::getProfileLoader()
@@ -2395,13 +2435,42 @@ juce::ThreadPool& PluginProcessor::getProfileLoader()
     return *profileLoader;
 }
 
-bool PluginProcessor::loadProfileBlocking(const juce::File& file)
+bool PluginProcessor::loadProfileBlocking(const juce::File& file, const juce::String& fingerprint)
 {
-    return loadProfileNow(file, beginProfileRequest(file));
+    return loadProfileNow(file, fingerprint, beginProfileRequest(file, fingerprint));
 }
 
-bool PluginProcessor::loadProfileNow(const juce::File& file, int requestId)
+ProfileLibrary PluginProcessor::getProfileLibrary() const
 {
+    const juce::ScopedLock sl(profileStatusLock);
+    return ProfileLibrary(profileLibraryRoot);
+}
+
+void PluginProcessor::setProfileLibraryRoot(const juce::File& root)
+{
+    const juce::ScopedLock sl(profileStatusLock);
+    profileLibraryRoot = root;
+}
+
+bool PluginProcessor::loadProfileNow(const juce::File& requested, const juce::String& sessionFingerprint, int requestId)
+{
+    // Superseded while it waited in the queue: skip it before reading anything.
+    // Stepping through the library queues one load per click, and only the last
+    // click's profile is wanted.
+    if (requestId != profileRequestId.load())
+        return false;
+    ++profileFilesRead;
+
+    // A session's file that has moved or gone: the library's copy of the same
+    // content stands in, and the session points at it from the next save on.
+    juce::File file = requested;
+    if (! file.existsAsFile() && sessionFingerprint.isNotEmpty())
+    {
+        const auto copy = getProfileLibrary().findByFingerprint(sessionFingerprint, requested.getFileName());
+        if (copy.existsAsFile())
+            file = copy;
+    }
+
     // One model per channel of the widest layout the plugin accepts (stereo), so
     // a later mono -> stereo change never leaves a channel without a model.
     constexpr int numChannels = 2;
@@ -2415,6 +2484,7 @@ bool PluginProcessor::loadProfileNow(const juce::File& file, int requestId)
 
     juce::String error;
     auto profile = NamProfile::load(file, numChannels, sampleRate, maxBlockSize, error);
+    const auto fingerprint = profile != nullptr ? ProfileLibrary::fingerprint(file) : juce::String();
 
     const juce::ScopedLock sl(profileStatusLock);
     if (requestId != profileRequestId.load())
@@ -2429,6 +2499,7 @@ bool PluginProcessor::loadProfileNow(const juce::File& file, int requestId)
 
     profileStatus.name = profile->getName();
     profileStatus.path = file.getFullPathName();
+    profileStatus.fingerprint = fingerprint;
     profileStatus.expectedSampleRate = profile->getExpectedSampleRate();
     profileStatus.error = {};
 
@@ -2442,6 +2513,7 @@ bool PluginProcessor::loadProfileNow(const juce::File& file, int requestId)
 
 void PluginProcessor::clearProfile()
 {
+    profileIntentKnown.store(true);
     const juce::ScopedLock sl(profileStatusLock);
     ++profileRequestId;   // an in-flight load must not stage after this
     profileStatus = {};
