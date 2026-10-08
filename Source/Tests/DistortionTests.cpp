@@ -6425,6 +6425,28 @@ void NamProfileTests::runTest()
         expect(restored.isProfileLoaded(), "It stays loaded");
     }
 
+    beginTest("Clicking through profiles quickly loads only the last one");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+
+        // Hold the loader's one thread so every request queues behind it, as they
+        // do when clicks arrive faster than a model parses.
+        juce::WaitableEvent gate;
+        processor.getProfileLoader().addJob([&gate] { gate.wait(10000); });
+
+        const char* models[] = { "wavenet.nam", "lstm.nam", "wavenet.nam", "lstm.nam", "wavenet.nam" };
+        for (const auto* model : models)
+            processor.loadProfileAsync(namTestModel(model));
+        gate.signal();
+
+        expect(waitForProfileLoad(processor), "The last request finished");
+        expectEquals(processor.profileFilesRead.load(), 1, "Superseded requests never read their file");
+        expectEquals(processor.getProfileStatus().name, juce::String("wavenet"), "The last click's profile is loaded");
+        expect(settle(processor), "It goes in");
+        expect(processor.profileMode, "And plays");
+    }
+
     beginTest("Reopening a session whose profile failed to load tries again");
     {
         // A drive that wasn't mounted, a file being synced: the first attempt fails,

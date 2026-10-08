@@ -2430,6 +2430,13 @@ void PluginProcessor::setProfileLibraryRoot(const juce::File& root)
 
 bool PluginProcessor::loadProfileNow(const juce::File& requested, const juce::String& sessionFingerprint, int requestId)
 {
+    // Superseded while it waited in the queue: skip it before reading anything.
+    // Stepping through the library queues one load per click, and only the last
+    // click's profile is wanted.
+    if (requestId != profileRequestId.load())
+        return false;
+    ++profileFilesRead;
+
     // A session's file that has moved or gone: the library's copy of the same
     // content stands in, and the session points at it from the next save on.
     juce::File file = requested;

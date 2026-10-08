@@ -821,6 +821,7 @@ private:
     ProfileStatus profileStatus;
     juce::File profileLibraryRoot;                      // under profileStatusLock
     std::atomic<int> stagedRefreshesInFlight { 0 };    // staged profiles out on the loader being re-prepared
+    std::atomic<int> profileFilesRead { 0 };            // loads that went on to read their file (tests count them)
     // Declared after everything its jobs touch, so it is destroyed (and joined) first.
     std::unique_ptr<juce::ThreadPool> profileLoader;   // created by getProfileLoader, under profileStatusLock
 
