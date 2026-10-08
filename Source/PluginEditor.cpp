@@ -653,6 +653,12 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     // Load UI settings — capture first-run state before loading
     const bool settingsFileExisted = getSettingsFile().existsAsFile();
     loadSettings();
+    if (auto xml = juce::parseXML(getSettingsFile()))
+    {
+        const auto folder = xml->getStringAttribute("profileImportFolder");
+        if (juce::File::isAbsolutePath(folder))
+            profileImportFolder = juce::File(folder);
+    }
     // Sync oversampling setting to processor (in case it was saved as non-default)
     audioProcessor.requestOversamplingRebuild(settingsState.oversamplingMode);
     applyOscilloscopeEnabled(settingsState.oscilloscopeEnabled);
@@ -1483,6 +1489,7 @@ void PluginEditor::timerCallback()
     updateMonoIndicator();
     updateProfileIndicator();
     advanceProfileCard();
+    rememberLastProfile();
 }
 
 void PluginEditor::showProfileMenu()
@@ -1564,6 +1571,8 @@ void PluginEditor::importAndLoadProfiles(const juce::Array<juce::File>& files)
         if (first == juce::File())
             first = target;
     }
+    if (profileImportFolder.isDirectory())
+        writeSettingsAttribute("profileImportFolder", profileImportFolder.getFullPathName());
     if (first != juce::File())
         loadLibraryProfile(first, 0);
 }
@@ -1577,7 +1586,35 @@ void PluginEditor::loadLibraryProfile(const juce::File& file, int direction)
                    && (status.loading || status.name.isNotEmpty());
     if (! held)
         audioProcessor.loadProfileAsync(file);
+    pendingLastProfile = file;
     showProfileCard(file, direction);
+}
+
+void PluginEditor::rememberLastProfile()
+{
+    if (pendingLastProfile == juce::File())
+        return;
+    const auto status = audioProcessor.getProfileStatus();
+    if (status.loading && status.path == pendingLastProfile.getFullPathName())
+        return;   // still on its way
+    // Loaded: new instances start with it. Failed, or replaced by a session or a
+    // clear meanwhile: nothing to remember.
+    if (status.path == pendingLastProfile.getFullPathName() && status.name.isNotEmpty())
+        writeSettingsAttribute("lastProfile", status.path);
+    pendingLastProfile = juce::File();
+}
+
+void PluginEditor::writeSettingsAttribute(const juce::String& name, const juce::String& value)
+{
+    auto root = getDataRoot();
+    if (! root.isDirectory())
+        root.createDirectory();
+    const auto file = getSettingsFile();
+    auto xml = juce::parseXML(file);
+    if (xml == nullptr || ! xml->hasTagName("Settings"))
+        xml = std::make_unique<juce::XmlElement>("Settings");
+    xml->setAttribute(name, value);
+    xml->writeTo(file);
 }
 
 void PluginEditor::stepProfile(int delta)

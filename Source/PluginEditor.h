@@ -955,19 +955,27 @@ struct SettingsState
     // Which overlay owns the scope: 0 = Off (clicks pass through), 1 = XY Morph,
     // 2 = Graphic EQ. Replaces the legacy boolean xyMorph flag.
     int scopeOverlayMode = 0;
+    // New instances start with the last profile chosen (the processor reads it).
+    bool recallLastProfile = true;
 
     void saveToFile(const juce::File& file) const
     {
-        juce::XmlElement xml("Settings");
-        xml.setAttribute("oscilloscope", oscilloscopeEnabled);
-        xml.setAttribute("oscilloscopeStereo", oscilloscopeStereo);
-        xml.setAttribute("tooltips", tooltipsEnabled);
-        xml.setAttribute("windowScale", windowScalePercent);
-        xml.setAttribute("oversampling", oversamplingMode);
-        xml.setAttribute("scopeLength", scopeLength);
-        xml.setAttribute("bugReports", bugReportsEnabled);
-        xml.setAttribute("scopeOverlay", scopeOverlayMode);
-        xml.writeTo(file);
+        // Starts from what is on disk, so attributes written on their own as
+        // profiles load (lastProfile, profileImportFolder) survive an editor
+        // saving its settings, including one opened before they were written.
+        auto xml = juce::parseXML(file);
+        if (xml == nullptr || ! xml->hasTagName("Settings"))
+            xml = std::make_unique<juce::XmlElement>("Settings");
+        xml->setAttribute("oscilloscope", oscilloscopeEnabled);
+        xml->setAttribute("oscilloscopeStereo", oscilloscopeStereo);
+        xml->setAttribute("tooltips", tooltipsEnabled);
+        xml->setAttribute("windowScale", windowScalePercent);
+        xml->setAttribute("oversampling", oversamplingMode);
+        xml->setAttribute("scopeLength", scopeLength);
+        xml->setAttribute("bugReports", bugReportsEnabled);
+        xml->setAttribute("scopeOverlay", scopeOverlayMode);
+        xml->setAttribute("recallLastProfile", recallLastProfile);
+        xml->writeTo(file);
     }
 
     void loadFromFile(const juce::File& file)
@@ -985,6 +993,7 @@ struct SettingsState
         // Migrate the legacy boolean xyMorph flag → overlay mode (1 = XY Morph).
         const int legacyXy = xml->getBoolAttribute("xyMorph", false) ? 1 : 0;
         scopeOverlayMode = juce::jlimit(0, 2, xml->getIntAttribute("scopeOverlay", legacyXy));
+        recallLastProfile = xml->getBoolAttribute("recallLastProfile", true);
     }
 };
 
@@ -1117,8 +1126,8 @@ class SettingsContent : public juce::Component,
                        private juce::Timer
 {
 public:
-    // Summed height of all rows below the header (406px of content + 12px bottom slack).
-    static constexpr int kContentHeight = 418;
+    // Summed height of all rows below the header (430px of content + 12px bottom slack).
+    static constexpr int kContentHeight = 442;
 
     SettingsContent(juce::AudioProcessorValueTreeState& apvts, SettingsState& state, PluginProcessor& proc)
         : settingsState(state), processor(proc)
@@ -1250,6 +1259,15 @@ public:
                 onScopeLengthChanged(val);
         };
 
+        // Recall Profile: new instances start with the last profile chosen.
+        addAndMakeVisible(recallProfileToggle);
+        recallProfileToggle.setButtonText("");
+        recallProfileToggle.setLookAndFeel(&pillLnf);
+        recallProfileToggle.setToggleState(state.recallLastProfile, juce::dontSendNotification);
+        recallProfileToggle.onClick = [this]() {
+            settingsState.recallLastProfile = recallProfileToggle.getToggleState();
+        };
+
         // Bug Reports consent toggle
         addAndMakeVisible(bugReportsToggle);
         bugReportsToggle.setButtonText("");
@@ -1290,6 +1308,7 @@ public:
         windowScaleCombo.setLookAndFeel(nullptr);
         overlayModeCombo.setLookAndFeel(nullptr);
         bugReportsToggle.setLookAndFeel(nullptr);
+        recallProfileToggle.setLookAndFeel(nullptr);
     }
 
     void paint(juce::Graphics& g) override
@@ -1341,6 +1360,11 @@ public:
         g.drawText(hint ? "Mono Input  â" : "Mono Input",
                    miRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
         g.setColour(juce::Colours::white);
+        inner.removeFromTop(4.0f);
+
+        // Recall Profile row label
+        auto rpRow = inner.removeFromTop(20.0f);
+        g.drawText("Recall Profile", rpRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
         inner.removeFromTop(12.0f);
 
         // INTERFACE section header
@@ -1446,6 +1470,12 @@ public:
         auto miRow = inner.removeFromTop(20);
         miRow.removeFromLeft(140);
         monoInputToggle.setBounds(miRow.removeFromLeft(50).reduced(0, 2));
+        inner.removeFromTop(4);
+
+        // Recall Profile row - must stay in step with the label in paint()
+        auto rpRow = inner.removeFromTop(20);
+        rpRow.removeFromLeft(140);
+        recallProfileToggle.setBounds(rpRow.removeFromLeft(50).reduced(0, 2));
         inner.removeFromTop(12);
 
         // INTERFACE header + divider
@@ -1537,6 +1567,7 @@ private:
     juce::ToggleButton autoGainToggle;
     juce::ToggleButton linearPhaseToggle;
     juce::ToggleButton monoInputToggle;
+    juce::ToggleButton recallProfileToggle;
     bool lastMonoHint = false;
     juce::ComboBox oversamplingCombo;
     juce::ComboBox windowScaleCombo;
@@ -2611,6 +2642,7 @@ private:
     ProfileCard profileCard;
     juce::File profileCardFile;       // the profile the card names; its status line follows that load
     juce::File profileImportFolder;   // where "Load profile..." opens: the folder last imported from
+    juce::File pendingLastProfile;    // chosen here; becomes lastProfile in settings once it loads
     std::unique_ptr<juce::FileChooser> profileChooser;
     juce::String shownProfileState;   // what the button last showed; the 60 Hz tick only repaints on change
 
@@ -2752,6 +2784,11 @@ private:
     void showProfileCard(const juce::File& file, int direction);
     void layoutProfileCard();
     void advanceProfileCard();
+    // Records a profile chosen here as the one new instances start with, once it
+    // has actually loaded.
+    void rememberLastProfile();
+    // Writes one attribute into settings.xml, keeping the rest of the file.
+    static void writeSettingsAttribute(const juce::String& name, const juce::String& value);
     void loadSettings();
     void saveSettings();
    #if defined (DISTORTION_UI_SNAPSHOT) && DISTORTION_UI_SNAPSHOT

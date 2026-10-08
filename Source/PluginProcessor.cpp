@@ -252,7 +252,16 @@ PluginProcessor::PluginProcessor()
     profileLibraryRoot = ProfileLibrary::defaultRoot();
 
     if (auto xml = juce::parseXML (diag::settingsFile()))
+    {
         bugReportsEnabled.store (xml->getBoolAttribute ("bugReports", true));
+
+        // Never in the console tools (no wrapper): renders and soaks must not
+        // depend on what this machine last loaded.
+        const auto lastProfile = xml->getStringAttribute ("lastProfile");
+        if (wrapperType != wrapperType_Undefined && xml->getBoolAttribute ("recallLastProfile", true)
+            && juce::File::isAbsolutePath (lastProfile))
+            startupProfile = juce::File (lastProfile);
+    }
 
     installId = diag::ReportComposer::loadOrCreateInstallId (diag::installIdFile());
     buildReportPipeline (diag::reportsDir(), defaultTransport);
@@ -985,6 +994,9 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     dryBuffer.setSize(numChannels, samplesPerBlock + 64, false, false, true);
 
     sink.reset();   // start each prepared session with clean anomaly counters
+
+    // Now the host has said how it will run: a new instance picks up the last profile.
+    loadStartupProfileOnce();
 }
 
 
@@ -2315,6 +2327,7 @@ void PluginProcessor::setStateInformation(const void* data, int sizeInBytes)
 
         migrateState(*xmlState);
 
+        profileIntentKnown.store(true);   // the session decides, not the startup profile
         const juce::String profilePath = xmlState->getStringAttribute(profilePathAttribute);
         const juce::String fingerprint = xmlState->getStringAttribute(profileFingerprintAttribute);
         // The path belongs to the session, not the parameters: left in the tree, it
@@ -2384,8 +2397,19 @@ void PluginProcessor::migrateState(const juce::XmlElement& xmlState)
 // NAM profile (prototype)
 // =============================================================================
 
+void PluginProcessor::loadStartupProfileOnce()
+{
+    if (profileIntentKnown.exchange(true))
+        return;
+    // A last profile that has gone is skipped quietly: a new instance should not
+    // open with an error about a file nobody asked for this time.
+    if (startupProfile.existsAsFile())
+        loadProfileAsync(startupProfile);
+}
+
 int PluginProcessor::beginProfileRequest(const juce::File& file, const juce::String& fingerprint)
 {
+    profileIntentKnown.store(true);
     const juce::ScopedLock sl(profileStatusLock);
     profileStatus.path = file.getFullPathName();
     profileStatus.fingerprint = fingerprint;   // kept for the next save if the load fails
@@ -2489,6 +2513,7 @@ bool PluginProcessor::loadProfileNow(const juce::File& requested, const juce::St
 
 void PluginProcessor::clearProfile()
 {
+    profileIntentKnown.store(true);
     const juce::ScopedLock sl(profileStatusLock);
     ++profileRequestId;   // an in-flight load must not stage after this
     profileStatus = {};

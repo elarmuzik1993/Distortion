@@ -364,6 +364,13 @@ public:
     ProfileLibrary getProfileLibrary() const;
     void setProfileLibraryRoot(const juce::File& root);
 
+    // The profile a new instance starts with: the last one chosen in an editor,
+    // read from settings.xml (lastProfile, unless Settings > Recall Profile is
+    // off) by plugin and standalone builds only. It loads at the first
+    // prepareToPlay, and only if no session was restored and nothing was loaded
+    // or cleared before then, so a saved project always decides for itself.
+    void setStartupProfile(const juce::File& file) { startupProfile = file; }
+
 private:
     // --- Bug reporting (USE-53) ---
     std::atomic<bool>                   bugReportsEnabled { true };   // default ON (opt-out)
@@ -820,6 +827,8 @@ private:
     mutable juce::CriticalSection profileStatusLock;
     ProfileStatus profileStatus;
     juce::File profileLibraryRoot;                      // under profileStatusLock
+    juce::File startupProfile;                          // set before the first prepareToPlay
+    std::atomic<bool> profileIntentKnown { false };     // a session, load or clear came first
     std::atomic<int> stagedRefreshesInFlight { 0 };    // staged profiles out on the loader being re-prepared
     std::atomic<int> profileFilesRead { 0 };            // loads that went on to read their file (tests count them)
     // Declared after everything its jobs touch, so it is destroyed (and joined) first.
@@ -836,6 +845,7 @@ private:
     float duckGain = 1.0f;                          // audio thread
     float duckStep = 1.0f;                          // gain change per sample, set in prepareToPlay
 
+    void loadStartupProfileOnce();
     // Records the request, returns its id.
     int beginProfileRequest(const juce::File& file, const juce::String& fingerprint = {});
     bool loadProfileNow(const juce::File& file, const juce::String& fingerprint, int requestId);

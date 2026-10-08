@@ -6448,6 +6448,75 @@ void NamProfileTests::runTest()
         expect(processor.profileMode, "And plays");
     }
 
+    beginTest("A new instance starts with the last profile once the host prepares it");
+    {
+        PluginProcessor processor;
+        processor.setStartupProfile(namTestModel("wavenet.nam"));
+        expect(processor.getProfileStatus().path.isEmpty(), "Nothing before the host prepares");
+
+        prepareForProfileTest(processor);
+        expect(waitForProfileLoad(processor), "Startup load finished");
+        expectEquals(processor.getProfileStatus().name, juce::String("wavenet"));
+        expect(settle(processor), "It goes in");
+        expect(processor.profileMode, "And plays");
+
+        prepareForProfileTest(processor, 44100.0, 256);   // the host changes rate
+        expectEquals(processor.profileFilesRead.load(), 1, "Only the first prepare loads it");
+    }
+
+    beginTest("A restored session decides for itself, whatever the last profile was");
+    {
+        juce::MemoryBlock plain, withLstm;
+        {
+            PluginProcessor source;
+            prepareForProfileTest(source);
+            source.getStateInformation(plain);
+            source.loadProfileBlocking(namTestModel("lstm.nam"));
+            source.getStateInformation(withLstm);
+        }
+
+        PluginProcessor noProfile;   // restored, then prepared: the usual order
+        noProfile.setStartupProfile(namTestModel("wavenet.nam"));
+        noProfile.setStateInformation(plain.getData(), static_cast<int>(plain.getSize()));
+        prepareForProfileTest(noProfile);
+        expect(! noProfile.getProfileStatus().loading && ! noProfile.isProfileLoaded(),
+               "A session saved without a profile stays without one");
+        expectEquals(noProfile.profileFilesRead.load(), 0, "The last profile is never even read");
+
+        PluginProcessor ownProfile;
+        ownProfile.setStartupProfile(namTestModel("wavenet.nam"));
+        ownProfile.setStateInformation(withLstm.getData(), static_cast<int>(withLstm.getSize()));
+        prepareForProfileTest(ownProfile);
+        expect(waitForProfileLoad(ownProfile), "Restore finished");
+        expectEquals(ownProfile.getProfileStatus().name, juce::String("lstm"), "The session's own profile");
+
+        // Some hosts prepare before they restore: the last profile starts loading,
+        // and the session then takes it out again.
+        PluginProcessor prepareFirst;
+        prepareFirst.setStartupProfile(namTestModel("wavenet.nam"));
+        prepareForProfileTest(prepareFirst);
+        prepareFirst.setStateInformation(plain.getData(), static_cast<int>(plain.getSize()));
+        expect(waitForProfileLoad(prepareFirst), "Nothing left loading");
+        expect(settle(prepareFirst), "Settles");
+        expect(! prepareFirst.isProfileLoaded() && ! prepareFirst.profileMode,
+               "The session's built-in clip type wins");
+    }
+
+    beginTest("A last profile that has gone, or a clear before prepare, loads nothing");
+    {
+        PluginProcessor gone;
+        gone.setStartupProfile(namTestModel("deleted-since.nam"));
+        prepareForProfileTest(gone);
+        const auto status = gone.getProfileStatus();
+        expect(status.path.isEmpty() && status.error.isEmpty(), "No error about a file nobody asked for");
+
+        PluginProcessor cleared;
+        cleared.setStartupProfile(namTestModel("wavenet.nam"));
+        cleared.clearProfile();
+        prepareForProfileTest(cleared);
+        expect(! cleared.getProfileStatus().loading && ! cleared.isProfileLoaded(), "The clear wins");
+    }
+
     beginTest("Reopening a session whose profile failed to load tries again");
     {
         // A drive that wasn't mounted, a file being synced: the first attempt fails,
