@@ -2313,12 +2313,17 @@ void PluginProcessor::setStateInformation(const void* data, int sizeInBytes)
         // The path belongs to the session, not the parameters: left in the tree, it
         // would be copied into every user preset saved from here on.
         parameters.state.removeProperty(profilePathAttribute, nullptr);
+        const auto current = getProfileStatus();
+        // Loaded or on its way: a host restoring the same state twice keeps it. A
+        // path whose last load failed is tried again, since the file may be back.
+        const bool alreadyHeld = profilePath == current.path
+                              && (current.loading || current.name.isNotEmpty());
         if (profilePath.isEmpty())
         {
-            if (isProfileLoaded() || getProfileStatus().path.isNotEmpty())
+            if (current.name.isNotEmpty() || current.path.isNotEmpty())
                 clearProfile();
         }
-        else if (juce::File::isAbsolutePath(profilePath) && profilePath != getProfileStatus().path)
+        else if (juce::File::isAbsolutePath(profilePath) && ! alreadyHeld)
         {
             // Drop the current profile first, so a session whose file is missing
             // falls back to the built-in clip type rather than keeping this one.

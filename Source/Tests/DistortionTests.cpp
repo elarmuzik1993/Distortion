@@ -6380,6 +6380,81 @@ void NamProfileTests::runTest()
         expectEquals(restored.getProfileStatus().path, missing, "The path is kept for the next save");
     }
 
+    const auto savedProfilePath = [](const juce::MemoryBlock& state)
+    {
+        auto xml = juce::AudioProcessor::getXmlFromBinary(state.getData(), static_cast<int>(state.getSize()));
+        return xml != nullptr ? xml->getStringAttribute(PluginProcessor::profilePathAttribute) : juce::String();
+    };
+
+    beginTest("A session restored before the host prepares the plugin keeps its profile");
+    {
+        // The standalone app and some hosts restore state first and start audio
+        // afterwards, so the load runs before any sample rate is known.
+        const auto model = namTestModel("wavenet.nam");
+        juce::MemoryBlock saved;
+        {
+            PluginProcessor processor;
+            prepareForProfileTest(processor);
+            processor.loadProfileBlocking(model);
+            processor.getStateInformation(saved);
+        }
+
+        PluginProcessor restored;
+        restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+
+        // Saved again before the load finishes, the session still names the profile.
+        juce::MemoryBlock early;
+        restored.getStateInformation(early);
+        expectEquals(savedProfilePath(early), model.getFullPathName(), "A save mid-load keeps the path");
+
+        expect(waitForProfileLoad(restored), "Restore finished loading");
+        prepareForProfileTest(restored);
+        expect(settle(restored), "The profile goes in once the host prepares");
+        expect(restored.profileMode, "The restored profile plays");
+        juce::AudioBuffer<float> out;
+        processSine(restored, 4, &out);
+        expect(! containsInvalidSamples(out), "Output is finite");
+
+        juce::MemoryBlock resaved;
+        restored.getStateInformation(resaved);
+        expectEquals(savedProfilePath(resaved), model.getFullPathName(), "The next save keeps the path");
+
+        // Hosts may restore the same state twice; the loaded profile is kept as is.
+        restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+        expect(! restored.getProfileStatus().loading, "The same profile is not loaded again");
+        expect(restored.isProfileLoaded(), "It stays loaded");
+    }
+
+    beginTest("Reopening a session whose profile failed to load tries again");
+    {
+        // A drive that wasn't mounted, a file being synced: the first attempt fails,
+        // and reopening the same session once the file is back must load it.
+        const auto file = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                              .getChildFile("sledge-retry-test.nam");
+        file.replaceWithText("not a model");
+
+        PluginProcessor source;
+        prepareForProfileTest(source);
+        auto xml = source.parameters.copyState().createXml();
+        xml->setAttribute(PluginProcessor::profilePathAttribute, file.getFullPathName());
+        juce::MemoryBlock state;
+        juce::AudioProcessor::copyXmlToBinary(*xml, state);
+
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        processor.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+        expect(waitForProfileLoad(processor), "First attempt finished");
+        expect(! processor.isProfileLoaded(), "A broken file does not load");
+        expect(processor.getProfileStatus().error.isNotEmpty(), "The failure is reported");
+
+        expect(namTestModel("wavenet.nam").copyFileTo(file), "The file comes back");
+        processor.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+        expect(waitForProfileLoad(processor), "Second attempt finished");
+        expect(processor.isProfileLoaded(), "The same session loads it now");
+        expect(processor.getProfileStatus().error.isEmpty(), "The old error is gone");
+        file.deleteFile();
+    }
+
     beginTest("A profile at 44.1, 88.2, 96 and 192 kHz sounds as it does at 48 kHz");
     {
         const std::vector<double> harmonics { 1000.0, 2000.0, 3000.0, 4000.0, 5000.0 };
