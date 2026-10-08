@@ -1099,6 +1099,13 @@ public:
     void runTest() override;
 };
 
+class ProfileCardAnimationTests : public juce::UnitTest
+{
+public:
+    ProfileCardAnimationTests() : UnitTest("Profile Card Animation", TestCategories::Parameters) {}
+    void runTest() override;
+};
+
 // Force static test registration
 inline void registerAllTests()
 {
@@ -1161,6 +1168,7 @@ inline void registerAllTests()
     static ResamplingIslandTests resamplingIslandTests;
     static NamProfileTests namProfileTests;
     static ProfileLibraryTests profileLibraryTests;
+    static ProfileCardAnimationTests profileCardAnimationTests;
 }
 
 #endif // JUCE_DEBUG

@@ -155,6 +155,7 @@ set(PLUGIN_SOURCES
     Source/FilterCoeffs.h
     Source/ShapeFilter.h
     Source/LegacyInputFilter.h
+    Source/ProfileCardAnimation.h
     Source/Diagnostics/AppPaths.h
     Source/Diagnostics/Report.h
     Source/Diagnostics/ITransport.h

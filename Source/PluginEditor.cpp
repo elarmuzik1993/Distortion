@@ -350,6 +350,10 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     profileButton.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFFFF0044));
     profileButton.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
     profileButton.onClick = [this]() { showProfileMenu(); };
+    addAndMakeVisible(profilePrevButton);
+    addAndMakeVisible(profileNextButton);
+    profilePrevButton.onClick = [this]() { stepProfile(-1); };
+    profileNextButton.onClick = [this]() { stepProfile(1); };
 
     // Setup preset selector
     addAndMakeVisible(presetSelector);
@@ -642,6 +646,9 @@ PluginEditor::PluginEditor(PluginProcessor& p)
         if (auto* param = audioProcessor.parameters.getParameter("monoInput"))
             param->setValueNotifyingHost(monoButton.isActive() ? 0.0f : 1.0f);
     };
+
+    // Above everything added so far; show() brings it to the front again.
+    addChildComponent(profileCard);
 
     // Load UI settings — capture first-run state before loading
     const bool settingsFileExisted = getSettingsFile().existsAsFile();
@@ -1227,6 +1234,12 @@ void PluginEditor::resized()
     profileButton.setBounds(currentX + comboXOffset,
                             rowY + knobSize + lockInset + (labelHeight - clipButtonH) / 2,
                             comboWidth, clipButtonH);
+    // The arrows fill the gaps beside the pill. On the left that is about 10 px at
+    // 100%, up to the end of the Distortion Amount label, so they stay narrow.
+    const int arrowW = S(9);
+    profilePrevButton.setBounds(profileButton.getX() - arrowW, profileButton.getY(), arrowW, clipButtonH);
+    profileNextButton.setBounds(profileButton.getRight(), profileButton.getY(), arrowW, clipButtonH);
+    layoutProfileCard();
     currentX += clipTypeColumnWidth + controlSpacing;
 
     // Tone
@@ -1469,12 +1482,14 @@ void PluginEditor::timerCallback()
 
     updateMonoIndicator();
     updateProfileIndicator();
+    advanceProfileCard();
 }
 
 void PluginEditor::showProfileMenu()
 {
     const auto status = audioProcessor.getProfileStatus();
     const bool loaded = status.name.isNotEmpty();
+    const auto library = audioProcessor.getProfileLibrary();
 
     juce::PopupMenu menu;
     if (loaded)
@@ -1495,25 +1510,157 @@ void PluginEditor::showProfileMenu()
 
     menu.addItem("Load profile...", [this]()
     {
-        const auto startDir = juce::File(audioProcessor.getProfileStatus().path).getParentDirectory();
-        profileChooser = std::make_unique<juce::FileChooser>(
-            "Load a NAM profile",
-            startDir.isDirectory() ? startDir
-                                   : juce::File::getSpecialLocation(juce::File::userHomeDirectory),
-            "*.nam");
+        const auto startDir = profileImportFolder.isDirectory()
+                                ? profileImportFolder
+                                : juce::File::getSpecialLocation(juce::File::userHomeDirectory);
+        profileChooser = std::make_unique<juce::FileChooser>("Load NAM profiles", startDir, "*.nam");
         profileChooser->launchAsync(juce::FileBrowserComponent::openMode
-                                        | juce::FileBrowserComponent::canSelectFiles,
-            [this](const juce::FileChooser& chooser)
-            {
-                const auto file = chooser.getResult();
-                if (file.existsAsFile())
-                    audioProcessor.loadProfileAsync(file);
-            });
+                                        | juce::FileBrowserComponent::canSelectFiles
+                                        | juce::FileBrowserComponent::canSelectMultipleItems,
+            [this](const juce::FileChooser& chooser) { importAndLoadProfiles(chooser.getResults()); });
     });
+
+    // The library, folder by folder as the arrows step through it.
+    juce::PopupMenu libraryMenu;
+    const auto files = library.list();
+    for (const auto& file : files)
+    {
+        const auto label = file.getRelativePathFrom(library.getRoot())
+                               .replaceCharacter('\\', '/')
+                               .upToLastOccurrenceOf(".", false, false);
+        libraryMenu.addItem(label, true, file.getFullPathName() == status.path,
+                            [this, file]() { loadLibraryProfile(file, 0); });
+    }
+    if (files.isEmpty())
+        libraryMenu.addItem("Empty: profiles you load are added here", false, false, nullptr);
+    menu.addSubMenu("Library", libraryMenu);
+    menu.addItem("Show library folder", [library]()
+    {
+        const auto root = library.getRoot();
+        if (root.createDirectory().wasOk())
+            root.startAsProcess();
+    });
+
+    menu.addSeparator();
     menu.addItem("Clear profile", loaded || status.path.isNotEmpty(), false,
                  [this]() { audioProcessor.clearProfile(); });
 
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&profileButton));
+}
+
+void PluginEditor::importAndLoadProfiles(const juce::Array<juce::File>& files)
+{
+    const auto library = audioProcessor.getProfileLibrary();
+    juce::File first;
+    for (const auto& file : files)
+    {
+        if (! file.existsAsFile())
+            continue;
+        profileImportFolder = file.getParentDirectory();
+        juce::String error;
+        const auto copy = library.import(file, error);
+        // A copy that fails still loads from where it is; the session then points there.
+        const auto target = copy.existsAsFile() ? copy : file;
+        if (first == juce::File())
+            first = target;
+    }
+    if (first != juce::File())
+        loadLibraryProfile(first, 0);
+}
+
+void PluginEditor::loadLibraryProfile(const juce::File& file, int direction)
+{
+    const auto status = audioProcessor.getProfileStatus();
+    // Already loaded or on its way (a one-profile library, a repeated pick): just
+    // say so, rather than loading it again.
+    const bool held = file.getFullPathName() == status.path
+                   && (status.loading || status.name.isNotEmpty());
+    if (! held)
+        audioProcessor.loadProfileAsync(file);
+    showProfileCard(file, direction);
+}
+
+void PluginEditor::stepProfile(int delta)
+{
+    const auto status = audioProcessor.getProfileStatus();
+    const juce::File current = status.path.isNotEmpty() ? juce::File(status.path) : juce::File();
+    const auto next = audioProcessor.getProfileLibrary().step(current, delta);
+    if (next == juce::File())
+    {
+        showProfileCard({}, delta);
+        return;
+    }
+    loadLibraryProfile(next, delta);
+}
+
+void PluginEditor::showProfileCard(const juce::File& file, int direction)
+{
+    ProfileCard::Content content;
+    if (file == juce::File())
+    {
+        content.name = "Library empty";
+        content.detail = "Load profiles from the PROFILE menu";
+    }
+    else
+    {
+        const auto library = audioProcessor.getProfileLibrary();
+        content.name = file.getFileNameWithoutExtension();
+        const auto position = library.positionOf(file);
+        if (position.index >= 0)
+        {
+            content.detail = juce::String(position.index + 1) + " / " + juce::String(position.count);
+            const auto folder = file.getParentDirectory();
+            if (folder != library.getRoot())
+                content.detail = folder.getRelativePathFrom(library.getRoot()).replaceCharacter('\\', '/')
+                               + "  |  " + content.detail;
+        }
+    }
+    profileCardFile = file;
+    layoutProfileCard();
+    profileCard.show(content, direction, juce::Time::getMillisecondCounterHiRes() * 0.001);
+    advanceProfileCard();
+}
+
+void PluginEditor::layoutProfileCard()
+{
+    const float s = getWidth() / 960.0f;
+    auto S = [s](int v) -> int { return juce::roundToInt(v * s); };
+
+    // Over the scope while it shows; folded away, a bubble above the pill.
+    if (oscilloscope.isVisible() && oscilloscope.getHeight() >= S(100))
+    {
+        const auto scope = oscilloscope.getBounds();
+        const auto card = juce::Rectangle<int>(juce::jmin(S(360), scope.getWidth() - S(40)), S(74))
+                              .withCentre(scope.getCentre());
+        profileCard.setGeometry(card, S(36), false, 0, s);
+    }
+    else
+    {
+        const auto pill = profileButton.getBounds();
+        const int w = S(230), h = S(50);
+        auto card = juce::Rectangle<int>(pill.getCentreX() - w / 2, pill.getY() - S(10) - h, w, h);
+        card = card.constrainedWithin(getLocalBounds().reduced(S(4)));
+        profileCard.setGeometry(card, S(24), true, pill.getCentreX(), s);
+    }
+}
+
+void PluginEditor::advanceProfileCard()
+{
+    const double now = juce::Time::getMillisecondCounterHiRes() * 0.001;
+    if (profileCard.isVisible() && profileCardFile != juce::File())
+    {
+        // The status line follows the load of the profile the card names, and the
+        // card stays up until that load is done.
+        const auto status = audioProcessor.getProfileStatus();
+        if (status.path == profileCardFile.getFullPathName())
+        {
+            if (status.loading)
+                profileCard.keepAlive(now);
+            profileCard.setStatus(status.loading ? "Loading..." : status.error,
+                                  ! status.loading && status.error.isNotEmpty(), now);
+        }
+    }
+    profileCard.tick(now);
 }
 
 void PluginEditor::updateProfileIndicator()
@@ -1522,14 +1669,14 @@ void PluginEditor::updateProfileIndicator()
     const bool loaded = status.name.isNotEmpty();
     const bool needsAttention = status.error.isNotEmpty();
 
-    const juce::String state = status.name + "|" + juce::String(int(status.loading))
-                             + "|" + juce::String(int(needsAttention));
+    const juce::String state = juce::String(int(loaded)) + "|" + juce::String(int(needsAttention));
     if (state == shownProfileState)
         return;
     shownProfileState = state;
 
+    // The pill always reads PROFILE and lights up once a profile has actually
+    // loaded; the card names it.
     const auto accent = needsAttention ? juce::Colour(0xFFFFAA00) : juce::Colour(0xFFFF0044);
-    profileButton.setButtonText(loaded ? status.name : (status.loading ? "LOADING" : "PROFILE"));
     profileButton.setColour(juce::TextButton::buttonOnColourId, accent);
     profileButton.setColour(juce::TextButton::textColourOffId, accent);
     profileButton.setToggleState(loaded, juce::dontSendNotification);
@@ -1696,6 +1843,15 @@ juce::File PluginEditor::dataRootOverride;
 void PluginEditor::setDataRootOverride(const juce::File& dir)
 {
     dataRootOverride = dir;
+}
+
+void PluginEditor::showProfileCardForSnapshot(int direction)
+{
+    const auto status = audioProcessor.getProfileStatus();
+    if (status.path.isNotEmpty())
+        showProfileCard(juce::File(status.path), direction);
+    else
+        stepProfile(direction);
 }
 #endif
 

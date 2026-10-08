@@ -4,6 +4,7 @@
 #include "../CyclingComboBox.h"
 #include "../FactoryPresets.h"
 #include "../LegacyInputFilter.h"
+#include "../ProfileCardAnimation.h"
 #include "../RTAllocationGuard.h"
 #include "../ShapeFilter.h"
 #include <atomic>
@@ -7797,6 +7798,92 @@ void ProfileLibraryTests::runTest()
         expectEquals(resavedXml->getStringAttribute(PluginProcessor::profileFingerprintAttribute),
                      savedXml->getStringAttribute(PluginProcessor::profileFingerprintAttribute),
                      "So is the fingerprint");
+    }
+}
+
+//==============================================================================
+// Profile card animation
+//==============================================================================
+
+void ProfileCardAnimationTests::runTest()
+{
+    using A = ProfileCardAnimation;
+    const double t0 = 100.0;
+    const double settled = A::slideSeconds + 0.01;
+
+    beginTest("A click slides the card in from its arrow's side, holds, then fades");
+    {
+        A next;
+        expect(! next.isActive(t0), "Hidden before any click");
+        next.trigger(1, t0);
+        expect(next.isActive(t0), "Shown from the click");
+        expectWithinAbsoluteError(next.getCardAlpha(t0), 0.0f, 1.0e-6f, "Starts transparent");
+        expectWithinAbsoluteError(next.getCardOffset(t0), 1.0f, 1.0e-6f, "Next enters from the right");
+        expect(next.isMoving(t0 + A::slideSeconds * 0.5), "Moving while it slides in");
+
+        expectWithinAbsoluteError(next.getCardAlpha(t0 + settled), 1.0f, 1.0e-6f, "Opaque once in");
+        expectWithinAbsoluteError(next.getCardOffset(t0 + settled), 0.0f, 1.0e-6f, "In place once in");
+        expect(! next.isMoving(t0 + settled), "Settled: nothing to repaint while it holds");
+        expectWithinAbsoluteError(next.getCardAlpha(t0 + A::holdSeconds - 0.01), 1.0f, 1.0e-6f, "Holds");
+
+        const double midFade = t0 + A::holdSeconds + A::fadeSeconds * 0.5;
+        expect(next.getCardAlpha(midFade) > 0.0f && next.getCardAlpha(midFade) < 1.0f, "Fading");
+        expect(next.isMoving(midFade), "Moving while it fades");
+        expect(! next.isActive(t0 + A::holdSeconds + A::fadeSeconds + 0.01), "Gone after the fade");
+
+        A previous;
+        previous.trigger(-1, t0);
+        expectWithinAbsoluteError(previous.getCardOffset(t0), -1.0f, 1.0e-6f, "Previous enters from the left");
+
+        A menu;
+        menu.trigger(0, t0);
+        expectWithinAbsoluteError(menu.getCardOffset(t0), 0.0f, 1.0e-6f, "A menu pick fades in place");
+    }
+
+    beginTest("Clicks while the card shows slide the name and restart the hold");
+    {
+        A card;
+        card.trigger(1, t0);
+        const double t1 = t0 + 1.0;
+        card.trigger(-1, t1);
+        expectWithinAbsoluteError(card.getCardAlpha(t1), 1.0f, 1.0e-6f, "The card stays up");
+        expectWithinAbsoluteError(card.getCardOffset(t1), 0.0f, 1.0e-6f, "And does not slide in again");
+        expectEquals(card.getNameDirection(), -1);
+        expectWithinAbsoluteError(card.getNameProgress(t1), 0.0f, 1.0e-6f, "The new name starts its slide");
+        expect(card.isNameSliding(t1) && card.isMoving(t1), "Moving while the name slides");
+        expectWithinAbsoluteError(card.getNameProgress(t1 + settled), 1.0f, 1.0e-6f, "And settles");
+        expectWithinAbsoluteError(card.getCardAlpha(t0 + A::holdSeconds + A::fadeSeconds), 1.0f, 1.0e-6f,
+                                  "The hold restarts from the latest click");
+        expect(! card.isActive(t1 + A::holdSeconds + A::fadeSeconds + 0.01), "Then fades as usual");
+    }
+
+    beginTest("A click while the card fades brings it back without a jump");
+    {
+        A card;
+        card.trigger(1, t0);
+        const double t1 = t0 + A::holdSeconds + A::fadeSeconds * 0.5;
+        const float before = card.getCardAlpha(t1);
+        card.trigger(1, t1);
+        expectWithinAbsoluteError(card.getCardAlpha(t1), before, 1.0e-4f, "Opacity continues from where it was");
+        expectWithinAbsoluteError(card.getCardOffset(t1), 0.0f, 1.0e-6f, "No second slide-in");
+        expectWithinAbsoluteError(card.getCardAlpha(t1 + settled), 1.0f, 1.0e-6f, "Back to opaque");
+    }
+
+    beginTest("The card waits for a slow load, and keepAlive never revives a fading card");
+    {
+        A card;
+        card.trigger(1, t0);
+        for (double t = t0; t < t0 + 3.0; t += 0.1)
+            card.keepAlive(t);   // the profile is still loading
+        expectWithinAbsoluteError(card.getCardAlpha(t0 + 3.0), 1.0f, 1.0e-6f, "Still up while loading");
+        expect(! card.isActive(t0 + 3.0 + A::holdSeconds + A::fadeSeconds), "Fades once the load is done");
+
+        A fading;
+        fading.trigger(1, t0);
+        const double t1 = t0 + A::holdSeconds + 0.1;
+        const float before = fading.getCardAlpha(t1);
+        fading.keepAlive(t1);
+        expectWithinAbsoluteError(fading.getCardAlpha(t1), before, 1.0e-6f, "Already fading: unchanged");
     }
 }
 

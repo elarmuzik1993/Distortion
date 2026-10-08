@@ -5,6 +5,7 @@
 #include "CyclingComboBox.h"
 #include "FontHelper.h"
 #include "PluginProcessor.h"
+#include "ProfileCardAnimation.h"
 
 //==============================================================================
 class Oscilloscope : public juce::Component, public juce::Timer
@@ -2294,6 +2295,213 @@ private:
     float uiScale = 1.0f;
 };
 
+//==============================================================================
+// The browse arrows either side of the PROFILE pill. Each draws its chevron
+// against the pill's side, which keeps the left one clear of the Distortion
+// Amount label running up to the column.
+class ProfileArrowButton : public juce::Button
+{
+public:
+    explicit ProfileArrowButton(bool isForward)
+        : juce::Button(isForward ? "Next profile" : "Previous profile"), forward(isForward) {}
+
+    void paintButton(juce::Graphics& g, bool highlighted, bool down) override
+    {
+        const auto b = getLocalBounds().toFloat();
+        const float h = juce::jmin(b.getHeight() * 0.5f, b.getWidth() * 0.9f);
+        const float w = h * 0.55f;
+        const float inset = juce::jmax(1.0f, b.getWidth() * 0.12f);
+        // Each chevron sits on the side of its box nearest the pill: "next" (right of
+        // the pill) at its box's left edge, "previous" at its box's right edge.
+        const float back = forward ? b.getX() + inset : b.getRight() - inset;
+        const float tip  = forward ? back + w : back - w;
+        const float cy = b.getCentreY();
+
+        juce::Path chevron;
+        chevron.startNewSubPath(back, cy - h * 0.5f);
+        chevron.lineTo(tip, cy);
+        chevron.lineTo(back, cy + h * 0.5f);
+
+        const float alpha = ! isEnabled() ? 0.25f : (down ? 1.0f : (highlighted ? 0.95f : 0.6f));
+        g.setColour(juce::Colour(0xFFFF0044).withAlpha(alpha));
+        g.strokePath(chevron, juce::PathStrokeType(1.5f, juce::PathStrokeType::curved,
+                                                   juce::PathStrokeType::rounded));
+    }
+
+private:
+    bool forward;
+};
+
+//==============================================================================
+// The card that names the profile while you step through the library: over the
+// scope when it is showing, otherwise a bubble above the PROFILE pill. Purely a
+// display; it never takes the mouse, so the XY pad and the EQ keep working
+// under it. Timing lives in ProfileCardAnimation; the editor's 60 Hz tick calls
+// tick(), and the card repaints only while something moves or changes.
+class ProfileCard : public juce::Component
+{
+public:
+    struct Content
+    {
+        juce::String name;     // the profile, or what to do when there is none
+        juce::String detail;   // its folder and place in the library: "FENDER  |  3 / 24"
+        juce::String status;   // "LOADING..." or the load error
+        bool attention = false;
+    };
+
+    ProfileCard()
+    {
+        setInterceptsMouseClicks(false, false);
+        setVisible(false);
+    }
+
+    // Where the card sits, in the parent's coordinates, and how far it slides in.
+    // A bubble points down at pointerX (parent coordinates); over the scope it
+    // has no pointer.
+    void setGeometry(juce::Rectangle<int> cardInParent, int travelPx, bool isBubble, int pointerX, float uiScale)
+    {
+        travel = travelPx;
+        bubble = isBubble;
+        scale = uiScale;
+        const int pad = juce::roundToInt(16.0f * scale);
+        setBounds(cardInParent.expanded(travel + pad, pad));
+        card = cardInParent.translated(-getX(), -getY()).toFloat();
+        pointer = static_cast<float>(pointerX - getX());
+        repaint();
+    }
+
+    void show(const Content& content, int direction, double now)
+    {
+        if (animation.isActive(now))
+            previous = current;
+        current = content;
+        animation.trigger(direction, now);
+        lastNow = now;
+        toFront(false);
+        setVisible(true);
+        repaint();
+    }
+
+    // The status line of the profile it names, as its load progresses.
+    void setStatus(const juce::String& status, bool attention, double now)
+    {
+        if (status == current.status && attention == current.attention)
+            return;
+        current.status = status;
+        current.attention = attention;
+        lastNow = now;
+        repaint();
+    }
+
+    void keepAlive(double now) { animation.keepAlive(now); }
+
+    void tick(double now)
+    {
+        if (! animation.isActive(now))
+        {
+            if (isVisible())
+                setVisible(false);
+            return;
+        }
+        const bool moving = animation.isMoving(now) || animation.isMoving(lastNow);
+        lastNow = now;
+        if (moving)
+            repaint();
+    }
+
+    const Content& getContent() const noexcept { return current; }
+
+    void paint(juce::Graphics& g) override
+    {
+        const float alpha = animation.getCardAlpha(lastNow);
+        if (alpha <= 0.0f || card.isEmpty())
+            return;
+
+        const auto accent = juce::Colour(0xFFFF0044);
+        const auto box = card.translated(animation.getCardOffset(lastNow) * static_cast<float>(travel), 0.0f);
+        const float corner = 6.0f * scale;
+
+        // One outline: the rounded box, plus for the bubble a tab pointing down at
+        // the pill, traced into the bottom edge so no border line crosses its base.
+        juce::Path shape;
+        if (bubble)
+        {
+            const float tw = 7.0f * scale;
+            const float px = juce::jlimit(box.getX() + corner + tw, box.getRight() - corner - tw,
+                                          pointer + (box.getX() - card.getX()));
+            const float l = box.getX(), t = box.getY(), r = box.getRight(), b = box.getBottom();
+            shape.startNewSubPath(l + corner, t);
+            shape.lineTo(r - corner, t);
+            shape.quadraticTo(r, t, r, t + corner);
+            shape.lineTo(r, b - corner);
+            shape.quadraticTo(r, b, r - corner, b);
+            shape.lineTo(px + tw, b);
+            shape.lineTo(px, b + tw);
+            shape.lineTo(px - tw, b);
+            shape.lineTo(l + corner, b);
+            shape.quadraticTo(l, b, l, b - corner);
+            shape.lineTo(l, t + corner);
+            shape.quadraticTo(l, t, l + corner, t);
+            shape.closeSubPath();
+        }
+        else
+        {
+            shape.addRoundedRectangle(box, corner);
+        }
+
+        juce::DropShadow(accent.withAlpha(0.35f * alpha), juce::roundToInt(14.0f * scale), {})
+            .drawForPath(g, shape);
+        // Over the scope the grid may show faintly through; the bubble sits on
+        // controls, which would only clutter the text, so it is opaque.
+        g.setColour(juce::Colour(0xFF101010).withAlpha((bubble ? 1.0f : 0.94f) * alpha));
+        g.fillPath(shape);
+        g.setColour(accent.withAlpha(alpha));
+        g.strokePath(shape, juce::PathStrokeType(1.5f * scale, juce::PathStrokeType::mitered));
+
+        // The names, clipped to the card so a sliding one leaves at its edge.
+        const auto inner = box.reduced(10.0f * scale, 4.0f * scale);
+        juce::Graphics::ScopedSaveState clip(g);
+        g.reduceClipRegion(inner.toNearestInt());
+
+        const float progress = animation.getNameProgress(lastNow);
+        const float shift = inner.getWidth() * 0.35f * static_cast<float>(animation.getNameDirection());
+        if (animation.isNameSliding(lastNow))
+            drawContent(g, previous, inner.translated(-shift * progress, 0.0f), alpha * (1.0f - progress));
+        const float incomingAlpha = animation.isNameSliding(lastNow) ? progress : 1.0f;
+        drawContent(g, current, inner.translated(shift * (1.0f - progress), 0.0f), alpha * incomingAlpha);
+    }
+
+private:
+    void drawContent(juce::Graphics& g, const Content& content, juce::Rectangle<float> area, float alpha) const
+    {
+        if (alpha <= 0.0f)
+            return;
+        const float nameH = area.getHeight() * (bubble ? 0.52f : 0.56f);
+        auto nameArea = area.removeFromTop(nameH);
+
+        g.setColour(juce::Colours::white.withAlpha(alpha));
+        g.setFont(Fonts::getOrbitron(nameH * 0.62f, true));
+        g.drawFittedText(content.name.toUpperCase(), nameArea.toNearestInt(), juce::Justification::centredBottom, 1, 0.6f);
+
+        juce::String line = content.detail;
+        if (content.status.isNotEmpty())
+            line = line.isEmpty() ? content.status : line + "  |  " + content.status;
+        const auto colour = content.attention ? juce::Colour(0xFFFFAA00) : juce::Colour(0xFFFF2244);
+        g.setColour(colour.withAlpha(alpha));
+        g.setFont(Fonts::getOrbitron(area.getHeight() * 0.58f, false));
+        g.drawFittedText(line.toUpperCase(), area.toNearestInt(), juce::Justification::centredTop, 1, 0.6f);
+    }
+
+    ProfileCardAnimation animation;
+    Content current, previous;
+    juce::Rectangle<float> card;
+    float pointer = 0.0f;
+    float scale = 1.0f;
+    int travel = 0;
+    bool bubble = false;
+    double lastNow = 0.0;
+};
+
 class PluginEditor : public juce::AudioProcessorEditor, public juce::Timer
 {
 public:
@@ -2309,6 +2517,11 @@ public:
     // squeezed into a collapsed window, which reads as a layout regression that
     // is not actually there. Pass an invalid File to restore the default root.
     static void setDataRootOverride(const juce::File& dir);
+
+    // Shows the profile card as an arrow click would: for the loaded profile when
+    // there is one, else for the first library step (the empty-library hint when
+    // the library is empty).
+    void showProfileCardForSnapshot(int direction);
    #endif
 
     // Product data root and the settings file inside it. Static and free of
@@ -2388,9 +2601,16 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> cleanBoostAttachment;
 
     // NAM profile (prototype). Sits in the clip-type column's label slot and opens
-    // a menu to load or clear a .nam profile, which replaces the clip type. Shows
-    // the profile's name while one is loaded; amber when it needs attention.
+    // a menu to load, browse or clear a .nam profile, which replaces the clip type.
+    // Always reads PROFILE: lit while one is loaded, amber when it needs attention.
+    // The arrows either side step through the profile library, and the card names
+    // what each step loads.
     juce::TextButton profileButton;
+    ProfileArrowButton profilePrevButton { false };
+    ProfileArrowButton profileNextButton { true };
+    ProfileCard profileCard;
+    juce::File profileCardFile;       // the profile the card names; its status line follows that load
+    juce::File profileImportFolder;   // where "Load profile..." opens: the folder last imported from
     std::unique_ptr<juce::FileChooser> profileChooser;
     juce::String shownProfileState;   // what the button last showed; the 60 Hz tick only repaints on change
 
@@ -2522,6 +2742,16 @@ private:
     void updateMonoIndicator();
     void showProfileMenu();
     void updateProfileIndicator();
+    // Loads the profile `delta` steps away in the library and shows the card.
+    void stepProfile(int delta);
+    // Copies files into the library and loads the first of them.
+    void importAndLoadProfiles(const juce::Array<juce::File>& files);
+    void loadLibraryProfile(const juce::File& file, int direction);
+    // direction: +1/-1 from the arrows, 0 from the menu. An invalid file shows the
+    // empty-library hint.
+    void showProfileCard(const juce::File& file, int direction);
+    void layoutProfileCard();
+    void advanceProfileCard();
     void loadSettings();
     void saveSettings();
    #if defined (DISTORTION_UI_SNAPSHOT) && DISTORTION_UI_SNAPSHOT
