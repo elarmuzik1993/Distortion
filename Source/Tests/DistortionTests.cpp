@@ -7571,4 +7571,211 @@ void NamProfileTests::runTest()
     }
 }
 
+//==============================================================================
+// Profile library
+//==============================================================================
+
+namespace
+{
+    // A folder for one test, removed with everything in it afterwards.
+    struct ScratchFolder
+    {
+        explicit ScratchFolder(const juce::String& name)
+            : dir(juce::File::getSpecialLocation(juce::File::tempDirectory).getNonexistentChildFile(name, {}, false))
+        {
+            dir.createDirectory();
+        }
+        ~ScratchFolder() { dir.deleteRecursively(); }
+
+        juce::File write(const juce::String& relativePath, const juce::String& content) const
+        {
+            auto file = dir.getChildFile(relativePath);
+            file.getParentDirectory().createDirectory();
+            file.replaceWithText(content);
+            return file;
+        }
+
+        juce::File dir;
+    };
+
+    juce::StringArray relativeNames(const juce::Array<juce::File>& files, const juce::File& root)
+    {
+        juce::StringArray names;
+        for (const auto& f : files)
+            names.add(f.getRelativePathFrom(root).replaceCharacter('\\', '/'));
+        return names;
+    }
+}
+
+void ProfileLibraryTests::runTest()
+{
+    beginTest("Lists .nam files in natural order, subfolders included");
+    {
+        ScratchFolder scratch("sledge-library");
+        scratch.write("amp 10.nam", "10");
+        scratch.write("amp 2.nam", "2");
+        scratch.write("Fender/clean.nam", "clean");
+        scratch.write("notes.txt", "not a profile");
+
+        ProfileLibrary library(scratch.dir);
+        expectEquals(relativeNames(library.list(), scratch.dir).joinIntoString("|"),
+                     juce::String("amp 2.nam|amp 10.nam|Fender/clean.nam"));
+        expect(ProfileLibrary(scratch.dir.getChildFile("missing")).list().isEmpty(),
+               "A library that doesn't exist yet is empty");
+    }
+
+    beginTest("Steps wrap at both ends and start from an end outside the library");
+    {
+        ScratchFolder scratch("sledge-library");
+        const auto a = scratch.write("a.nam", "a");
+        const auto b = scratch.write("b.nam", "b");
+        const auto c = scratch.write("sub/c.nam", "c");
+        ProfileLibrary library(scratch.dir);
+
+        expect(library.step(a, 1) == b, "Forward");
+        expect(library.step(b, -1) == a, "Back");
+        expect(library.step(c, 1) == a, "Forward from the last wraps to the first");
+        expect(library.step(a, -1) == c, "Back from the first wraps to the last");
+        expect(library.step({}, 1) == a, "Forward from nothing starts at the first");
+        expect(library.step(juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("x.nam"), -1) == c,
+               "Back from outside starts at the last");
+
+        const auto position = library.positionOf(b);
+        expectEquals(position.index, 1);
+        expectEquals(position.count, 3);
+        expectEquals(library.positionOf({}).index, -1);
+
+        ScratchFolder empty("sledge-library-empty");
+        expect(ProfileLibrary(empty.dir).step(a, 1) == juce::File(), "An empty library has nowhere to go");
+    }
+
+    beginTest("Importing copies in, reuses the same content and numbers different content");
+    {
+        ScratchFolder scratch("sledge-library");
+        ScratchFolder outside("sledge-downloads");
+        ProfileLibrary library(scratch.dir.getChildFile("Profiles"));   // created by the first import
+        juce::String error;
+
+        const auto first = outside.write("jcm.nam", "model A");
+        const auto copied = library.import(first, error);
+        expect(copied == library.getRoot().getChildFile("jcm.nam"), "Copied under its own name: " + error);
+        expectEquals(copied.loadFileAsString(), juce::String("model A"));
+        expect(first.existsAsFile(), "The original stays where it was");
+
+        expect(library.import(first, error) == copied, "The same content again is reused");
+        expect(library.import(copied, error) == copied, "A library file comes back as it is");
+
+        const auto other = outside.write("other/jcm.nam", "model B");
+        const auto numbered = library.import(other, error);
+        expect(numbered == library.getRoot().getChildFile("jcm (2).nam"), "Different content gets a number");
+        expectEquals(numbered.loadFileAsString(), juce::String("model B"));
+        expect(library.import(other, error) == numbered, "And is reused under that number");
+
+        expect(library.import(outside.dir.getChildFile("gone.nam"), error) == juce::File(), "A missing file fails");
+        expect(error.isNotEmpty(), "With a reason");
+    }
+
+    beginTest("Fingerprints identify content, wherever the file is");
+    {
+        ScratchFolder scratch("sledge-library");
+        const auto a = scratch.write("a.nam", "same bytes");
+        const auto b = scratch.write("sub/b.nam", "same bytes");
+        const auto c = scratch.write("c.nam", "different!");   // same size, different content
+        const auto print = ProfileLibrary::fingerprint(a);
+
+        expect(print.isNotEmpty(), "A readable file has one");
+        expectEquals(ProfileLibrary::fingerprint(b), print, "Same content, same fingerprint");
+        expect(ProfileLibrary::fingerprint(c) != print, "Same size alone doesn't match");
+        expect(ProfileLibrary::fingerprint(scratch.dir.getChildFile("none.nam")).isEmpty(), "No file, no fingerprint");
+
+        ProfileLibrary library(scratch.dir);
+        expect(library.findByFingerprint(print, "b.nam") == b, "The preferred name wins among matches");
+        expect(library.findByFingerprint(print) == a, "Otherwise the first in order");
+        expect(library.findByFingerprint(ProfileLibrary::fingerprint(c), "a.nam") == c,
+               "A same-named file with other content is skipped");
+        expect(library.findByFingerprint({}) == juce::File(), "No fingerprint finds nothing");
+    }
+
+    beginTest("A session whose profile file moved loads the library's copy");
+    {
+        ScratchFolder libraryFolder("sledge-library");
+        ScratchFolder downloads("sledge-downloads");
+        const auto original = downloads.dir.getChildFile("wavenet.nam");
+        expect(namTestModel("wavenet.nam").copyFileTo(original), "Test model copied");
+
+        juce::MemoryBlock saved;
+        {
+            PluginProcessor processor;
+            prepareForProfileTest(processor);
+            expect(processor.loadProfileBlocking(original), "Loads from where it was downloaded");
+            expect(processor.getProfileStatus().fingerprint.isNotEmpty(), "The loaded profile has a fingerprint");
+            processor.getStateInformation(saved);
+        }
+        auto savedXml = juce::AudioProcessor::getXmlFromBinary(saved.getData(), static_cast<int>(saved.getSize()));
+        expect(savedXml->getStringAttribute(PluginProcessor::profileFingerprintAttribute).isNotEmpty(),
+               "The session saves the fingerprint");
+
+        juce::String error;
+        const auto copy = ProfileLibrary(libraryFolder.dir).import(original, error);
+        expect(copy.existsAsFile(), "Imported: " + error);
+        original.deleteFile();
+
+        PluginProcessor restored;
+        restored.setProfileLibraryRoot(libraryFolder.dir);
+        prepareForProfileTest(restored);
+        restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+        expect(waitForProfileLoad(restored), "Restore finished");
+        expect(restored.isProfileLoaded(), "The library's copy stands in for the missing file");
+        expectEquals(restored.getProfileStatus().path, copy.getFullPathName(), "The session now points at the copy");
+        expect(! restored.parameters.state.hasProperty(PluginProcessor::profileFingerprintAttribute),
+               "The fingerprint stays out of the parameter tree, so presets never carry it");
+
+        juce::MemoryBlock resaved;
+        restored.getStateInformation(resaved);
+        auto resavedXml = juce::AudioProcessor::getXmlFromBinary(resaved.getData(), static_cast<int>(resaved.getSize()));
+        expectEquals(resavedXml->getStringAttribute(PluginProcessor::profilePathAttribute), copy.getFullPathName());
+
+        restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+        expect(! restored.getProfileStatus().loading, "Restoring the same session again keeps the copy loaded");
+    }
+
+    beginTest("A missing profile with no copy in the library stays missing, and remembered");
+    {
+        ScratchFolder libraryFolder("sledge-library");
+        ScratchFolder downloads("sledge-downloads");
+        const auto original = downloads.dir.getChildFile("wavenet.nam");
+        expect(namTestModel("wavenet.nam").copyFileTo(original), "Test model copied");
+
+        juce::MemoryBlock saved;
+        {
+            PluginProcessor processor;
+            prepareForProfileTest(processor);
+            processor.loadProfileBlocking(original);
+            processor.getStateInformation(saved);
+        }
+        original.deleteFile();
+
+        // A different model under the same name must not stand in for it.
+        expect(namTestModel("lstm.nam").copyFileTo(libraryFolder.dir.getChildFile("wavenet.nam")), "Impostor copied");
+
+        PluginProcessor restored;
+        restored.setProfileLibraryRoot(libraryFolder.dir);
+        prepareForProfileTest(restored);
+        restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+        expect(waitForProfileLoad(restored), "Restore finished");
+        expect(! restored.isProfileLoaded(), "A same-named file with other content is not loaded");
+        expect(restored.getProfileStatus().error.isNotEmpty(), "The missing file is reported");
+
+        juce::MemoryBlock resaved;
+        restored.getStateInformation(resaved);
+        auto savedXml = juce::AudioProcessor::getXmlFromBinary(saved.getData(), static_cast<int>(saved.getSize()));
+        auto resavedXml = juce::AudioProcessor::getXmlFromBinary(resaved.getData(), static_cast<int>(resaved.getSize()));
+        expectEquals(resavedXml->getStringAttribute(PluginProcessor::profilePathAttribute), original.getFullPathName(),
+                     "The path is kept for when the file comes back");
+        expectEquals(resavedXml->getStringAttribute(PluginProcessor::profileFingerprintAttribute),
+                     savedXml->getStringAttribute(PluginProcessor::profileFingerprintAttribute),
+                     "So is the fingerprint");
+    }
+}
+
 #endif // JUCE_DEBUG

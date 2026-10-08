@@ -22,6 +22,7 @@
 #include "Diagnostics/CurlTransport.h"
 #include "Diagnostics/PingSender.h"
 #include "Nam/NamProfile.h"
+#include "Nam/ProfileLibrary.h"
 
 //==============================================================================
 // DSP Constants - Centralized configuration for audio processing algorithms
@@ -216,6 +217,7 @@ class PluginProcessor : public juce::AudioProcessor,
     friend class CoefficientPropagationTest;
     friend class ProcessBlockDecompTest;
     friend class NamProfileTests;
+    friend class ProfileLibraryTests;
     friend class ShapeProcessorTests;
 #endif
 
@@ -329,6 +331,7 @@ public:
         juce::String name;                // loaded profile, empty when none
         juce::String path;                // requested file (kept if loading failed)
         juce::String error;               // last load error, empty if none
+        juce::String fingerprint;         // ProfileLibrary::fingerprint of the file; the session's until a load succeeds
         double expectedSampleRate = 0.0;  // the rate the profile was trained at
         bool loading = false;
     };
@@ -336,11 +339,13 @@ public:
     // Message thread. Loads on a background thread; the timer then installs it:
     // a crossfade from the current profile, or a duck around the rebuild into or
     // out of profile mode.
-    void loadProfileAsync(const juce::File& file);
+    // A fingerprint (from a saved session) lets a missing file be found in the
+    // profile library instead, by content.
+    void loadProfileAsync(const juce::File& file, const juce::String& fingerprint = {});
     // Loads on the calling thread (never the audio thread) and stages the profile;
     // the next timer tick or prepareToPlay installs it. For offline tools and
     // tests. Returns false and records the error on failure.
-    bool loadProfileBlocking(const juce::File& file);
+    bool loadProfileBlocking(const juce::File& file, const juce::String& fingerprint = {});
     void clearProfile();
     ProfileStatus getProfileStatus() const;
     bool isProfileLoaded() const;
@@ -350,6 +355,14 @@ public:
     bool isProfileSwitchIdle() const;
 
     static constexpr const char* profilePathAttribute = "namProfilePath";
+    static constexpr const char* profileFingerprintAttribute = "namProfileFingerprint";
+
+    // The library the editor browses and imports into, and where a session whose
+    // profile file is missing looks for it by content. ProfileLibrary::defaultRoot()
+    // in the plugin; unit-test builds start with none, and tests point it at a
+    // scratch folder.
+    ProfileLibrary getProfileLibrary() const;
+    void setProfileLibraryRoot(const juce::File& root);
 
 private:
     // --- Bug reporting (USE-53) ---
@@ -806,6 +819,7 @@ private:
     float profileRightStep = 1.0f;       // weight change per sample, set in prepareToPlay
     mutable juce::CriticalSection profileStatusLock;
     ProfileStatus profileStatus;
+    juce::File profileLibraryRoot;                      // under profileStatusLock
     std::atomic<int> stagedRefreshesInFlight { 0 };    // staged profiles out on the loader being re-prepared
     // Declared after everything its jobs touch, so it is destroyed (and joined) first.
     std::unique_ptr<juce::ThreadPool> profileLoader;   // created by getProfileLoader, under profileStatusLock
@@ -821,8 +835,9 @@ private:
     float duckGain = 1.0f;                          // audio thread
     float duckStep = 1.0f;                          // gain change per sample, set in prepareToPlay
 
-    int beginProfileRequest(const juce::File& file);  // records the request, returns its id
-    bool loadProfileNow(const juce::File& file, int requestId);
+    // Records the request, returns its id.
+    int beginProfileRequest(const juce::File& file, const juce::String& fingerprint = {});
+    bool loadProfileNow(const juce::File& file, const juce::String& fingerprint, int requestId);
     bool isPreparedForHost(const NamProfile& profile) const;
     bool canCrossfadeTo(const NamProfile& next) const noexcept;             // audio thread
     void takePendingProfile() noexcept;                                     // audio thread, block start

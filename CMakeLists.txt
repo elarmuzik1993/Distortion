@@ -176,6 +176,8 @@ set(PLUGIN_SOURCES
     Source/Nam/NamProfile.cpp
     Source/Nam/ResamplingIsland.h
     Source/Nam/ResamplingIsland.cpp
+    Source/Nam/ProfileLibrary.h
+    Source/Nam/ProfileLibrary.cpp
 )
 
 # Test sources

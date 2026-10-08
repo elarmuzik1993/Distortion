@@ -1092,6 +1092,13 @@ public:
     void runTest() override;
 };
 
+class ProfileLibraryTests : public juce::UnitTest
+{
+public:
+    ProfileLibraryTests() : UnitTest("Profile Library", TestCategories::StateIO) {}
+    void runTest() override;
+};
+
 // Force static test registration
 inline void registerAllTests()
 {
@@ -1153,6 +1160,7 @@ inline void registerAllTests()
     static SettingsPersistenceTest settingsPersistenceTest;
     static ResamplingIslandTests resamplingIslandTests;
     static NamProfileTests namProfileTests;
+    static ProfileLibraryTests profileLibraryTests;
 }
 
 #endif // JUCE_DEBUG

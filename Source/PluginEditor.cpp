@@ -1741,6 +1741,7 @@ void PluginEditor::savePreset(const juce::String& presetName)
                       PluginProcessor::currentStateVersion, nullptr);
     // Presets don't carry a profile yet; drop any session path a preset loaded earlier left behind.
     state.removeProperty(PluginProcessor::profilePathAttribute, nullptr);
+    state.removeProperty(PluginProcessor::profileFingerprintAttribute, nullptr);
     auto stateXml = state.createXml();
     if (stateXml != nullptr)
         preset.addChildElement(stateXml.release());
