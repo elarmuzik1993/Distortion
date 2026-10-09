@@ -23,7 +23,67 @@ env:
   PLUGIN_NAME: "Sledge Distortion"
 
 jobs:
+  # Decides whether the three platform builds run. A change that touches only
+  # documentation (Markdown, docs/, the .agents/ hand-off notes) cannot change a
+  # built binary, yet each such push used to pay for a full three-platform build
+  # plus pluginval - about a third of all runs, since every session hand-off is a
+  # STATE.md-only PR followed by its merge.
+  #
+  # This is a job-level gate rather than workflow-level paths-ignore on purpose:
+  # a workflow skipped by paths-ignore never reports its checks, so a branch
+  # protection rule requiring them leaves the PR pending forever. A job skipped
+  # by `if:` reports success, so required checks still clear.
+  #
+  # Anything uncertain builds: tags, manual runs, a new branch, a force-push
+  # whose old head is gone, or an empty diff.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        fetch-depth: 0
+        filter: blob:none   # history and trees only; git diff --name-only needs no blobs
+
+    - name: Detect docs-only changes
+      id: check
+      shell: bash
+      env:
+        EVENT: ${{ github.event_name }}
+        PR_BASE: ${{ github.event.pull_request.base.sha }}
+        PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        PUSH_BEFORE: ${{ github.event.before }}
+      run: |
+        build=true
+        range=""
+        if [ "$GITHUB_REF_TYPE" = tag ]; then
+          :
+        elif [ "$EVENT" = pull_request ]; then
+          range="$PR_BASE...$PR_HEAD"
+        elif [ "$EVENT" = push ] && [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != 0000000000000000000000000000000000000000 ]; then
+          range="$PUSH_BEFORE..$GITHUB_SHA"
+        fi
+        if [ -n "$range" ] && files=$(git diff --name-only "$range") && [ -n "$files" ]; then
+          build=false
+          while IFS= read -r f; do
+            case "$f" in
+              # Packaged into every bundle and asserted by the packaging steps.
+              THIRD-PARTY-NOTICES.md) build=true ;;
+              *.md|docs/*|.agents/*) ;;
+              *) build=true ;;
+            esac
+          done <<< "$files"
+          echo "changed files ($range):"
+          echo "$files"
+        fi
+        echo "build=$build" >> "$GITHUB_OUTPUT"
+        echo "build=$build"
+
   build-windows:
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: windows-latest
 
     # Azure Trusted Signing creds (set as repo secrets to activate signing).
@@ -143,7 +203,13 @@ jobs:
         files-folder-filter: exe
         files-folder-recurse: false
 
+    # Artifact storage: each run used to keep ~108 MB for 30 days. Now the
+    # installers upload on tags only (the release job is their sole consumer;
+    # dev builds still build them, so packaging stays tested), the bare VST3
+    # bundles are not uploaded at all (the ZIP/tarball carries the same bundle),
+    # and dev artifacts expire after 7 days. About 48 MB per dev run remains.
     - name: Upload Windows installer
+      if: github.ref_type == 'tag'
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: SledgeDistortion-Installer-Windows
@@ -157,13 +223,6 @@ jobs:
         echo "=== Distortion_artefacts contents ==="
         find build/Distortion_artefacts -type d | head -30
         cp -r "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Sledge Distortion.vst3" artifact/Windows/
-
-    - name: Upload Windows VST3
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-      with:
-        name: SledgeDistortion-VST3-Windows
-        path: artifact/Windows/Sledge Distortion.vst3
-        retention-days: 30
 
     # Friction-free download: unzip and drop the .vst3 into the VST3 folder.
     # Copying a bundle does not trip SmartScreen the way running the unsigned
@@ -246,9 +305,11 @@ jobs:
       with:
         name: SledgeDistortion-Windows-zip
         path: SledgeDistortion-*-Windows.zip
-        retention-days: 30
+        retention-days: ${{ github.ref_type == 'tag' && 30 || 7 }}
 
   build-linux:
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -333,13 +394,6 @@ jobs:
         mkdir -p artifact/Linux
         cp -r "build/Distortion_artefacts/${{ env.BUILD_TYPE }}/VST3/Sledge Distortion.vst3" artifact/Linux/
 
-    - name: Upload Linux VST3
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-      with:
-        name: SledgeDistortion-VST3-Linux
-        path: artifact/Linux/Sledge Distortion.vst3
-        retention-days: 30
-
     - name: Package Linux tarball
       run: |
         # Version-stamped like every other release asset; SHA256SUMS in the
@@ -377,10 +431,13 @@ jobs:
       with:
         name: SledgeDistortion-Linux-tarball
         path: SledgeDistortion-*-Linux.tar.gz
-        retention-days: 30
+        retention-days: ${{ github.ref_type == 'tag' && 30 || 7 }}
 
   build-macos:
-    # Runs on every push and PR, alongside Windows and Linux.
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
+    # Runs on every push and PR that changes more than docs (see `changes`),
+    # alongside Windows and Linux.
     #
     # This job used to be gated to tags and manual dispatch because GitHub bills
     # macOS runners at 10x minutes (Linux 1x, Windows 2x). That multiplier only
@@ -552,6 +609,7 @@ jobs:
         xcrun stapler staple "$PKG"
 
     - name: Upload macOS installer
+      if: github.ref_type == 'tag'
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: SledgeDistortion-Installer-macOS
@@ -595,7 +653,7 @@ jobs:
       with:
         name: SledgeDistortion-macOS-zip
         path: SledgeDistortion-*-macOS.zip
-        retention-days: 30
+        retention-days: ${{ github.ref_type == 'tag' && 30 || 7 }}
 
   # Create release when a tag is pushed
   release:
