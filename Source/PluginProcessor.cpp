@@ -2348,13 +2348,15 @@ void PluginProcessor::setStateInformation(const void* data, int sizeInBytes)
         // Loaded or on its way: a host restoring the same state twice keeps it. A
         // path whose last load failed is tried again, since the file may be back.
         // The fingerprint matches too when the library's copy stood in for the file.
-        else if (juce::File::isAbsolutePath(profilePath) && ! current.holds(profilePath, fingerprint))
+        else if (! current.holds(profilePath, fingerprint))
         {
             // Drop the current profile first, so a session whose file is missing
             // falls back to the built-in clip type rather than keeping this one.
             if (isProfileLoaded())
                 clearProfile();
-            loadProfileAsync(juce::File(profilePath), fingerprint);
+            // As saved: a path from another OS still finds the library's copy by
+            // its fingerprint, and failing that is kept for the next save.
+            requestProfile(profilePath, fingerprint);
         }
 
         // Signal audio thread to reset state (thread-safe handoff)
@@ -2409,11 +2411,11 @@ void PluginProcessor::loadStartupProfileOnce()
         loadProfileAsync(startupProfile);
 }
 
-int PluginProcessor::beginProfileRequest(const juce::File& file, const juce::String& fingerprint)
+int PluginProcessor::beginProfileRequest(const juce::String& path, const juce::String& fingerprint)
 {
     profileIntentKnown.store(true);
     const juce::ScopedLock sl(profileStatusLock);
-    profileStatus.path = file.getFullPathName();
+    profileStatus.path = path;
     profileStatus.fingerprint = fingerprint;   // kept for the next save if the load fails
     profileStatus.error = {};
     profileStatus.loading = true;
@@ -2422,8 +2424,13 @@ int PluginProcessor::beginProfileRequest(const juce::File& file, const juce::Str
 
 void PluginProcessor::loadProfileAsync(const juce::File& file, const juce::String& fingerprint)
 {
-    const int requestId = beginProfileRequest(file, fingerprint);
-    getProfileLoader().addJob([this, file, fingerprint, requestId] { loadProfileNow(file, fingerprint, requestId); });
+    requestProfile(file.getFullPathName(), fingerprint);
+}
+
+void PluginProcessor::requestProfile(const juce::String& path, const juce::String& fingerprint)
+{
+    const int requestId = beginProfileRequest(path, fingerprint);
+    getProfileLoader().addJob([this, path, fingerprint, requestId] { loadProfileNow(path, fingerprint, requestId); });
 }
 
 juce::ThreadPool& PluginProcessor::getProfileLoader()
@@ -2439,7 +2446,8 @@ juce::ThreadPool& PluginProcessor::getProfileLoader()
 
 bool PluginProcessor::loadProfileBlocking(const juce::File& file, const juce::String& fingerprint)
 {
-    return loadProfileNow(file, fingerprint, beginProfileRequest(file, fingerprint));
+    const auto path = file.getFullPathName();
+    return loadProfileNow(path, fingerprint, beginProfileRequest(path, fingerprint));
 }
 
 ProfileLibrary PluginProcessor::getProfileLibrary() const
@@ -2454,7 +2462,7 @@ void PluginProcessor::setProfileLibraryRoot(const juce::File& root)
     profileLibraryRoot = root;
 }
 
-bool PluginProcessor::loadProfileNow(const juce::File& requested, const juce::String& sessionFingerprint, int requestId)
+bool PluginProcessor::loadProfileNow(const juce::String& requested, const juce::String& sessionFingerprint, int requestId)
 {
     // Superseded while it waited in the queue: skip it before reading anything.
     // Stepping through the library queues one load per click, and only the last
@@ -2463,14 +2471,23 @@ bool PluginProcessor::loadProfileNow(const juce::File& requested, const juce::St
         return false;
     ++profileFilesRead;
 
-    // A session's file that has moved or gone: the library's copy of the same
-    // content stands in, and the session points at it from the next save on.
-    juce::File file = requested;
-    if (! file.existsAsFile() && sessionFingerprint.isNotEmpty())
+    // A path saved on another OS names no file here.
+    juce::File file = juce::File::isAbsolutePath(requested) ? juce::File(requested) : juce::File();
+    auto fingerprint = file.existsAsFile() ? ProfileLibrary::fingerprint(file) : juce::String();
+
+    // A session's file that has moved or gone, or that now holds other content:
+    // the library's copy of what the session used stands in, and the session
+    // points at it from the next save on. With no copy, a changed file still
+    // loads, as the only candidate left.
+    if (sessionFingerprint.isNotEmpty() && fingerprint != sessionFingerprint)
     {
-        const auto copy = getProfileLibrary().findByFingerprint(sessionFingerprint, requested.getFileName());
+        const auto copy = getProfileLibrary().findByFingerprint(sessionFingerprint,
+                                                                ProfileLibrary::fileNameOf(requested));
         if (copy.existsAsFile())
+        {
             file = copy;
+            fingerprint = sessionFingerprint;
+        }
     }
 
     // One model per channel of the widest layout the plugin accepts (stereo), so
@@ -2485,8 +2502,11 @@ bool PluginProcessor::loadProfileNow(const juce::File& requested, const juce::St
     const int maxBlockSize = hostBlock > 0 ? hostBlock : 512;
 
     juce::String error;
-    auto profile = NamProfile::load(file, numChannels, sampleRate, maxBlockSize, error);
-    const auto fingerprint = profile != nullptr ? ProfileLibrary::fingerprint(file) : juce::String();
+    std::unique_ptr<NamProfile> profile;
+    if (file == juce::File())
+        error = "Profile file not found: " + requested;   // a path from another OS, as saved
+    else
+        profile = NamProfile::load(file, numChannels, sampleRate, maxBlockSize, error);
 
     const juce::ScopedLock sl(profileStatusLock);
     if (requestId != profileRequestId.load())

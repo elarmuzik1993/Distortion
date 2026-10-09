@@ -329,7 +329,7 @@ public:
     struct ProfileStatus
     {
         juce::String name;                // loaded profile, empty when none
-        juce::String path;                // last requested file (kept if loading failed)
+        juce::String path;                // last requested file (kept if loading failed); may be from another OS
         juce::String error;               // last load error, empty if none
         juce::String fingerprint;         // the request's ProfileLibrary::fingerprint; the session's until its file loads
         juce::String loadedPath;          // the file the loaded profile came from, empty when none. A failed
@@ -860,9 +860,12 @@ private:
     float duckStep = 1.0f;                          // gain change per sample, set in prepareToPlay
 
     void loadStartupProfileOnce();
+    // Queues a load of a path as saved, which may come from another OS: the loader
+    // makes a File of it only when it is an absolute path here.
+    void requestProfile(const juce::String& path, const juce::String& fingerprint);
     // Records the request, returns its id.
-    int beginProfileRequest(const juce::File& file, const juce::String& fingerprint = {});
-    bool loadProfileNow(const juce::File& file, const juce::String& fingerprint, int requestId);
+    int beginProfileRequest(const juce::String& path, const juce::String& fingerprint);
+    bool loadProfileNow(const juce::String& path, const juce::String& fingerprint, int requestId);
     bool isPreparedForHost(const NamProfile& profile) const;
     bool canCrossfadeTo(const NamProfile& next) const noexcept;             // audio thread
     void takePendingProfile() noexcept;                                     // audio thread, block start

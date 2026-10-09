@@ -7514,7 +7514,7 @@ void NamProfileTests::runTest()
         juce::String error;
         auto stale = NamProfile::load(model, 2, 44100.0, 512, error);
         expect(stale != nullptr, error);
-        stale->setRequestId(processor.beginProfileRequest(model));
+        stale->setRequestId(processor.beginProfileRequest(model.getFullPathName(), {}));
         auto* staleProfile = stale.get();
         processor.stagedProfile.store(stale.release());
 
@@ -7544,7 +7544,7 @@ void NamProfileTests::runTest()
         juce::String error;
         auto stale = NamProfile::load(model, 2, 44100.0, 512, error);
         expect(stale != nullptr, error);
-        stale->setRequestId(processor.beginProfileRequest(model));
+        stale->setRequestId(processor.beginProfileRequest(model.getFullPathName(), {}));
         processor.stagedProfile.store(stale.release());
 
         // The clear lands while the profile is out of its slot, held on the loader.
@@ -7569,7 +7569,7 @@ void NamProfileTests::runTest()
         juce::String error;
         auto stale = NamProfile::load(model, 2, 44100.0, 512, error);
         expect(stale != nullptr, error);
-        stale->setRequestId(processor.beginProfileRequest(model));
+        stale->setRequestId(processor.beginProfileRequest(model.getFullPathName(), {}));
         processor.stagedProfile.store(stale.release());
 
         LoaderGate busy(processor);
@@ -7936,6 +7936,106 @@ void ProfileLibraryTests::runTest()
         expectEquals(resavedXml->getStringAttribute(PluginProcessor::profileFingerprintAttribute),
                      savedXml->getStringAttribute(PluginProcessor::profileFingerprintAttribute),
                      "So is the fingerprint");
+    }
+
+    beginTest("A session saved on another OS finds the library's copy, and keeps its path without one");
+    {
+        expectEquals(ProfileLibrary::fileNameOf("C:\\Profiles\\amp.nam"), juce::String("amp.nam"));
+        expectEquals(ProfileLibrary::fileNameOf("/Users/me/amp.nam"), juce::String("amp.nam"));
+
+        // A Windows session on macOS or Linux, or the other way round: the path
+        // names no file here, and juce::File can't parse it.
+       #if JUCE_WINDOWS
+        const juce::String foreign = "/Users/someone/Music/Profiles/wavenet.nam";
+       #else
+        const juce::String foreign = "C:\\Users\\someone\\AppData\\Roaming\\Profiles\\wavenet.nam";
+       #endif
+        expect(! juce::File::isAbsolutePath(foreign), "Not a path on this OS");
+
+        const auto model = namTestModel("wavenet.nam");
+        juce::MemoryBlock state;
+        {
+            PluginProcessor source;
+            auto xml = source.parameters.copyState().createXml();
+            xml->setAttribute(PluginProcessor::profilePathAttribute, foreign);
+            xml->setAttribute(PluginProcessor::profileFingerprintAttribute, ProfileLibrary::fingerprint(model));
+            juce::AudioProcessor::copyXmlToBinary(*xml, state);
+        }
+        const auto savedAttribute = [](const juce::MemoryBlock& block, const char* name)
+        {
+            auto xml = juce::AudioProcessor::getXmlFromBinary(block.getData(), static_cast<int>(block.getSize()));
+            return xml != nullptr ? xml->getStringAttribute(name) : juce::String();
+        };
+
+        ScratchFolder libraryFolder("sledge-library");
+        {
+            PluginProcessor restored;
+            restored.setProfileLibraryRoot(libraryFolder.dir);
+            prepareForProfileTest(restored);
+            restored.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+            expect(waitForProfileLoad(restored), "The attempt finished");
+            expect(! restored.isProfileLoaded(), "With no copy here, nothing loads");
+            expect(restored.getProfileStatus().error.contains(foreign), "The error names the saved path");
+
+            juce::MemoryBlock resaved;
+            restored.getStateInformation(resaved);
+            expectEquals(savedAttribute(resaved, PluginProcessor::profilePathAttribute), foreign,
+                         "The path survives, for when the session goes back");
+            expectEquals(savedAttribute(resaved, PluginProcessor::profileFingerprintAttribute),
+                         savedAttribute(state, PluginProcessor::profileFingerprintAttribute), "So does the fingerprint");
+        }
+
+        juce::String error;
+        const auto copy = ProfileLibrary(libraryFolder.dir).import(model, error);
+        expect(copy.existsAsFile(), "Imported: " + error);
+
+        PluginProcessor restored;
+        restored.setProfileLibraryRoot(libraryFolder.dir);
+        prepareForProfileTest(restored);
+        restored.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+        expect(waitForProfileLoad(restored), "Restore finished");
+        expectEquals(restored.getProfileStatus().loadedPath, copy.getFullPathName(),
+                     "The library's copy stands in for the other OS's file");
+    }
+
+    beginTest("A session's file that now holds another profile gives way to the library's copy");
+    {
+        ScratchFolder libraryFolder("sledge-library");
+        const auto atPath = libraryFolder.dir.getChildFile("jcm.nam");
+        expect(namTestModel("wavenet.nam").copyFileTo(atPath), "Test model copied");
+
+        juce::MemoryBlock saved;
+        {
+            PluginProcessor processor;
+            processor.setProfileLibraryRoot(libraryFolder.dir);
+            prepareForProfileTest(processor);
+            expect(processor.loadProfileBlocking(atPath), "Loads");
+            processor.getStateInformation(saved);
+        }
+
+        // Sorted into a subfolder, and a different capture imported under the freed name.
+        const auto moved = libraryFolder.dir.getChildFile("Marshall").getChildFile("jcm.nam");
+        expect(moved.getParentDirectory().createDirectory().wasOk() && atPath.moveFileTo(moved), "Moved");
+        expect(namTestModel("lstm.nam").copyFileTo(atPath), "Another profile takes the name");
+
+        {
+            PluginProcessor restored;
+            restored.setProfileLibraryRoot(libraryFolder.dir);
+            prepareForProfileTest(restored);
+            restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+            expect(waitForProfileLoad(restored), "Restore finished");
+            expectEquals(restored.getProfileStatus().loadedPath, moved.getFullPathName(),
+                         "The session's own profile, found by content, not the one now at its path");
+        }
+
+        // With no copy of it left anywhere, the file at the path is all there is.
+        moved.deleteFile();
+        PluginProcessor restored;
+        restored.setProfileLibraryRoot(libraryFolder.dir);
+        prepareForProfileTest(restored);
+        restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+        expect(waitForProfileLoad(restored), "Restore finished");
+        expectEquals(restored.getProfileStatus().loadedPath, atPath.getFullPathName(), "It loads");
     }
 }
 

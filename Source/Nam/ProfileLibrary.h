@@ -54,6 +54,14 @@ public:
     juce::File findByFingerprint(const juce::String& fingerprint,
                                  const juce::String& preferredName = {}) const;
 
+    // The file name ending a path saved on any OS: "amp.nam" from "C:\Profiles\amp.nam"
+    // as from "/Users/me/amp.nam". A session from another OS holds a path that
+    // juce::File can't parse here.
+    static juce::String fileNameOf(const juce::String& path)
+    {
+        return path.fromLastOccurrenceOf("/", false, false).fromLastOccurrenceOf("\\", false, false);
+    }
+
 private:
     juce::File root;
 };

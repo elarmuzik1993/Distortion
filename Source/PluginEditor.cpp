@@ -1506,7 +1506,7 @@ void PluginEditor::showProfileMenu()
     }
     else if (status.loading)
     {
-        menu.addItem("Loading " + juce::File(status.path).getFileName() + "...", false, false, nullptr);
+        menu.addItem("Loading " + ProfileLibrary::fileNameOf(status.path) + "...", false, false, nullptr);
         menu.addSeparator();
     }
     if (status.error.isNotEmpty())
@@ -1618,7 +1618,8 @@ void PluginEditor::writeSettingsAttribute(const juce::String& name, const juce::
 void PluginEditor::stepProfile(int delta)
 {
     const auto status = audioProcessor.getProfileStatus();
-    const juce::File current = status.path.isNotEmpty() ? juce::File(status.path) : juce::File();
+    // A session's path from another OS is no file here: start from an end.
+    const juce::File current = juce::File::isAbsolutePath(status.path) ? juce::File(status.path) : juce::File();
     const auto next = audioProcessor.getProfileLibrary().step(current, delta);
     if (next == juce::File())
     {
