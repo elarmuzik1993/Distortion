@@ -2310,10 +2310,15 @@ void PluginProcessor::getStateInformation(juce::MemoryBlock& destData)
     // The profile is remembered by path. A session opened where the file is
     // missing keeps the path and falls back to the built-in clip type.
     // The fingerprint lets a session whose file has moved find the library's copy.
+    // The loaded profile is what you hear, so it is saved even when a later pick
+    // failed; with none loaded, the last request, so a missing file is retried.
     const auto status = getProfileStatus();
-    state.setProperty(profilePathAttribute, status.path, nullptr);
-    if (status.path.isNotEmpty() && status.fingerprint.isNotEmpty())
-        state.setProperty(profileFingerprintAttribute, status.fingerprint, nullptr);
+    const bool loaded = status.loadedPath.isNotEmpty();
+    const auto& path = loaded ? status.loadedPath : status.path;
+    const auto& fingerprint = loaded ? status.loadedFingerprint : status.fingerprint;
+    state.setProperty(profilePathAttribute, path, nullptr);
+    if (path.isNotEmpty() && fingerprint.isNotEmpty())
+        state.setProperty(profileFingerprintAttribute, fingerprint, nullptr);
     std::unique_ptr<juce::XmlElement> xml(state.createXml());
     copyXmlToBinary(*xml, destData);
 }
@@ -2335,18 +2340,15 @@ void PluginProcessor::setStateInformation(const void* data, int sizeInBytes)
         parameters.state.removeProperty(profilePathAttribute, nullptr);
         parameters.state.removeProperty(profileFingerprintAttribute, nullptr);
         const auto current = getProfileStatus();
-        // Loaded or on its way: a host restoring the same state twice keeps it. A
-        // path whose last load failed is tried again, since the file may be back.
-        // The fingerprint matches too when the library's copy stood in for the file.
-        const bool sameProfile = profilePath == current.path
-                              || (fingerprint.isNotEmpty() && fingerprint == current.fingerprint);
-        const bool alreadyHeld = sameProfile && (current.loading || current.name.isNotEmpty());
         if (profilePath.isEmpty())
         {
             if (current.name.isNotEmpty() || current.path.isNotEmpty())
                 clearProfile();
         }
-        else if (juce::File::isAbsolutePath(profilePath) && ! alreadyHeld)
+        // Loaded or on its way: a host restoring the same state twice keeps it. A
+        // path whose last load failed is tried again, since the file may be back.
+        // The fingerprint matches too when the library's copy stood in for the file.
+        else if (juce::File::isAbsolutePath(profilePath) && ! current.holds(profilePath, fingerprint))
         {
             // Drop the current profile first, so a session whose file is missing
             // falls back to the built-in clip type rather than keeping this one.
@@ -2493,6 +2495,8 @@ bool PluginProcessor::loadProfileNow(const juce::File& requested, const juce::St
     profileStatus.loading = false;
     if (profile == nullptr)
     {
+        // The request stays, for the error and the next save; a profile already
+        // loaded keeps playing, and stays the loaded one.
         profileStatus.error = error;
         return false;
     }
@@ -2500,6 +2504,8 @@ bool PluginProcessor::loadProfileNow(const juce::File& requested, const juce::St
     profileStatus.name = profile->getName();
     profileStatus.path = file.getFullPathName();
     profileStatus.fingerprint = fingerprint;
+    profileStatus.loadedPath = profileStatus.path;
+    profileStatus.loadedFingerprint = fingerprint;
     profileStatus.expectedSampleRate = profile->getExpectedSampleRate();
     profileStatus.error = {};
 
@@ -2641,7 +2647,8 @@ void PluginProcessor::restageProfile(NamProfile* staged, double rate, bool usabl
         {
             if (! usable)
             {
-                profileStatus.name = {};   // the path stays, so the session remembers it
+                // The path stays, so the session remembers it.
+                profileStatus.name = profileStatus.loadedPath = profileStatus.loadedFingerprint = {};
                 profileStatus.error = NamProfile::unsupportedRateMessage(rate);
             }
             else
@@ -2875,7 +2882,8 @@ void PluginProcessor::prepareProfilesForHost(double sampleRate, int samplesPerBl
     if (unsupported)
     {
         const juce::ScopedLock sl(profileStatusLock);
-        profileStatus.name = {};   // the path stays, so the session remembers it
+        // The path stays, so the session remembers it.
+        profileStatus.name = profileStatus.loadedPath = profileStatus.loadedFingerprint = {};
         profileStatus.error = NamProfile::unsupportedRateMessage(sampleRate);
     }
 

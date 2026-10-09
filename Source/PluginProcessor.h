@@ -329,11 +329,25 @@ public:
     struct ProfileStatus
     {
         juce::String name;                // loaded profile, empty when none
-        juce::String path;                // requested file (kept if loading failed)
+        juce::String path;                // last requested file (kept if loading failed)
         juce::String error;               // last load error, empty if none
-        juce::String fingerprint;         // ProfileLibrary::fingerprint of the file; the session's until a load succeeds
+        juce::String fingerprint;         // the request's ProfileLibrary::fingerprint; the session's until its file loads
+        juce::String loadedPath;          // the file the loaded profile came from, empty when none. A failed
+        juce::String loadedFingerprint;   // request leaves these (and name) on the profile that still plays
         double expectedSampleRate = 0.0;  // the rate the profile was trained at
         bool loading = false;
+
+        // Whether the last request is for this file, by path or, given a
+        // fingerprint, by content, and has not failed: it is loading or loaded.
+        // Asking for it again needs no new load; a file whose load failed does.
+        bool holds(const juce::String& file, const juce::String& print = {}) const
+        {
+            const auto same = [&](const juce::String& otherPath, const juce::String& otherPrint)
+            {
+                return (file.isNotEmpty() && file == otherPath) || (print.isNotEmpty() && print == otherPrint);
+            };
+            return same(path, fingerprint) && (loading || (error.isEmpty() && same(loadedPath, loadedFingerprint)));
+        }
     };
 
     // Message thread. Loads on a background thread; the timer then installs it:

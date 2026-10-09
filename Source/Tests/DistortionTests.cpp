@@ -6547,6 +6547,75 @@ void NamProfileTests::runTest()
         file.deleteFile();
     }
 
+    beginTest("A request is held while it loads or once it has loaded, never after it failed");
+    {
+        PluginProcessor::ProfileStatus status;
+        status.path = "/profiles/a.nam";
+        status.fingerprint = "10-ab";
+        status.loading = true;
+        expect(status.holds("/profiles/a.nam"), "Loading, by path");
+        expect(status.holds("/elsewhere/a.nam", "10-ab"), "Loading, by content");
+        expect(! status.holds("/profiles/b.nam"), "Another file is not held");
+
+        status.loading = false;
+        status.name = "a";
+        status.loadedPath = "/profiles/a.nam";
+        status.loadedFingerprint = "10-ab";
+        expect(status.holds("/profiles/a.nam"), "Loaded");
+        expect(status.holds("/moved/a.nam", "10-ab"), "Loaded, matched by content");
+
+        status.error = "Could not load a.nam";
+        expect(! status.holds("/profiles/a.nam"),
+               "A failed request is tried again, even while an earlier load of the same file plays");
+        expect(! PluginProcessor::ProfileStatus().holds({}), "Nothing requested, nothing held");
+    }
+
+    beginTest("A pick that fails leaves the playing profile in charge, and is tried again");
+    {
+        // Stepping through the library lands on a file the loader rejects while the
+        // previous profile keeps playing. A save keeps the profile you hear, and the
+        // file loads once it is fixed, rather than counting as loaded already.
+        const auto broken = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                                .getNonexistentChildFile("sledge-broken-pick", ".nam", false);
+        broken.replaceWithText("not a model");
+        const auto playing = namTestModel("wavenet.nam");
+
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        expect(processor.loadProfileBlocking(playing), "The first pick loads");
+        const auto playingPrint = processor.getProfileStatus().loadedFingerprint;
+        expectEquals(playingPrint, ProfileLibrary::fingerprint(playing), "With its file's fingerprint");
+
+        expect(! processor.loadProfileBlocking(broken), "The broken pick fails");
+        const auto status = processor.getProfileStatus();
+        expect(status.error.isNotEmpty(), "The failure is reported");
+        expectEquals(status.path, broken.getFullPathName(), "The request stays, for the card and the arrows");
+        expectEquals(status.name, juce::String("wavenet"), "The profile before it still plays");
+        expectEquals(status.loadedPath, playing.getFullPathName(), "And is still the loaded one");
+        expect(! status.holds(broken.getFullPathName()), "The failed file isn't held, so picking it again loads it");
+        expect(! status.holds(playing.getFullPathName()), "Picking the playing one again replaces the failed request");
+
+        juce::MemoryBlock saved;
+        processor.getStateInformation(saved);
+        auto xml = juce::AudioProcessor::getXmlFromBinary(saved.getData(), static_cast<int>(saved.getSize()));
+        expectEquals(xml->getStringAttribute(PluginProcessor::profilePathAttribute), playing.getFullPathName(),
+                     "A save keeps the profile you hear, not the failed pick");
+        expectEquals(xml->getStringAttribute(PluginProcessor::profileFingerprintAttribute), playingPrint,
+                     "With its fingerprint");
+
+        // Fixed on disk, a session naming the file loads it.
+        expect(namTestModel("lstm.nam").copyFileTo(broken), "The file is fixed");
+        auto session = processor.parameters.copyState().createXml();
+        session->setAttribute(PluginProcessor::profilePathAttribute, broken.getFullPathName());
+        juce::MemoryBlock sessionState;
+        juce::AudioProcessor::copyXmlToBinary(*session, sessionState);
+        processor.setStateInformation(sessionState.getData(), static_cast<int>(sessionState.getSize()));
+        expect(waitForProfileLoad(processor), "The restore finished");
+        expectEquals(processor.getProfileStatus().loadedPath, broken.getFullPathName(), "The fixed file loads");
+        expect(processor.getProfileStatus().error.isEmpty(), "The old error is gone");
+        broken.deleteFile();
+    }
+
     beginTest("A profile at 44.1, 88.2, 96 and 192 kHz sounds as it does at 48 kHz");
     {
         const std::vector<double> harmonics { 1000.0, 2000.0, 3000.0, 4000.0, 5000.0 };

@@ -1535,7 +1535,7 @@ void PluginEditor::showProfileMenu()
         const auto label = file.getRelativePathFrom(library.getRoot())
                                .replaceCharacter('\\', '/')
                                .upToLastOccurrenceOf(".", false, false);
-        libraryMenu.addItem(label, true, file.getFullPathName() == status.path,
+        libraryMenu.addItem(label, true, file.getFullPathName() == status.loadedPath,
                             [this, file]() { loadLibraryProfile(file, 0); });
     }
     if (files.isEmpty())
@@ -1579,12 +1579,9 @@ void PluginEditor::importAndLoadProfiles(const juce::Array<juce::File>& files)
 
 void PluginEditor::loadLibraryProfile(const juce::File& file, int direction)
 {
-    const auto status = audioProcessor.getProfileStatus();
     // Already loaded or on its way (a one-profile library, a repeated pick): just
-    // say so, rather than loading it again.
-    const bool held = file.getFullPathName() == status.path
-                   && (status.loading || status.name.isNotEmpty());
-    if (! held)
+    // say so, rather than loading it again. One whose load failed is tried again.
+    if (! audioProcessor.getProfileStatus().holds(file.getFullPathName()))
         audioProcessor.loadProfileAsync(file);
     pendingLastProfile = file;
     showProfileCard(file, direction);
@@ -1595,12 +1592,13 @@ void PluginEditor::rememberLastProfile()
     if (pendingLastProfile == juce::File())
         return;
     const auto status = audioProcessor.getProfileStatus();
-    if (status.loading && status.path == pendingLastProfile.getFullPathName())
+    const auto pending = pendingLastProfile.getFullPathName();
+    if (status.loading && status.path == pending)
         return;   // still on its way
-    // Loaded: new instances start with it. Failed, or replaced by a session or a
-    // clear meanwhile: nothing to remember.
-    if (status.path == pendingLastProfile.getFullPathName() && status.name.isNotEmpty())
-        writeSettingsAttribute("lastProfile", status.path);
+    // Loaded: new instances start with it. Failed (the profile before it still
+    // plays), or replaced by a session or a clear meanwhile: nothing to remember.
+    if (status.loadedPath == pending)
+        writeSettingsAttribute("lastProfile", pending);
     pendingLastProfile = juce::File();
 }
 
