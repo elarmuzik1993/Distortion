@@ -1126,8 +1126,8 @@ class SettingsContent : public juce::Component,
                        private juce::Timer
 {
 public:
-    // Summed height of all rows below the header (430px of content + 12px bottom slack).
-    static constexpr int kContentHeight = 442;
+    // Summed height of all rows below the header (454px of content + 12px bottom slack).
+    static constexpr int kContentHeight = 466;
 
     SettingsContent(juce::AudioProcessorValueTreeState& apvts, SettingsState& state, PluginProcessor& proc)
         : settingsState(state), processor(proc)
@@ -1259,6 +1259,14 @@ public:
                 onScopeLengthChanged(val);
         };
 
+        // Legacy Filter: the knob beside Input Gain is the v2.3 input filter instead
+        // of Shape. A parameter, so it is saved with the session like Mono Input.
+        addAndMakeVisible(legacyFilterToggle);
+        legacyFilterToggle.setButtonText("");
+        legacyFilterToggle.setLookAndFeel(&pillLnf);
+        legacyFilterAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+            apvts, "legacyFilter", legacyFilterToggle);
+
         // Recall Profile: new instances start with the last profile chosen.
         addAndMakeVisible(recallProfileToggle);
         recallProfileToggle.setButtonText("");
@@ -1309,6 +1317,7 @@ public:
         overlayModeCombo.setLookAndFeel(nullptr);
         bugReportsToggle.setLookAndFeel(nullptr);
         recallProfileToggle.setLookAndFeel(nullptr);
+        legacyFilterToggle.setLookAndFeel(nullptr);
     }
 
     void paint(juce::Graphics& g) override
@@ -1360,6 +1369,11 @@ public:
         g.drawText(hint ? "Mono Input  â" : "Mono Input",
                    miRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
         g.setColour(juce::Colours::white);
+        inner.removeFromTop(4.0f);
+
+        // Legacy Filter row label
+        auto lfRow = inner.removeFromTop(20.0f);
+        g.drawText("Legacy Filter", lfRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
         inner.removeFromTop(4.0f);
 
         // Recall Profile row label
@@ -1472,6 +1486,12 @@ public:
         monoInputToggle.setBounds(miRow.removeFromLeft(50).reduced(0, 2));
         inner.removeFromTop(4);
 
+        // Legacy Filter row - must stay in step with the label in paint()
+        auto lfRow = inner.removeFromTop(20);
+        lfRow.removeFromLeft(140);
+        legacyFilterToggle.setBounds(lfRow.removeFromLeft(50).reduced(0, 2));
+        inner.removeFromTop(4);
+
         // Recall Profile row - must stay in step with the label in paint()
         auto rpRow = inner.removeFromTop(20);
         rpRow.removeFromLeft(140);
@@ -1568,6 +1588,7 @@ private:
     juce::ToggleButton linearPhaseToggle;
     juce::ToggleButton monoInputToggle;
     juce::ToggleButton recallProfileToggle;
+    juce::ToggleButton legacyFilterToggle;
     bool lastMonoHint = false;
     juce::ComboBox oversamplingCombo;
     juce::ComboBox windowScaleCombo;
@@ -1583,6 +1604,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> autoGainAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> linearPhaseAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> monoInputAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> legacyFilterAttachment;
 
     void timerCallback() override
     {
@@ -2553,6 +2575,8 @@ public:
     // there is one, else for the first library step (the empty-library hint when
     // the library is empty).
     void showProfileCardForSnapshot(int direction);
+    // Opens the Settings panel as the gear button does.
+    void showSettingsForSnapshot() { showSettingsOverlay(); }
    #endif
 
     // Product data root and the settings file inside it. Static and free of
@@ -2585,9 +2609,13 @@ private:
     // UI Components
     CustomKnob inputGainSlider, distortionAmountSlider, outputGainSlider, shapeSlider, distMixSlider, toneSlider;
     juce::Label inputGainLabel, distortionAmountLabel, outputGainLabel, shapeLabel, distMixLabel, toneLabel;
-    juce::TextButton legacyFilterTag { "LEGACY FILTER" };  // shown only while the hidden v2.3 filter is on
-    std::atomic<float>* legacyFilterModeParam = nullptr;  // looked up once; read by updateLegacyTag
-    std::atomic<float>* legacyFilterFreqParam = nullptr;
+    // The v2.3 input filter: its knob, with the mode picker in the label slot. Takes
+    // Shape's slot while Settings > Legacy Filter is on (updateInputStageControls).
+    CustomKnob legacyFilterSlider;
+    juce::Label legacyFilterLabel;     // setupSlider needs one; never shown, the picker has the slot
+    CyclingComboBox legacyFilterModeBox;
+    std::atomic<float>* legacyFilterSwitch = nullptr;  // looked up once; read by updateInputStageControls
+    bool showingLegacyFilter = false;  // what the slot shows now; Shape until the switch says otherwise
 
     CustomKnob lfoRateSlider, lfoDepthSlider;
     juce::Label lfoRateLabel, lfoDepthLabel;
@@ -2672,7 +2700,7 @@ private:
     juce::ComboBox presetSelector;
 
     // Lock icons for each parameter
-    LockIcon inputGainLock, outputGainLock, distortionAmountLock, shapeLock;
+    LockIcon inputGainLock, outputGainLock, distortionAmountLock, shapeLock, legacyFilterLock;
     LockIcon distMixLock, lfoRateLock, lfoDepthLock, lfoEnableLock;
     LockIcon compPeakReductionLock, compMakeupGainLock;
     LockIcon subGuardLock, clipTypeLock, compRatioLock, compEnableLock;
@@ -2685,6 +2713,8 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> distortionAmountAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputGainAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> shapeAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> legacyFilterAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> legacyFilterModeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> distMixAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> toneAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> subGuardAttachment;
@@ -2730,8 +2760,9 @@ private:
         const juce::String& paramID);
 
     void randomizeAllParameters();
-    void resetLegacyFilter();
-    void updateLegacyTag();
+    // Shows Shape or the legacy filter in the slot beside Input Gain, as the
+    // legacyFilter switch says, and names the LFO's matching target.
+    void updateInputStageControls();
     bool isParameterLocked(const juce::String& paramID) const;
     void toggleParameterLock(const juce::String& paramID);
     void updateLockIcons();

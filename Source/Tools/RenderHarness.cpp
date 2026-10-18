@@ -315,7 +315,10 @@ int renderToFile(const Args& args)
     }
 
     // Input filter: --mode hp|lp|bp, --filterfreq <Hz>
-    // Applied only when given, so it never resets a preset's legacy filter.
+    // Applied only when given, so it never resets a preset's legacy filter. Either
+    // one switches to Legacy mode, the only mode the filter runs in.
+    if (args.has("mode") || args.has("filterfreq"))
+        setParam(proc.parameters, "legacyFilter", 1.0f);
     if (args.has("mode"))
     {
         const auto mode = args.str("mode", "hp");
@@ -358,7 +361,7 @@ int main(int argc, char* argv[])
             "  --signal noise|sweep|kickbass|808|bassnote  synthetic input (default kickbass)\n"
             "  --shape <-100..100>                   Shape (Bark < 0 < Scoop)\n"
             "  --preset <name>                       load a factory preset first\n"
-            "  --mode hp|lp|bp  --filterfreq <Hz>    legacy v2.3 input filter (hidden param)\n"
+            "  --mode hp|lp|bp  --filterfreq <Hz>    legacy v2.3 input filter (turns Legacy mode on)\n"
             "  --in <file.wav>                       use a WAV file as input\n"
             "  --subguard <Hz|off>                   Sub Guard crossover frequency\n"
             "  --drive <0-100>  --mix <0-100>        distortion amount / wet mix\n"

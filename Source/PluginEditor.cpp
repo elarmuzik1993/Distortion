@@ -2,7 +2,6 @@
 #include "PluginProcessor.h"
 #include "GitVersion.h"
 #include "FactoryPresets.h"
-#include "LegacyInputFilter.h"
 #include "Diagnostics/AppPaths.h"
 
 PluginEditor::PluginEditor(PluginProcessor& p)
@@ -105,27 +104,23 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     shapeSlider.valueFromTextFunction = [](const juce::String& t) { return (double) ShapeFilter::fromText(t); };
     shapeSlider.updateText();
 
-    // The v2.3 input filter survives as hidden params so old sessions sound the same.
-    // While it is doing something this tag takes the label slot; clicking offers to
-    // switch it off. Visibility is refreshed by updateLegacyTag (constructor + timerCallback).
-    legacyFilterTag.setColour(juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
-    legacyFilterTag.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffff3b3b));
-    legacyFilterTag.onClick = [this]
-    {
-        juce::PopupMenu menu;
-        menu.addSectionHeader("Old input filter (from a v2.3 session)");
-        menu.addItem(1, "Turn off the legacy filter");
-        juce::Component::SafePointer<PluginEditor> safeThis(this);
-        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&legacyFilterTag),
-            [safeThis](int result)
-            {
-                if (result == 1 && safeThis != nullptr)
-                    safeThis->resetLegacyFilter();
-            });
-    };
-    addChildComponent(legacyFilterTag);
-    legacyFilterModeParam = audioProcessor.parameters.getRawParameterValue("filterMode");
-    legacyFilterFreqParam = audioProcessor.parameters.getRawParameterValue("highPassFreq");
+    // The v2.3 input filter, laid out as v2.3 had it: the knob with the mode picker in
+    // its label slot. Shape's slot shows it while Settings > Legacy Filter is on;
+    // updateInputStageControls (constructor + timerCallback) swaps the two.
+    setupSlider(legacyFilterSlider, legacyFilterLabel, "Filter", legacyFilterAttachment, "highPassFreq");
+    legacyFilterSlider.setDoubleClickReturnValue(true, DSPConstants::DEFAULT_HIPASS_FREQ);
+    legacyFilterSlider.textFromValueFunction = [](double v) { return juce::String(juce::roundToInt(v)) + " Hz"; };
+    legacyFilterSlider.updateText();
+    legacyFilterSlider.setVisible(false);
+    legacyFilterLabel.setVisible(false);
+    addChildComponent(legacyFilterModeBox);
+    legacyFilterModeBox.setLookAndFeel(&comboBoxLookAndFeel);
+    legacyFilterModeBox.addItem("High Pass", 1);
+    legacyFilterModeBox.addItem("Low Pass", 2);
+    legacyFilterModeBox.addItem("Band Pass", 3);
+    legacyFilterModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.parameters, "filterMode", legacyFilterModeBox);
+    legacyFilterSwitch = audioProcessor.parameters.getRawParameterValue("legacyFilter");
     setupSlider(lfoRateSlider, lfoRateLabel, "LFO Rate",
         lfoRateAttachment, "lfoRate");
     setupSlider(lfoDepthSlider, lfoDepthLabel, "LFO Depth",
@@ -498,7 +493,17 @@ PluginEditor::PluginEditor(PluginProcessor& p)
                      [this]() { toggleParameterLock("outputGain"); });
         menu.addItem("Distortion Amount", true, isParameterLocked("distortionAmount"),
                      [this]() { toggleParameterLock("distortionAmount"); });
-        menu.addItem("Shape", true, isParameterLocked("shape"), [this]() { toggleParameterLock("shape"); });
+        if (showingLegacyFilter)   // the knob slot locks whatever it shows
+        {
+            menu.addItem("Filter Frequency", true, isParameterLocked("highPassFreq"),
+                         [this]() { toggleParameterLock("highPassFreq"); });
+            menu.addItem("Filter Mode", true, isParameterLocked("filterMode"),
+                         [this]() { toggleParameterLock("filterMode"); });
+        }
+        else
+        {
+            menu.addItem("Shape", true, isParameterLocked("shape"), [this]() { toggleParameterLock("shape"); });
+        }
         menu.addItem("Sub Guard", true, isParameterLocked("subGuardFreq"),
                      [this]() { toggleParameterLock("subGuardFreq"); });
         menu.addItem("Clip Type", true, isParameterLocked("clipType"),
@@ -563,6 +568,8 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     parameterLocks["outputGain"] = false;
     parameterLocks["distortionAmount"] = false;
     parameterLocks["shape"] = false;
+    parameterLocks["highPassFreq"] = false;
+    parameterLocks["filterMode"] = false;
     parameterLocks["subGuardFreq"] = false;
     parameterLocks["clipType"] = false;
     parameterLocks["distMix"] = false;
@@ -586,6 +593,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addAndMakeVisible(outputGainLock);
     addAndMakeVisible(distortionAmountLock);
     addAndMakeVisible(shapeLock);
+    addChildComponent(legacyFilterLock);   // shown with the legacy filter
     addAndMakeVisible(distMixLock);
     addAndMakeVisible(lfoRateLock);
     addAndMakeVisible(lfoDepthLock);
@@ -601,6 +609,8 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     setupKnobRightClick(outputGainSlider, "outputGain");
     setupKnobRightClick(distortionAmountSlider, "distortionAmount");
     setupKnobRightClick(shapeSlider, "shape");
+    setupKnobRightClick(legacyFilterSlider, "highPassFreq");
+    setupKnobRightClick(legacyFilterModeBox, "filterMode");
     setupKnobRightClick(distMixSlider, "distMix");
     setupKnobRightClick(lfoRateSlider, "lfoRate");
     setupKnobRightClick(lfoDepthSlider, "lfoDepth");
@@ -671,8 +681,8 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     setSize(672, 395);
     applyWindowScale(settingsState.windowScalePercent);
 
-    // Decide Shape label vs LEGACY FILTER tag now, so the first frame is right (no flicker).
-    updateLegacyTag();
+    // Decide Shape vs the legacy filter now, so the first frame is right (no flicker).
+    updateInputStageControls();
 
     // Start timer for LFO modulation visual feedback (60Hz)
     startTimerHz(60);
@@ -705,6 +715,7 @@ PluginEditor::~PluginEditor()
     clipTypeComboBox.setLookAndFeel(nullptr);
     compRatioComboBox.setLookAndFeel(nullptr);
     lfoWaveformComboBox.setLookAndFeel(nullptr);
+    legacyFilterModeBox.setLookAndFeel(nullptr);
     lfoDestinationComboBox.setLookAndFeel(nullptr);
     lfoBpmDivisionComboBox.setLookAndFeel(nullptr);
     presetSelector.setLookAndFeel(nullptr);
@@ -1200,12 +1211,14 @@ void PluginEditor::resized()
     inputGainLock.setBounds(currentX + knobSize - lockSize - lockInset, rowY + lockInset, lockSize, lockSize);
     currentX += knobSize + controlSpacing;
 
-    // Filter (multimode HP/LP/BP): knob with the mode dropdown in the label slot.
-    // Shape (bipolar Bark <-> Scoop); the LEGACY FILTER tag shares the label slot.
+    // Shape (bipolar Bark <-> Scoop), or the legacy filter while it has the slot.
     shapeSlider.setBounds(currentX, rowY, knobSize, knobSize);
     shapeLabel.setBounds(currentX, rowY + knobSize + lockInset, knobSize, labelHeight);
-    legacyFilterTag.setBounds(shapeLabel.getBounds());
     shapeLock.setBounds(currentX + knobSize - lockSize - lockInset, rowY + lockInset, lockSize, lockSize);
+    // The legacy filter takes the same slot, its mode picker where the label is.
+    legacyFilterSlider.setBounds(shapeSlider.getBounds());
+    legacyFilterModeBox.setBounds(shapeLabel.getBounds());
+    legacyFilterLock.setBounds(shapeLock.getBounds());
     currentX += knobSize + controlSpacing;
 
     // Dist Mix
@@ -1293,6 +1306,7 @@ void PluginEditor::updateLockIcons()
     outputGainLock.setLocked(isParameterLocked("outputGain"));
     distortionAmountLock.setLocked(isParameterLocked("distortionAmount"));
     shapeLock.setLocked(isParameterLocked("shape"));
+    legacyFilterLock.setLocked(isParameterLocked("highPassFreq"));
     distMixLock.setLocked(isParameterLocked("distMix"));
     lfoRateLock.setLocked(isParameterLocked("lfoRate"));
     lfoDepthLock.setLocked(isParameterLocked("lfoDepth"));
@@ -1426,6 +1440,7 @@ void PluginEditor::updateModulationHighlight()
         distortionAmountSlider.setLFOArc(false, 0.0f, 0.0f);
         toneSlider.setLFOArc(false, 0.0f, 0.0f);
         shapeSlider.setLFOArc(false, 0.0f, 0.0f);
+        legacyFilterSlider.setLFOArc(false, 0.0f, 0.0f);
         distMixSlider.setLFOArc(false, 0.0f, 0.0f);
         outputGainSlider.setLFOArc(false, 0.0f, 0.0f);
         return;
@@ -1456,20 +1471,33 @@ void PluginEditor::updateModulationHighlight()
     constexpr float shapeArcScale = DSPConstants::SHAPE_LFO_RANGE
                                   / (DSPConstants::SHAPE_MAX - DSPConstants::SHAPE_MIN);
     shapeSlider.setLFOArc(destination == 2, lfoPhase, depthNorm * shapeArcScale);
+    // The legacy cutoff swings ±1.5 of the knob's ~10 octaves (approximate: the skew
+    // is not exactly logarithmic).
+    legacyFilterSlider.setLFOArc(destination == 2, lfoPhase, depthNorm * 0.15f);
     distMixSlider.setLFOArc(destination == 3, lfoPhase, depthNorm);
     outputGainSlider.setLFOArc(destination == 4, lfoPhase, depthNorm);
 }
 
-void PluginEditor::updateLegacyTag()
+void PluginEditor::updateInputStageControls()
 {
-    // LEGACY FILTER tag: replaces the "Shape" label while the hidden filter is on.
-    const bool legacy = LegacyInputFilter::isActive(
-        juce::roundToInt(legacyFilterModeParam->load()), legacyFilterFreqParam->load());
-    if (legacyFilterTag.isVisible() != legacy)
-    {
-        legacyFilterTag.setVisible(legacy);
-        shapeLabel.setVisible(! legacy);
-    }
+    // Settings > Legacy Filter, a session, a preset or automation can flip the switch;
+    // the slot follows it. Shape is what the constructor left showing.
+    const bool legacy = legacyFilterSwitch->load() > 0.5f;
+    if (legacy == showingLegacyFilter)
+        return;
+    showingLegacyFilter = legacy;
+
+    shapeSlider.setVisible(! legacy);
+    shapeLabel.setVisible(! legacy);
+    shapeLock.setVisible(! legacy);
+    legacyFilterSlider.setVisible(legacy);
+    legacyFilterModeBox.setVisible(legacy);
+    legacyFilterLock.setVisible(legacy);
+
+    // LFO destination 2 sweeps whatever has the knob; name it after that. Re-selecting
+    // the same id refreshes the shown text without touching the parameter.
+    lfoDestinationComboBox.changeItemText(3, legacy ? "Filter" : "Shape");
+    lfoDestinationComboBox.setSelectedId(lfoDestinationComboBox.getSelectedId(), juce::dontSendNotification);
 }
 
 void PluginEditor::timerCallback()
@@ -1480,7 +1508,7 @@ void PluginEditor::timerCallback()
     // Update LFO modulation indicator
     updateModulationHighlight();
 
-    updateLegacyTag();
+    updateInputStageControls();
 
     // Advance the EXTREME crack crossfade (self-limiting: repaints only while the
     // fade is actually moving).
@@ -1784,19 +1812,6 @@ void PluginEditor::morphDistortionParameters(float x, float y)
     setParam("outputGain", 70.0f - x * 30.0f - y * 10.0f);
 }
 
-// Puts the hidden v2.3 input filter back to its transparent default (High Pass,
-// 20 Hz), one host gesture per parameter so the change is recorded and undoable.
-void PluginEditor::resetLegacyFilter()
-{
-    for (const char* id : { "filterMode", "highPassFreq" })
-        if (auto* p = audioProcessor.parameters.getParameter(id))
-        {
-            p->beginChangeGesture();
-            p->setValueNotifyingHost(p->getDefaultValue());
-            p->endChangeGesture();
-        }
-}
-
 void PluginEditor::randomizeAllParameters()
 {
     // Create random number generator
@@ -1842,9 +1857,17 @@ void PluginEditor::randomizeAllParameters()
     randomizeFloatParam("inputGain", 0.0f, 100.0f);
     randomizeFloatParam("outputGain", 0.0f, 100.0f);
     randomizeFloatParam("distortionAmount", 0.0f, 100.0f);
-    // Shape avoids the extremes; the hidden legacy filter is never part of a new sound.
-    randomizeFloatParam("shape", -70.0f, 70.0f);
-    resetLegacyFilter();
+    // Whatever has the knob slot rolls; the switch and the control it hides stay put,
+    // so flipping back still finds the user's settings. Shape avoids the extremes.
+    if (showingLegacyFilter)
+    {
+        randomizeFloatParam("highPassFreq", 20.0f, 2000.0f);   // v2.3's ranges
+        randomizeChoiceParam("filterMode", 3);                // High Pass / Low Pass / Band Pass
+    }
+    else
+    {
+        randomizeFloatParam("shape", -70.0f, 70.0f);
+    }
     // subGuardFreq spans 0-200 Hz where 0 = OFF (no band-split); include the OFF end.
     randomizeFloatParam("subGuardFreq", 0.0f, DSPConstants::SUBGUARD_FREQ_MAX);
     randomizeChoiceParam("clipType", 7);
@@ -1869,8 +1892,8 @@ void PluginEditor::randomizeAllParameters()
     // CHARACTER
     randomizeBoolParam("extremeEnabled");
     randomizeBoolParam("cleanBoost");
-    // NOTE: globalMix, autoGainEnabled, waveshaperClean, linearPhaseDry, and the LFO
-    // BPM-sync transport params are intentionally left fixed (global/mode/quality/
+    // NOTE: globalMix, autoGainEnabled, waveshaperClean, linearPhaseDry, legacyFilter and
+    // the LFO BPM-sync transport params are intentionally left fixed (global/mode/quality/
     // transport controls the user sets deliberately, not part of a sound roll).
 }
 

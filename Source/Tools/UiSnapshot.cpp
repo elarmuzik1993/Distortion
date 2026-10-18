@@ -107,7 +107,8 @@ void feedScope(PluginProcessor& proc)
 }
 
 bool snapshot(PluginProcessor& proc, int width, int height, const juce::File& out,
-              bool extreme = false, bool withSignal = false, bool profileCard = false)
+              bool extreme = false, bool withSignal = false, bool profileCard = false,
+              bool settings = false)
 {
     PluginEditor editor(proc);
     editor.setSize(width, height);
@@ -149,6 +150,13 @@ bool snapshot(PluginProcessor& proc, int width, int height, const juce::File& ou
         juce::MessageManager::getInstance()->runDispatchLoopUntil(400);
     }
 
+    // The Settings panel over the editor, as its gear button opens it.
+    if (settings)
+    {
+        editor.showSettingsForSnapshot();
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(400);
+    }
+
     // Lay out and paint synchronously into an offscreen image.
     juce::Image image(juce::Image::ARGB, width, height, true);
     {
@@ -187,9 +195,10 @@ int main(int argc, char* argv[])
                 "  --extreme        EXTREME mode engaged\n"
                 "  --signal         feed a signal so the scope shows a waveform\n"
                 "  --shape <v>      set Shape (-100..100) before rendering\n"
-                "  --legacy         turn the hidden v2.3 input filter on (shows the tag)\n"
+                "  --legacy         Legacy Filter mode, Low Pass at 800 Hz (the knob slot shows the filter)\n"
                 "  --profile <f>    load a NAM profile (copied into a scratch library)\n"
-                "  --profile-card   show the profile browser's name card\n";
+                "  --profile-card   show the profile browser's name card\n"
+                "  --settings       open the Settings panel\n";
             return 0;
         }
     }
@@ -200,7 +209,7 @@ int main(int argc, char* argv[])
     bool extreme = false;
     bool signal = false;
     float shapeValue = 0.0f;
-    bool hasShape = false, legacy = false, profileCard = false;
+    bool hasShape = false, legacy = false, profileCard = false, settings = false;
     juce::String profilePath;
     for (int i = 1; i < argc; ++i)
     {
@@ -214,6 +223,7 @@ int main(int argc, char* argv[])
         else if (t == "--shape" && i + 1 < argc) { shapeValue = juce::String(argv[++i]).getFloatValue(); hasShape = true; }
         else if (t == "--legacy")                legacy    = true;
         else if (t == "--profile-card")          profileCard = true;
+        else if (t == "--settings")              settings  = true;
     }
 
     // Collapsed (scope folded away) is the other fold state. The harness drives it
@@ -239,7 +249,7 @@ int main(int argc, char* argv[])
             p->setValueNotifyingHost(p->convertTo0to1(v));
     };
     if (hasShape) setParam("shape", shapeValue);
-    if (legacy)   { setParam("filterMode", 1.0f); setParam("highPassFreq", 800.0f); }
+    if (legacy)   { setParam("legacyFilter", 1.0f); setParam("filterMode", 1.0f); setParam("highPassFreq", 800.0f); }
 
     // The profile library lives in the scratch root too, so the card's position
     // ("1 / 1") never depends on what this machine has collected.
@@ -287,7 +297,9 @@ int main(int argc, char* argv[])
             name += "-profile";
         if (profileCard)
             name += "-card";
-        allOk &= snapshot(proc, w, h, dir.getChildFile(name + ".png"), extreme, signal, profileCard);
+        if (settings)
+            name += "-settings";
+        allOk &= snapshot(proc, w, h, dir.getChildFile(name + ".png"), extreme, signal, profileCard, settings);
     }
 
     scratchRoot.deleteRecursively();
