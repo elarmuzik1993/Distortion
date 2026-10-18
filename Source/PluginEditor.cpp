@@ -306,7 +306,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     };
 
     addAndMakeVisible(clipTypeComboBox);
-    clipTypeComboBox.setLookAndFeel(&comboBoxLookAndFeel);  // Apply neon red styling
+    clipTypeComboBox.setLookAndFeel(&clipColumnLookAndFeel);
     clipTypeComboBox.addItem("Brutal Fuzz", 1);
     clipTypeComboBox.addItem("Tube Overdrive", 2);
     clipTypeComboBox.addItem("Bit Crusher", 3);
@@ -320,6 +320,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 
     addAndMakeVisible(extremeButton);
     extremeButton.setButtonText("EXTREME");
+    extremeButton.setLookAndFeel(&clipColumnLookAndFeel);
     extremeButton.setClickingTogglesState(true);
     extremeButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF1A1A1A));
     extremeButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xFFFF0044));
@@ -330,6 +331,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 
     addAndMakeVisible(cleanBoostButton);
     cleanBoostButton.setButtonText("BOOST");
+    cleanBoostButton.setLookAndFeel(&clipColumnLookAndFeel);
     cleanBoostButton.setClickingTogglesState(true);
     cleanBoostButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF1A1A1A));
     cleanBoostButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xFFFF0044));
@@ -340,6 +342,8 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 
     addAndMakeVisible(profileButton);
     profileButton.setButtonText("PROFILE");
+    profileButton.setLookAndFeel(&clipColumnLookAndFeel);
+    profileButton.getProperties().set(ClipColumnLookAndFeel::hasEndZones, true);   // the arrows' ends
     profileButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF1A1A1A));
     profileButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xFFFF0044));
     profileButton.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFFFF0044));
@@ -713,6 +717,9 @@ PluginEditor::~PluginEditor()
     compEnableToggle.setLookAndFeel(nullptr);
     lfoEnableToggle.setLookAndFeel(nullptr);
     clipTypeComboBox.setLookAndFeel(nullptr);
+    extremeButton.setLookAndFeel(nullptr);
+    cleanBoostButton.setLookAndFeel(nullptr);
+    profileButton.setLookAndFeel(nullptr);
     compRatioComboBox.setLookAndFeel(nullptr);
     lfoWaveformComboBox.setLookAndFeel(nullptr);
     legacyFilterModeBox.setLookAndFeel(nullptr);
@@ -1233,31 +1240,26 @@ void PluginEditor::resized()
     distortionAmountLock.setBounds(currentX + knobSize - lockSize - lockInset, rowY + lockInset, lockSize, lockSize);
     currentX += knobSize + controlSpacing;
 
-    // Clip Type Dropdown
-    const int comboWidth = S(45);
-    const int comboHeight = S(18);
-    const int comboXOffset = (clipTypeColumnWidth - comboWidth) / 2;
-    const int clipButtonH = S(14);
-    const int clipButtonGap = S(2);
-    // Center the ClipType / EXTREME / BOOST stack on the knob centerline so EXTREME
-    // (the middle element) lines up vertically between the Dist. Amount and Tone knobs.
-    const int extremeY = rowY + (knobSize - clipButtonH) / 2 + 2;
-    const int comboY = extremeY - clipButtonGap - comboHeight;
-    const int boostY = extremeY + clipButtonH + clipButtonGap;
-    clipTypeComboBox.setBounds(currentX + comboXOffset, comboY, comboWidth, comboHeight);
+    // Clip-type column: clip type, EXTREME, BOOST and PROFILE as four matching
+    // pills the full column wide, the stack on the knobs either side (3 px below
+    // their centre, set by eye). The label slot below stays empty. The profile
+    // arrows sit over PROFILE's ends, not in the gaps beside it, where the left
+    // one ran into the Distortion Amount label.
+    const int pillH = S(14);
+    const int pillGap = S(3);
+    int pillY = rowY + (knobSize - (pillH * 4 + pillGap * 3)) / 2 + S(3);
+    for (auto* pill : std::initializer_list<juce::Component*> { &clipTypeComboBox, &extremeButton,
+                                                               &cleanBoostButton, &profileButton })
+    {
+        pill->setBounds(currentX, pillY, clipTypeColumnWidth, pillH);
+        pillY += pillH + pillGap;
+    }
     clipTypeLabel.setBounds(currentX, rowY + knobSize + lockInset, clipTypeColumnWidth, labelHeight);
-    clipTypeLock.setBounds(currentX + comboXOffset + comboWidth - S(12) - S(2), comboY, S(12), S(12));
-    extremeButton.setBounds(currentX + comboXOffset, extremeY, comboWidth, clipButtonH);
-    cleanBoostButton.setBounds(currentX + comboXOffset, boostY, comboWidth, clipButtonH);
-    // The column's label slot, centred like the pills above it.
-    profileButton.setBounds(currentX + comboXOffset,
-                            rowY + knobSize + lockInset + (labelHeight - clipButtonH) / 2,
-                            comboWidth, clipButtonH);
-    // The arrows fill the gaps beside the pill. On the left that is about 10 px at
-    // 100%, up to the end of the Distortion Amount label, so they stay narrow.
-    const int arrowW = S(9);
-    profilePrevButton.setBounds(profileButton.getX() - arrowW, profileButton.getY(), arrowW, clipButtonH);
-    profileNextButton.setBounds(profileButton.getRight(), profileButton.getY(), arrowW, clipButtonH);
+    clipTypeLock.setBounds(clipTypeComboBox.getRight() - S(4) - S(12),
+                           clipTypeComboBox.getY() + (pillH - S(12)) / 2, S(12), S(12));
+    const int arrowW = ClipColumnLookAndFeel::endZoneWidth(pillH);
+    profilePrevButton.setBounds(profileButton.getBounds().withWidth(arrowW));
+    profileNextButton.setBounds(profileButton.getBounds().withLeft(profileButton.getRight() - arrowW));
     layoutProfileCard();
     currentX += clipTypeColumnWidth + controlSpacing;
 
@@ -1745,6 +1747,8 @@ void PluginEditor::updateProfileIndicator()
     profileButton.setColour(juce::TextButton::buttonOnColourId, accent);
     profileButton.setColour(juce::TextButton::textColourOffId, accent);
     profileButton.setToggleState(loaded, juce::dontSendNotification);
+    profilePrevButton.repaint();   // the arrows take the pill's ink
+    profileNextButton.repaint();
 
     // The profile replaces the clip type, so the clip-type controls step back.
     clipTypeComboBox.setEnabled(! loaded);
