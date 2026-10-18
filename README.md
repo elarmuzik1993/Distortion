@@ -84,9 +84,10 @@ around 600 Hz, with the top end eased back) or Scoop (a mid cut with a brighter
 top). It acts both before the drive and, at half strength, on the harmonics the
 drive creates, which is what makes it audible on near-sine 808s. The pre-drive
 stage also runs in the true-bypass path, so Shape works as a tone control with
-distortion and compression switched off. Sessions saved with the old input filter
-keep it; a LEGACY FILTER tag appears on the knob while it is on and offers to
-switch it off.
+distortion and compression switched off. The v2.3 input filter is one switch
+away: **Settings > Legacy Filter** turns the knob back into its cutoff, with the
+High/Low/Band Pass picker below it, and Shape is off while it is on. Sessions
+that used the old filter open with it on, so they sound as they did.
 
 **Oscilloscope** — zero-crossing triggered so the waveform doesn't drift,
 anti-alias decimated, and fed by a lock-free SPSC queue that never touches the
