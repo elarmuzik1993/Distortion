@@ -155,6 +155,7 @@ set(PLUGIN_SOURCES
     Source/FilterCoeffs.h
     Source/ShapeFilter.h
     Source/LegacyInputFilter.h
+    Source/ProfileCardAnimation.h
     Source/Diagnostics/AppPaths.h
     Source/Diagnostics/Report.h
     Source/Diagnostics/ITransport.h
@@ -176,6 +177,8 @@ set(PLUGIN_SOURCES
     Source/Nam/NamProfile.cpp
     Source/Nam/ResamplingIsland.h
     Source/Nam/ResamplingIsland.cpp
+    Source/Nam/ProfileLibrary.h
+    Source/Nam/ProfileLibrary.cpp
 )
 
 # Test sources
