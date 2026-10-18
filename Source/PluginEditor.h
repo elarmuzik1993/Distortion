@@ -2349,40 +2349,112 @@ private:
 };
 
 //==============================================================================
-// The browse arrows either side of the PROFILE pill. Each draws its chevron
-// against the pill's side, which keeps the left one clear of the Distortion
-// Amount label running up to the column.
+// The clip-type column (clip type, EXTREME, BOOST, PROFILE) as four matching
+// pills: one shape, outline and type, so the stack reads as a group. Each
+// outline takes its control's accent (textColourOffId on the buttons), so
+// PROFILE's amber error state reaches its border too. A pill flagged with
+// hasEndZones keeps its label clear of the end zones the profile arrows sit in.
+class ClipColumnLookAndFeel : public ComboBoxLookAndFeel
+{
+public:
+    static inline const juce::Identifier hasEndZones { "hasEndZones" };
+    static int endZoneWidth(int pillHeight) { return juce::roundToInt(pillHeight * 0.68f); }
+    static juce::Font pillFont(int pillHeight) { return juce::Font(pillHeight * 0.56f, juce::Font::bold); }
+
+    void drawComboBox(juce::Graphics& g, int width, int height, bool,
+                      int, int, int, int, juce::ComboBox& box) override
+    {
+        drawPill(g, { 0.0f, 0.0f, (float) width, (float) height }, juce::Colour(0xFF1A1A1A),
+                 box.findColour(juce::ComboBox::outlineColourId));
+        g.setColour(box.findColour(juce::ComboBox::textColourId));
+        g.setFont(pillFont(height));
+        g.drawFittedText(getInitials(box), textArea(box, width, height), juce::Justification::centred, 1, 0.7f);
+    }
+
+    void drawButtonBackground(juce::Graphics& g, juce::Button& button, const juce::Colour& background,
+                              bool highlighted, bool down) override
+    {
+        // JUCE passes buttonOnColourId here while the button is toggled on.
+        auto fill = background;
+        if (down || highlighted)
+            fill = fill.brighter(down ? 0.3f : 0.15f);
+        drawPill(g, button.getLocalBounds().toFloat(), fill,
+                 button.findColour(juce::TextButton::textColourOffId));
+    }
+
+    juce::Font getTextButtonFont(juce::TextButton&, int buttonHeight) override { return pillFont(buttonHeight); }
+
+    void drawButtonText(juce::Graphics& g, juce::TextButton& button, bool, bool) override
+    {
+        g.setFont(pillFont(button.getHeight()));
+        g.setColour(button.findColour(button.getToggleState() ? juce::TextButton::textColourOnId
+                                                              : juce::TextButton::textColourOffId)
+                        .withMultipliedAlpha(button.isEnabled() ? 1.0f : 0.5f));
+        g.drawFittedText(button.getButtonText(), textArea(button, button.getWidth(), button.getHeight()),
+                         juce::Justification::centred, 1, 0.7f);
+    }
+
+private:
+    static void drawPill(juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour fill, juce::Colour outline)
+    {
+        const auto r = bounds.reduced(0.5f);
+        g.setColour(fill);
+        g.fillRoundedRectangle(r, r.getHeight() * 0.5f);
+        g.setColour(outline);
+        g.drawRoundedRectangle(r, r.getHeight() * 0.5f, 1.0f);
+    }
+
+    static juce::Rectangle<int> textArea(juce::Component& pill, int width, int height)
+    {
+        const bool zones = pill.getProperties().getWithDefault(hasEndZones, false);
+        return juce::Rectangle<int>(width, height).reduced(zones ? endZoneWidth(height) : height / 2, 0);
+    }
+};
+
+//==============================================================================
+// The browse arrows, laid over the ends of the PROFILE pill: a small filled
+// triangle in each end zone, inked like the pill's text so it stays legible
+// when the pill lights up. Hovering tints the end, clipped to the pill's
+// rounded cap, which is what shows the ends are buttons of their own.
 class ProfileArrowButton : public juce::Button
 {
 public:
-    explicit ProfileArrowButton(bool isForward)
-        : juce::Button(isForward ? "Next profile" : "Previous profile"), forward(isForward) {}
+    ProfileArrowButton(bool isForward, juce::Button& pillToDrawOn)
+        : juce::Button(isForward ? "Next profile" : "Previous profile"), forward(isForward), pill(pillToDrawOn) {}
 
     void paintButton(juce::Graphics& g, bool highlighted, bool down) override
     {
         const auto b = getLocalBounds().toFloat();
-        const float h = juce::jmin(b.getHeight() * 0.5f, b.getWidth() * 0.9f);
-        const float w = h * 0.55f;
-        const float inset = juce::jmax(1.0f, b.getWidth() * 0.12f);
-        // Each chevron sits on the side of its box nearest the pill: "next" (right of
-        // the pill) at its box's left edge, "previous" at its box's right edge.
-        const float back = forward ? b.getX() + inset : b.getRight() - inset;
-        const float tip  = forward ? back + w : back - w;
+        const auto ink = pill.findColour(pill.getToggleState() ? juce::TextButton::textColourOnId
+                                                               : juce::TextButton::textColourOffId);
+        if (isEnabled() && (highlighted || down))
+        {
+            // The whole pill in this end's coordinates; the component bounds clip it to the cap.
+            const auto pillArea = (forward ? b.withLeft(b.getRight() - (float) pill.getWidth())
+                                           : b.withWidth((float) pill.getWidth())).reduced(1.0f);
+            g.setColour(ink.withAlpha(down ? 0.3f : 0.15f));
+            g.fillRoundedRectangle(pillArea, pillArea.getHeight() * 0.5f);
+        }
+
+        const float h = b.getHeight() * 0.4f;
+        const float w = h * 0.8f;
+        // Nudged towards the outer end, so the triangle sits in the cap's curve,
+        // clear of the label.
+        const float nudge = b.getHeight() * 0.08f;
+        const float cx = b.getCentreX() + (forward ? nudge : -nudge);
         const float cy = b.getCentreY();
+        const float back = forward ? cx - w * 0.5f : cx + w * 0.5f;
+        const float tip  = forward ? cx + w * 0.5f : cx - w * 0.5f;
 
-        juce::Path chevron;
-        chevron.startNewSubPath(back, cy - h * 0.5f);
-        chevron.lineTo(tip, cy);
-        chevron.lineTo(back, cy + h * 0.5f);
-
-        const float alpha = ! isEnabled() ? 0.25f : (down ? 1.0f : (highlighted ? 0.95f : 0.6f));
-        g.setColour(juce::Colour(0xFFFF0044).withAlpha(alpha));
-        g.strokePath(chevron, juce::PathStrokeType(1.5f, juce::PathStrokeType::curved,
-                                                   juce::PathStrokeType::rounded));
+        juce::Path triangle;
+        triangle.addTriangle(back, cy - h * 0.5f, tip, cy, back, cy + h * 0.5f);
+        g.setColour(ink.withAlpha(! isEnabled() ? 0.3f : (highlighted || down ? 1.0f : 0.8f)));
+        g.fillPath(triangle);
     }
 
 private:
     bool forward;
+    juce::Button& pill;
 };
 
 //==============================================================================
@@ -2603,6 +2675,7 @@ private:
     PhaseCorrelationMeter phaseCorrelationMeter;
     CheckboxLookAndFeel checkboxLookAndFeel;
     ComboBoxLookAndFeel comboBoxLookAndFeel;  // Neon red styling for dropdowns
+    ClipColumnLookAndFeel clipColumnLookAndFeel;  // The clip-type column's matching pills
     LogoTitle logoTitle;  // Logo image title
     juce::Label versionLabel;  // Build version display at bottom left
 
@@ -2659,14 +2732,14 @@ private:
     juce::TextButton cleanBoostButton;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> cleanBoostAttachment;
 
-    // NAM profile (prototype). Sits in the clip-type column's label slot and opens
-    // a menu to load, browse or clear a .nam profile, which replaces the clip type.
+    // NAM profile (prototype). The last pill in the clip-type column; opens a menu
+    // to load, browse or clear a .nam profile, which replaces the clip type.
     // Always reads PROFILE: lit while one is loaded, amber when it needs attention.
-    // The arrows either side step through the profile library, and the card names
-    // what each step loads.
+    // The arrows over its two ends step through the profile library, and the card
+    // names what each step loads.
     juce::TextButton profileButton;
-    ProfileArrowButton profilePrevButton { false };
-    ProfileArrowButton profileNextButton { true };
+    ProfileArrowButton profilePrevButton { false, profileButton };
+    ProfileArrowButton profileNextButton { true, profileButton };
     ProfileCard profileCard;
     juce::File profileCardFile;       // the profile the card names; its status line follows that load
     juce::File profileImportFolder;   // where "Load profile..." opens: the folder last imported from
