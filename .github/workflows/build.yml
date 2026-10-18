@@ -210,7 +210,7 @@ jobs:
     # and dev artifacts expire after 7 days. About 48 MB per dev run remains.
     - name: Upload Windows installer
       if: github.ref_type == 'tag'
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: SledgeDistortion-Installer-Windows
         path: dist/*.exe
@@ -301,7 +301,7 @@ jobs:
         Get-ChildItem "SledgeDistortion-$ver-Windows.zip" | ForEach-Object { "packaged $($_.Name) ($([math]::Round($_.Length/1MB,1))MB)" }
 
     - name: Upload Windows ZIP
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: SledgeDistortion-Windows-zip
         path: SledgeDistortion-*-Windows.zip
@@ -427,7 +427,7 @@ jobs:
         done
 
     - name: Upload Linux tarball
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: SledgeDistortion-Linux-tarball
         path: SledgeDistortion-*-Linux.tar.gz
@@ -610,7 +610,7 @@ jobs:
 
     - name: Upload macOS installer
       if: github.ref_type == 'tag'
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: SledgeDistortion-Installer-macOS
         path: dist/*.pkg
@@ -649,7 +649,7 @@ jobs:
         done
 
     - name: Upload macOS bundles zip
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: SledgeDistortion-macOS-zip
         path: SledgeDistortion-*-macOS.zip
