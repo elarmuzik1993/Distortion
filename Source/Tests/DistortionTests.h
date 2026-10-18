@@ -485,6 +485,16 @@ public:
     void runTest() override;
 };
 
+/** The Shape / Legacy switch (legacyFilter): only the chosen input-stage control
+    runs, the LFO's Shape target follows it, and older states open in the mode that
+    keeps them sounding the same. */
+class LegacyFilterSwitchTests : public juce::UnitTest
+{
+public:
+    LegacyFilterSwitchTests() : UnitTest("Legacy Filter Switch", TestCategories::DSP) {}
+    void runTest() override;
+};
+
 //==============================================================================
 // Test Runner Function
 //==============================================================================
@@ -1174,6 +1184,7 @@ inline void registerAllTests()
     static InputFilterModeTest inputFilterModeTest;
     static ShapeFilterTests shapeFilterTests;
     static ShapeProcessorTests shapeProcessorTests;
+    static LegacyFilterSwitchTests legacyFilterSwitchTests;
     static DiagReportJsonTest diagReportJsonTest;
     static DiagReportStoreTest diagReportStoreTest;
     static DiagSinkComposerTest diagSinkComposerTest;

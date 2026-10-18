@@ -44,6 +44,7 @@ namespace FactoryPresets
             { "distortionAmount",   20.0f },
             { "highPassFreq",       20.0f },
             { "filterMode",          0.0f },
+            { "legacyFilter",        0.0f },   // presets are Shape sounds
             { "shape",               0.0f },
             { "subGuardFreq",       60.0f },
             { "clipType",            0.0f },

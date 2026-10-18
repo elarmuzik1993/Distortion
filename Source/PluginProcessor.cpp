@@ -185,6 +185,7 @@ PluginProcessor::PluginProcessor()
     distortionAmountParam = parameters.getRawParameterValue("distortionAmount");
     highPassFreqParam = parameters.getRawParameterValue("highPassFreq");
     filterModeParam = parameters.getRawParameterValue("filterMode");
+    legacyFilterParam = parameters.getRawParameterValue("legacyFilter");
     shapeParam = parameters.getRawParameterValue("shape");
     subGuardFreqParam = parameters.getRawParameterValue("subGuardFreq");
     clipTypeParam = parameters.getRawParameterValue("clipType");
@@ -215,7 +216,7 @@ PluginProcessor::PluginProcessor()
     eqEnabledParam = parameters.getRawParameterValue("eqEnabled");
     // Verify all parameters were found
     jassert(inputGainParam && outputGainParam && distortionAmountParam
-        && highPassFreqParam && filterModeParam && shapeParam && subGuardFreqParam && clipTypeParam
+        && highPassFreqParam && filterModeParam && legacyFilterParam && shapeParam && subGuardFreqParam && clipTypeParam
         && lfoRateParam && lfoDepthParam && lfoWaveformParam && lfoEnabledParam && lfoDestinationParam
         && lfoBpmSyncParam && lfoBpmDivisionParam && lfoInvertParam && waveshaperMixParam
         && compPeakReductionParam && compMakeupGainParam && compRatioParam && compEnabledParam
@@ -826,7 +827,7 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     inputFilter.reset();
 
     // Shape, pre-drive half (base rate); the post-drive half is prepared with the oversampled spec below
-    const float initialShape = shapeParam ? shapeParam->load() : 0.0f;
+    const float initialShape = effectiveShape();
     shapePre.prepare(baseSpec, initialShape, DSPConstants::SHAPE_PRE_AMOUNT);
 
     // Force filter update on first processBlock (especially important for DAW state restoration)
@@ -1297,7 +1298,7 @@ void PluginProcessor::rebuildOversampling(double sampleRate, int samplesPerBlock
     // Re-prepare Clean Boost shelves at the new oversampled rate (see prepareToPlay)
     emphasisFilter.prepare(spec);
     deEmphasisFilter.prepare(spec);
-    shapePost.prepare(spec, shapeParam ? shapeParam->load() : 0.0f,
+    shapePost.prepare(spec, effectiveShape(),
                       ShapeFilter::postDriveAmount(distortionAmountParam->load()));
     const float boostOn = (cleanBoostParam && cleanBoostParam->load() > 0.5f) ? 1.0f : 0.0f;
     smoothedBoostDepth.reset(spec.sampleRate, DSPConstants::CLEAN_BOOST_SMOOTH_TIME_S);
@@ -1637,7 +1638,9 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         return;  // Skip this block to prevent NaN propagation
     }
     auto highPassFreq = highPassFreqParam->load();
-    float shapeValue = shapeParam ? shapeParam->load() : 0.0f;
+    // The Shape / Legacy switch: only the control that has the knob runs.
+    const bool legacyFilterOn = legacyFilterParam->load() > 0.5f;
+    float shapeValue = effectiveShape();
     if (! std::isfinite(shapeValue)) shapeValue = 0.0f;
     const int filterMode = static_cast<int>(filterModeParam->load());
     const float subGuardFreq = subGuardFreqParam->load();
@@ -1724,6 +1727,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     float modulatedDistortionParam = distortionParam;
     float modulatedToneFreq = toneParamValue;
     float modulatedShape = shapeValue;
+    float modulatedLegacyFreq = highPassFreq;
     float modulatedDistMix = distMix;
     float modulatedOutputGain = outGainParam;
 
@@ -1741,8 +1745,11 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             }
             break;
 
-        case 2:  // Shape (-100..100), block-level: swings the knob by up to ±SHAPE_LFO_RANGE
-            modulatedShape = ShapeFilter::modulated(shapeValue, lfoModulation);
+        case 2:  // Whatever has the knob, block-level
+            if (legacyFilterOn)   // the legacy cutoff, as v2.3 swept it
+                modulatedLegacyFreq = LegacyInputFilter::modulatedCutoff(highPassFreq, lfoModulation);
+            else                  // Shape (-100..100), by up to ±SHAPE_LFO_RANGE
+                modulatedShape = ShapeFilter::modulated(shapeValue, lfoModulation);
             break;
 
         default:
@@ -1751,8 +1758,10 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     }
 
     // Publish preamble parameters to block-scope members for stage helpers (PR-8)
-    pb_legacyFilterFreq         = highPassFreq;  // legacy filter cutoff: the knob value, not modulated
-    pb_filterMode               = filterMode;
+    // In Shape mode the legacy filter sits at its transparent default, whatever its
+    // parameters hold, so a Shape session sounds as it did before the switch existed.
+    pb_legacyFilterFreq         = legacyFilterOn ? modulatedLegacyFreq : DSPConstants::DEFAULT_HIPASS_FREQ;
+    pb_filterMode               = legacyFilterOn ? filterMode : 0;
     shapePre.setTarget(modulatedShape);
     shapePost.setTarget(modulatedShape);
     shapePost.setAmount(ShapeFilter::postDriveAmount(modulatedDistortionParam));
@@ -2385,8 +2394,21 @@ void PluginProcessor::migrateState(const juce::XmlElement& xmlState)
         if (auto* param = parameters.getParameter("shape"))
             param->setValueNotifyingHost(param->getDefaultValue());
 
+    // --- v2 -> v3 -------------------------------------------------------------
+    // The knob became switchable between Shape and the legacy filter. A state from
+    // before the switch opens in Legacy mode exactly when its legacy filter is doing
+    // something, so v2.3 sessions sound the same. APVTS would otherwise keep
+    // whatever the instance had.
+    if (loadedVersion < 3)
+        if (auto* param = parameters.getParameter("legacyFilter"))
+        {
+            const bool active = LegacyInputFilter::isActive(
+                juce::roundToInt(filterModeParam->load()), highPassFreqParam->load());
+            param->setValueNotifyingHost(active ? 1.0f : 0.0f);
+        }
+
     // --- future migrations go here -------------------------------------------
-    // if (loadedVersion < 3) { ... }
+    // if (loadedVersion < 4) { ... }
 
     // Upgrade the live tree to the current version so the next save is written
     // in the latest format regardless of where this state originated.
@@ -2974,6 +2996,13 @@ void PluginProcessor::applyDuckGain(juce::AudioBuffer<float>& buffer) noexcept
 bool PluginProcessor::isInputFilterActive() const
 {
     return LegacyInputFilter::isActive(pb_filterMode, pb_legacyFilterFreq);
+}
+
+float PluginProcessor::effectiveShape() const noexcept
+{
+    if (legacyFilterParam != nullptr && legacyFilterParam->load() > 0.5f)
+        return 0.0f;
+    return shapeParam != nullptr ? shapeParam->load() : 0.0f;
 }
 
 // Apply the multimode filter at BASE sample rate. setType/setCutoffFrequency are
@@ -4412,9 +4441,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         20.0f));  // Default 20 = audible out of the box; 0 is a true bypass (see
                   // applyDistortionStage), so a fresh instance previously did nothing.
 
-    // Hidden legacy param: cutoff/centre of the old multimode input filter, kept only so
-    // sessions saved before Shape still sound the same (see LegacyInputFilter.h). Not
-    // shown in the editor; the LFO no longer touches it. The ID stays "highPassFreq".
+    // Legacy param: cutoff/centre of the old multimode input filter, so sessions saved
+    // before Shape still sound the same (see LegacyInputFilter.h). It has the knob, and
+    // LFO destination 2, only while legacyFilter is on. The ID stays "highPassFreq".
     {
         juce::NormalisableRange<float> filterFreqRange(20.0f, 20000.0f, 1.0f);
         filterFreqRange.setSkewForCentre(1000.0f);
@@ -4441,6 +4470,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         juce::AudioParameterFloatAttributes()
             .withStringFromValueFunction([](float v, int) { return ShapeFilter::toText(v); })
             .withValueFromStringFunction([](const juce::String& t) { return ShapeFilter::fromText(t); })));
+
+    // The Shape / Legacy switch (Settings > Legacy Filter). Off: the knob is Shape and
+    // the legacy filter sits at its transparent default. On: the knob is the v2.3
+    // input filter and Shape is Flat. Saved with the session, since it changes the
+    // sound; older states choose by whether their legacy filter was doing anything.
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{ "legacyFilter", 2 },
+        "Legacy Filter",
+        false));
 
     // Sub Guard continuous crossover frequency (replaces 808-Safe toggle)
     params.push_back(std::make_unique<juce::AudioParameterFloat>(

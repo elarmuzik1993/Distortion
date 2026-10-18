@@ -281,7 +281,7 @@ public:
     // step in migrateState(). State saved before this stamp existed carries no
     // attribute and is treated as version 0 (the bare/legacy format).
     static constexpr const char* stateVersionAttribute = "stateVersion";
-    static constexpr int currentStateVersion = 2;
+    static constexpr int currentStateVersion = 3;
 
     // Reads the schema version from a freshly-restored state element and applies
     // any migrations needed to bring the live parameter tree up to
@@ -401,6 +401,8 @@ private:
     void applyCleanBoostEmphasis();
     void applyCleanBoostDeEmphasis();
     void applyShapePostDrive();
+    // The Shape knob's value, or Flat while the legacy filter has the knob.
+    float effectiveShape() const noexcept;
 
     std::unique_ptr<juce::dsp::Oversampling<float>> oversampling;
     size_t oversamplingFactor = 4;
@@ -590,6 +592,7 @@ private:
     std::atomic<float>* highPassFreqParam = nullptr;
     std::atomic<float>* shapeParam = nullptr;
     std::atomic<float>* filterModeParam = nullptr;
+    std::atomic<float>* legacyFilterParam = nullptr;   // on: the legacy filter runs instead of Shape
     std::atomic<float>* clipTypeParam = nullptr;
     std::atomic<float>* subGuardFreqParam = nullptr;  // Sub Guard crossover frequency (50-200Hz)
     std::atomic<float>* lfoRateParam = nullptr;

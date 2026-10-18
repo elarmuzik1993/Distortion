@@ -3252,12 +3252,16 @@ void FactoryPresetTests::testPresetsLeaveLegacyFilterOff()
             expect(juce::String(pv.id) != "highPassFreq" && juce::String(pv.id) != "filterMode",
                    juce::String("Preset '") + preset.name + "' sets a legacy filter param");
 
-        // Start from a dirty legacy filter so the baseline must clear it.
+        // Start from a dirty legacy filter in Legacy mode so the baseline must clear both.
         setParameter(processor.parameters, "filterMode", 2.0f);
         setParameter(processor.parameters, "highPassFreq", 800.0f);
+        setParameter(processor.parameters, "legacyFilter", 1.0f);
         FactoryPresets::apply(processor.parameters, preset.name);
         expect(! LegacyInputFilter::isActive(juce::roundToInt(value("filterMode")), value("highPassFreq")),
                juce::String("Preset '") + preset.name + "' left the legacy filter on");
+        auto* legacySwitch = processor.parameters.getParameter("legacyFilter");
+        expect(legacySwitch != nullptr && legacySwitch->getValue() < 0.5f,
+               juce::String("Preset '") + preset.name + "' left the knob in Legacy mode");
     }
 
     expect(FactoryPresets::baseline().end() != std::find_if(
@@ -3848,6 +3852,7 @@ void RTCleanPreHighPassTest::runTest()
 
         distortionAmount->setValueNotifyingHost(0.5f);
         subGuardFreq->setValueNotifyingHost(0.0f);
+        setParameter(processor.parameters, "legacyFilter", 1.0f);   // so the sweep reaches the filter
         highPassFreq->setValueNotifyingHost(highPassFreqFloat->convertTo0to1(20.0f));
 
         juce::MidiBuffer midi;
@@ -4414,6 +4419,7 @@ void CoefficientPropagationTest::runTest()
         setParameter(processor.parameters, "compEnabled", 1.0f);
         setParameter(processor.parameters, "compPeakReduction", 0.0f);
         setParameter(processor.parameters, "compMakeupGain", 50.0f);
+        setParameter(processor.parameters, "legacyFilter", 1.0f);   // the pre-HP only follows its knob in Legacy mode
 
         juce::MidiBuffer midi;
 
@@ -5010,6 +5016,7 @@ void InputFilterModeTest::runTest()
         proc.prepareToPlay(sr, 512);
         // True bypass (compressor off) so we also prove the filter runs without distortion.
         configureCleanProcessor(proc, /*defeatBypass*/ false);
+        setParameter(proc.parameters, "legacyFilter", 1.0f);   // the filter only runs in Legacy mode
         setParameter(proc.parameters, "filterMode", static_cast<float>(modeIdx));
         setParameter(proc.parameters, "highPassFreq", cutoff);
 
@@ -5578,11 +5585,11 @@ void ShapeProcessorTests::runTest()
         expect(LegacyInputFilter::isActive(2, 1000.0f));
     }
 
-    beginTest("Legacy cutoff is not LFO-modulated any more");
+    beginTest("In Shape mode the legacy cutoff is not LFO-modulated");
     {
-        // Destination 2 used to sweep highPassFreq up to 1.5 octaves (20 Hz -> ~57 Hz),
-        // which cut the 25-45 Hz band by several dB. Now it sweeps Shape (±50), which
-        // barely touches that band, and the legacy filter stays at 20 Hz.
+        // Destination 2 sweeps highPassFreq up to 1.5 octaves (20 Hz -> ~57 Hz) only in
+        // Legacy mode, which would cut the 25-45 Hz band by several dB. In Shape mode it
+        // sweeps Shape (±50), which barely touches that band, and the filter stays at 20 Hz.
         const float still = bypassBand(0.0f, 25.0, 45.0);
         PluginProcessor proc;
         proc.setRateAndBufferSizeDetails(sr, 512);
@@ -7953,6 +7960,240 @@ void ProfileCardAnimationTests::runTest()
         const float before = fading.getCardAlpha(t1);
         fading.keepAlive(t1);
         expectWithinAbsoluteError(fading.getCardAlpha(t1), before, 1.0e-6f, "Already fading: unchanged");
+    }
+}
+
+void LegacyFilterSwitchTests::runTest()
+{
+    constexpr double sr = 44100.0;
+    const int numSamples = 1 << 16;
+
+    auto noise = [&]
+    {
+        juce::Random rng(7);
+        juce::AudioBuffer<float> buf(2, numSamples);
+        for (int ch = 0; ch < 2; ++ch)
+            for (int n = 0; n < numSamples; ++n)
+                buf.setSample(ch, n, 0.25f * (rng.nextFloat() * 2.0f - 1.0f));
+        return buf;
+    };
+
+    auto valueOf = [](PluginProcessor& proc, const char* id)
+    {
+        auto* p = proc.parameters.getParameter(id);
+        return p != nullptr ? p->convertFrom0to1(p->getValue()) : -1.0f;
+    };
+
+    struct Setup
+    {
+        bool legacy = false;
+        float shape = 0.0f;
+        int filterMode = 0;          // 0 High Pass, 1 Low Pass, 2 Band Pass
+        float cutoff = 20.0f;        // the legacy filter's transparent default
+        bool fullChain = false;      // false: true bypass; true: comp on at zero reduction
+    };
+
+    // Band energy of noise through the input stage, everything else transparent.
+    auto band = [&](const Setup& s, double lo, double hi)
+    {
+        PluginProcessor proc;
+        proc.setRateAndBufferSizeDetails(sr, 512);
+        proc.prepareToPlay(sr, 512);
+        configureCleanProcessor(proc, s.fullChain);
+        setParameter(proc.parameters, "legacyFilter", s.legacy ? 1.0f : 0.0f);
+        setParameter(proc.parameters, "shape", s.shape);
+        setParameter(proc.parameters, "filterMode", static_cast<float>(s.filterMode));
+        setParameter(proc.parameters, "highPassFreq", s.cutoff);
+        auto buf = noise();
+        runInBlocks(proc, buf);
+        return bandEnergyDb(buf, sr, lo, hi);
+    };
+
+    beginTest("Parameter exists and new instances start in Shape mode");
+    {
+        PluginProcessor proc;
+        auto* p = proc.parameters.getParameter("legacyFilter");
+        expect(p != nullptr, "legacyFilter parameter missing");
+        if (p != nullptr)
+            expectEquals(p->getDefaultValue(), 0.0f, "A new instance must start in Shape mode");
+    }
+
+    beginTest("Shape mode ignores the legacy filter's settings");
+    {
+        // A 1 kHz low pass would take well over 10 dB off 4-6 kHz.
+        for (bool fullChain : { false, true })
+        {
+            const float flat = band({ false, 0.0f, 0, 20.0f, fullChain }, 4000.0, 6000.0);
+            const float lowPassSet = band({ false, 0.0f, 1, 1000.0f, fullChain }, 4000.0, 6000.0);
+            expectWithinAbsoluteError(lowPassSet, flat, 0.1f,
+                juce::String(fullChain ? "Full chain" : "True bypass")
+                + ": the legacy low pass cut 4-6 kHz in Shape mode");
+        }
+    }
+
+    beginTest("Legacy mode runs the legacy filter");
+    {
+        for (bool fullChain : { false, true })
+        {
+            const float flat = band({ true, 0.0f, 0, 20.0f, fullChain }, 4000.0, 6000.0);
+            const float lowPassSet = band({ true, 0.0f, 1, 1000.0f, fullChain }, 4000.0, 6000.0);
+            expect(flat - lowPassSet > 10.0f,
+                   juce::String(fullChain ? "Full chain" : "True bypass")
+                   + ": the legacy low pass cut 4-6 kHz by only " + juce::String(flat - lowPassSet, 2) + " dB");
+        }
+    }
+
+    beginTest("Legacy mode bypasses Shape");
+    {
+        // Full Bark lifts 600 Hz by about 12 dB; in Legacy mode the Shape value must do nothing.
+        for (bool fullChain : { false, true })
+        {
+            const float flat = band({ true, 0.0f, 0, 20.0f, fullChain }, 550.0, 650.0);
+            const float bark = band({ true, -100.0f, 0, 20.0f, fullChain }, 550.0, 650.0);
+            expectWithinAbsoluteError(bark, flat, 0.1f,
+                juce::String(fullChain ? "Full chain" : "True bypass")
+                + ": Shape changed 600 Hz in Legacy mode");
+        }
+    }
+
+    beginTest("A Shape value set in Legacy mode stays out after a re-prepare");
+    {
+        // prepareToPlay seeds the Shape filters from the parameter; in Legacy mode
+        // that seed must be Flat too, or the first blocks after it would carry Bark.
+        PluginProcessor proc;
+        proc.setRateAndBufferSizeDetails(sr, 512);
+        configureCleanProcessor(proc, false);
+        setParameter(proc.parameters, "legacyFilter", 1.0f);
+        setParameter(proc.parameters, "shape", -100.0f);
+        proc.prepareToPlay(sr, 512);
+        const int latency = proc.getLatencySamples();
+        juce::AudioBuffer<float> first(2, 8192);
+        for (int n = 0; n < first.getNumSamples(); ++n)
+            for (int ch = 0; ch < 2; ++ch)
+                first.setSample(ch, n, 0.25f * std::sin(juce::MathConstants<float>::twoPi * 600.0f * n / (float) sr));
+        const auto in = first;
+        runInBlocks(proc, first);
+        float worst = 0.0f;
+        for (int ch = 0; ch < 2; ++ch)
+            for (int n = 0; n + latency < first.getNumSamples(); ++n)
+                worst = std::max(worst, std::abs(first.getSample(ch, n + latency) - in.getSample(ch, n)));
+        expectEquals(worst, 0.0f, "Bark leaked into true bypass after a re-prepare in Legacy mode");
+    }
+
+    beginTest("In Legacy mode LFO destination 2 sweeps the filter cutoff, as in v2.3");
+    {
+        // High pass at 200 Hz, Square LFO at 2 Hz, depth 100: the cutoff alternates
+        // 1.5 octaves either side (about 71 Hz and 566 Hz), so a steady 150 Hz tone
+        // swings by well over 3 dB from window to window.
+        auto windowSpread = [&](bool lfoOn)
+        {
+            PluginProcessor proc;
+            proc.setRateAndBufferSizeDetails(sr, 512);
+            proc.prepareToPlay(sr, 512);
+            configureCleanProcessor(proc, /*defeatBypass*/ false);
+            setParameter(proc.parameters, "legacyFilter", 1.0f);
+            setParameter(proc.parameters, "filterMode", 0.0f);
+            setParameter(proc.parameters, "highPassFreq", 200.0f);
+            setParameter(proc.parameters, "lfoEnabled", lfoOn ? 1.0f : 0.0f);
+            setParameter(proc.parameters, "lfoDestination", 2.0f);
+            setParameter(proc.parameters, "lfoWaveform", 2.0f);   // Square
+            setParameter(proc.parameters, "lfoRate", 2.0f);
+            setParameter(proc.parameters, "lfoDepth", 100.0f);
+            juce::AudioBuffer<float> buf(2, numSamples);
+            for (int n = 0; n < numSamples; ++n)
+            {
+                const float v = 0.25f * std::sin(juce::MathConstants<float>::twoPi * 150.0f * n / (float) sr);
+                buf.setSample(0, n, v);
+                buf.setSample(1, n, v);
+            }
+            runInBlocks(proc, buf);
+            constexpr int win = 4096;
+            float lo = 1.0e9f, hi = -1.0e9f;
+            for (int start = 4096; start + win <= numSamples; start += win)
+            {
+                juce::AudioBuffer<float> w(2, win);
+                for (int ch = 0; ch < 2; ++ch)
+                    w.copyFrom(ch, 0, buf, ch, start, win);
+                const float e = bandEnergyDb(w, sr, 130.0, 170.0, 12);
+                lo = std::min(lo, e);
+                hi = std::max(hi, e);
+            }
+            return hi - lo;
+        };
+        const float moving = windowSpread(true);
+        const float still = windowSpread(false);
+        expect(moving > 3.0f, "LFO on the legacy cutoff swung 150 Hz by only "
+               + juce::String(moving, 2) + " dB");
+        expect(moving > still + 2.0f, "LFO spread " + juce::String(moving, 2)
+               + " dB not clearly above the static spread " + juce::String(still, 2));
+    }
+
+    // A state as a build from before the switch wrote it: no legacyFilter PARAM and
+    // the given stateVersion.
+    auto olderState = [&](int filterMode, float cutoff, int version)
+    {
+        PluginProcessor src;
+        setParameter(src.parameters, "filterMode", static_cast<float>(filterMode));
+        setParameter(src.parameters, "highPassFreq", cutoff);
+        juce::MemoryBlock saved;
+        src.getStateInformation(saved);
+        std::unique_ptr<juce::XmlElement> xml(juce::AudioProcessor::getXmlFromBinary(
+            saved.getData(), (int) saved.getSize()));
+        juce::MemoryBlock older;
+        if (xml == nullptr)
+            return older;
+        for (auto* child = xml->getFirstChildElement(); child != nullptr;)
+        {
+            auto* next = child->getNextElement();
+            if (child->getStringAttribute("id") == "legacyFilter")
+                xml->removeChildElement(child, true);
+            child = next;
+        }
+        xml->setAttribute(PluginProcessor::stateVersionAttribute, version);
+        juce::AudioProcessor::copyXmlToBinary(*xml, older);
+        return older;
+    };
+
+    beginTest("An older state that used the legacy filter opens in Legacy mode");
+    {
+        for (int version : { 1, 2 })
+        {
+            const auto older = olderState(1, 500.0f, version);   // Low Pass at 500 Hz
+            PluginProcessor dst;
+            setParameter(dst.parameters, "legacyFilter", 0.0f);
+            dst.setStateInformation(older.getData(), (int) older.getSize());
+            expectEquals(valueOf(dst, "legacyFilter"), 1.0f,
+                         "Version " + juce::String(version) + " state with a live legacy filter");
+            expectWithinAbsoluteError(valueOf(dst, "filterMode"), 1.0f, 1.0e-3f);
+            expectWithinAbsoluteError(valueOf(dst, "highPassFreq"), 500.0f, 0.5f);
+        }
+    }
+
+    beginTest("An older state with the legacy filter at its default opens in Shape mode");
+    {
+        for (int version : { 1, 2 })
+        {
+            const auto older = olderState(0, 20.0f, version);
+            PluginProcessor dst;
+            setParameter(dst.parameters, "legacyFilter", 1.0f);   // must not survive the load
+            dst.setStateInformation(older.getData(), (int) older.getSize());
+            expectEquals(valueOf(dst, "legacyFilter"), 0.0f,
+                         "Version " + juce::String(version) + " state with a transparent legacy filter");
+        }
+    }
+
+    beginTest("A current state keeps the switch as saved");
+    {
+        // Legacy mode with the filter still at its default: the migration rule would
+        // say Shape, so this only holds once the state version marks the switch as saved.
+        PluginProcessor src;
+        setParameter(src.parameters, "legacyFilter", 1.0f);
+        juce::MemoryBlock saved;
+        src.getStateInformation(saved);
+
+        PluginProcessor dst;
+        dst.setStateInformation(saved.getData(), (int) saved.getSize());
+        expectEquals(valueOf(dst, "legacyFilter"), 1.0f, "Legacy mode lost on reload");
     }
 }
 
