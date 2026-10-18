@@ -16,8 +16,7 @@
 1. Owner, Release standalone or FL: the clip column. Hover and click each PROFILE end (steps
    profiles), click the middle (menu); lit, the arrows turn white. The clip-type letters now share
    the pills' smaller font: keep, or enlarge just that pill?
-2. CHANGELOG `Unreleased` says the arrows sit "either side of the PROFILE button"; they are now on
-   its ends. Fix it, and add a line for the column, in the next code PR (not on `main` directly).
+2. CHANGELOG `Unreleased` > UI: add a line for the clip-column redesign (four matching pills).
 3. Owner, same build: Settings > Legacy Filter (knob and picker swap in, Shape silent, LFO target
    reads Filter); a real v2.3.0 session that used Low or Band Pass opens in Legacy mode, same sound.
 4. Owner: the profile browser (Load profile... with several files; arrows wrap; card slides, holds
