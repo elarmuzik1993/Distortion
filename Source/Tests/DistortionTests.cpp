@@ -5115,7 +5115,7 @@ void SubGuardFlatnessTest::runTest()
 }
 
 //==============================================================================
-// Sub Guard Pending Tests (fixed behaviour, asserted only with DISTORTION_PENDING_TESTS=1)
+// Sub Guard Behaviour Tests (each fixed by a step of the Sub Guard plan)
 //==============================================================================
 
 namespace
@@ -5249,35 +5249,22 @@ namespace
     double amplitudeDb(double amplitude) { return 20.0 * std::log10(std::max(amplitude, 1.0e-12)); }
 }
 
-void SubGuardPendingTests::expectPending(bool ok, const juce::String& message)
+void SubGuardBehaviourTests::runTest()
 {
-    if (ok)
-        logMessage("  pending pass: " + message);
-    else
-        logMessage((pendingEnabled ? "  PENDING FAIL: " : "  pending (expected to fail today): ") + message);
-    if (pendingEnabled)
-        expect(ok, message);
-}
-
-void SubGuardPendingTests::runTest()
-{
-    pendingEnabled = juce::SystemStats::getEnvironmentVariable("DISTORTION_PENDING_TESTS", {}) == "1";
-    logMessage(pendingEnabled ? "Sub Guard pending assertions ON (DISTORTION_PENDING_TESTS=1)"
-                              : "Sub Guard pending assertions OFF: measurements are logged only");
-
     runCleanSubTests();
 
     for (bool distorted : { false, true })
     {
         runOffThenOnTest(distorted);
         runOnThenOffTest(distorted);
+        runToggleTest(distorted);
         runReverseMidFadeTest(distorted);
         runBoundaryChatterTests(distorted);
         runLargeBufferSweepTest(distorted);
     }
 }
 
-void SubGuardPendingTests::runCleanSubTests()
+void SubGuardBehaviourTests::runCleanSubTests()
 {
     // C1/C2: below the crossover the sub should leave as it came in. Section 2a's set-up:
     // 44.1 kHz, 512-sample blocks, default clip type, drive 70, mix 100; 4 s of input,
@@ -5441,12 +5428,13 @@ void SubGuardStateLoadTest::runStateLoadTests(bool distorted)
     }
 }
 
-void SubGuardPendingTests::runOffThenOnTest(bool distorted)
+void SubGuardBehaviourTests::runOffThenOnTest(bool distorted)
 {
-    // F1: OFF leaves the banks and toneFilterLow holding their last state, and ON resumes
-    // from it with a hard switch. distMix 0 is the main evidence: with the drive an
-    // identity, the step is the crossover's alone. Coming back at 150 Hz also exercises the
-    // smoother, which is not updated while off and so glides from 60 Hz.
+    // F1: OFF used to leave the banks and toneFilterLow holding their last state, and ON
+    // resumed from it with a hard switch; since step 7 they run warm and g ramps. distMix 0
+    // is the main evidence: with the drive an identity, the step is the crossover's alone.
+    // Coming back at 150 Hz also exercises the smoother, which holds 60 Hz while off and
+    // so glides from there.
     for (float onFreq : { 60.0f, 150.0f })
     {
         const juce::String label = "Sub Guard 60 -> 0 -> " + juce::String((int) onFreq) + " Hz, 80 Hz sine"
@@ -5465,15 +5453,15 @@ void SubGuardPendingTests::runOffThenOnTest(bool distorted)
         const float baseline = std::max({ baselineFrom, baselineOff, baselineTo });
 
         expect(rig.allFinite, "Non-finite output: " + label);
-        expectPending(after <= kSubGuardOnOffRatio * baseline,
-                      label + ": " + stepText(after, baseline, kSubGuardOnOffRatio));
+        expect(after <= kSubGuardOnOffRatio * baseline,
+               label + ": " + stepText(after, baseline, kSubGuardOnOffRatio));
     }
 }
 
-void SubGuardPendingTests::runOnThenOffTest(bool distorted)
+void SubGuardBehaviourTests::runOnThenOffTest(bool distorted)
 {
-    // F2: ON -> OFF swaps clean low + distorted high for full-range distortion at a block
-    // boundary, with no fade. Same on/off limit as F1.
+    // F2: ON -> OFF used to swap clean low + distorted high for full-range distortion at a
+    // block boundary, with no fade; since step 7 g ramps it. Same on/off limit as F1.
     const juce::String label = "Sub Guard 60 -> 0 Hz, 45 Hz + 1000 Hz" + variantText(distorted);
     beginTest("On then off: " + label);
 
@@ -5486,11 +5474,42 @@ void SubGuardPendingTests::runOnThenOffTest(bool distorted)
     const float baseline = std::max(baselineOn, baselineOff);
 
     expect(rig.allFinite, "Non-finite output: " + label);
-    expectPending(after <= kSubGuardOnOffRatio * baseline,
-                  label + ": " + stepText(after, baseline, kSubGuardOnOffRatio));
+    expect(after <= kSubGuardOnOffRatio * baseline,
+           label + ": " + stepText(after, baseline, kSubGuardOnOffRatio));
 }
 
-void SubGuardPendingTests::runReverseMidFadeTest(bool distorted)
+void SubGuardBehaviourTests::runToggleTest(bool distorted)
+{
+    // Step 7: Sub Guard toggled every 30 ms, twice the on/off ramp, so every switch
+    // completes. 2048-sample blocks (46 ms) toggle every block.
+    for (int blockSize : { 64, 2048 })
+    {
+        const juce::String label = "toggled every 30 ms, " + juce::String(blockSize)
+                                 + "-sample blocks, 45 Hz + 1000 Hz" + variantText(distorted);
+        beginTest("On/off toggle: " + label);
+
+        const int period = juce::jmax(1, juce::roundToInt(0.030 * SubGuardToneRig::sampleRate / blockSize));
+        const int settle = juce::jmax(2, 32 * 256 / blockSize);
+        SubGuardToneRig rig(blockSize, { { 45.0, 0.5f }, { 1000.0, 0.15f } }, distorted, 60.0f);
+        rig.runBlocks(60.0f, settle);
+        const float baselineOn = rig.runBlocks(60.0f, settle / 2);
+        rig.runBlocks(0.0f, settle);
+        const float baselineOff = rig.runBlocks(0.0f, settle / 2);
+        const float baseline = std::max(baselineOn, baselineOff);
+
+        float toggled = 0.0f;
+        const int blocks = juce::jmax(40, 40 * period);
+        for (int b = 0; b < blocks; ++b)
+            toggled = std::max(toggled, rig.runBlock(((b / period) % 2 == 0) ? 60.0f : 0.0f));
+
+        expect(rig.allFinite, "Non-finite output: " + label);
+        logMessage("  " + label + ": " + stepText(toggled, baseline, kSubGuardOnOffRatio));
+        expect(toggled <= kSubGuardOnOffRatio * baseline,
+               label + ": " + stepText(toggled, baseline, kSubGuardOnOffRatio));
+    }
+}
+
+void SubGuardBehaviourTests::runReverseMidFadeTest(bool distorted)
 {
     // F3: the smoothed crossover crosses 92 Hz (where an LR24 -> LR18 crossfade used to
     // start, before step 6) and comes back on the next block, inside what was the 10 ms fade. The retarget then resets the bank
@@ -5539,7 +5558,7 @@ void SubGuardPendingTests::runReverseMidFadeTest(bool distorted)
                + stepText(singleStep, singleBaseline));
 }
 
-void SubGuardPendingTests::runBoundaryChatterTests(bool distorted)
+void SubGuardBehaviourTests::runBoundaryChatterTests(bool distorted)
 {
     // F3/F5: automation wobbling across a former order boundary every block or two. Before
     // step 6 the smoothed crossover then hovered on the boundary, so the order flipped back
@@ -5573,7 +5592,7 @@ void SubGuardPendingTests::runBoundaryChatterTests(bool distorted)
     }
 }
 
-void SubGuardPendingTests::runLargeBufferSweepTest(bool distorted)
+void SubGuardBehaviourTests::runLargeBufferSweepTest(bool distorted)
 {
     // F6: SubGuardOrderCrossfadeTest's sweep (60 -> 200 -> 60 Hz over 80 + 80 blocks) with
     // 2048-sample blocks, where the once-per-block coefficient update is a large step.
@@ -5595,7 +5614,7 @@ void SubGuardPendingTests::runLargeBufferSweepTest(bool distorted)
     for (int b = 0; b <= sweepBlocks; ++b)
         sweep = std::max(sweep, rig.runBlock(200.0f - 140.0f * static_cast<float>(b) / sweepBlocks));
 
-    // F6 does not show here today, so the sweeps are ordinary assertions, not pending ones.
+    // F6 never showed here, so the sweeps were always ordinary assertions.
     expect(rig.allFinite, "Non-finite output: " + label);
     logMessage("  " + label + ": " + stepText(sweep, baseline));
     expect(sweep <= kSubGuardStepRatio * baseline, label + ": " + stepText(sweep, baseline));

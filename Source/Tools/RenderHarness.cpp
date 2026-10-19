@@ -331,6 +331,11 @@ int renderToFile(const Args& args)
     if (args.has("filterfreq"))
         setParam(proc.parameters, "highPassFreq", args.num("filterfreq", 20.0f));
 
+    // Prepare again with every setting in place, as a host restores a session before it
+    // plays: settings that ramp (Sub Guard's on/off weight) start at their values instead
+    // of ramping from the defaults over the first block.
+    proc.prepareToPlay(sr, kBlockSize);
+
     runPlugin(proc, input);
 
     const auto outFile = juce::File::getCurrentWorkingDirectory().getChildFile(outPath);

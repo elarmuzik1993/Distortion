@@ -681,7 +681,8 @@ private:
     int   pb_clipType                 = 0;
     float pb_subGuardFreq             = 0.0f;
     float pb_outGainParam             = 50.0f;  // raw, for output gain LFO modulation
-    bool  pb_subGuardActive           = false;  // set by applySubGuardSplit
+    bool  pb_subGuardActive           = false;  // split audible this block (g > 0); set by applySubGuardSplit
+    bool  pb_subGuardSplitRan         = false;  // splitter ran this block (warm, on or off)
     bool  pb_cleanBoostOn             = false;  // boost requested this block (gated with distortion active)
     bool  pb_boostProcessedThisBlock  = false;  // emphasis ran → de-emphasis must run too (pairs the shelves)
     // (Per-sample interpolation moved to inputGainRamp/driveRamp/distMixRamp — see LinearRamp.h)
@@ -691,9 +692,11 @@ private:
     void applyInputFilter(juce::dsp::AudioBlock<float>& block);  // base-rate multimode filter
     bool isInputFilterActive() const;                            // true when not transparent
     void applyPreCompression(juce::dsp::AudioBlock<float> block);
-    bool applySubGuardSplit();  // returns false to abort processBlock (band buffer overflow)
+    // Sub Guard split plus the drive input's chain (tamer, auto-gain reference, Clean Boost,
+    // drive). Returns false to abort processBlock (band buffer overflow while audible).
+    bool applySubGuardSplit();
     // Per-sample distortion: harmonic-density envelope + studio distortion + wet/dry mix.
-    // Called from both applySubGuardSplit branches (OFF: full-range; ACTIVE: high band only).
+    // Called from applySubGuardSplit on the drive input (full range, high band, or a blend).
     // All per-sample params are explicit so the caller controls ramp advancement.
     float applyDistortionStage(float inputSample, int channel,
                                float currentGain, float sampleDrive,
