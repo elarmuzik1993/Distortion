@@ -462,7 +462,7 @@ public:
 };
 
 /** Sub Guard behaviour the current code gets wrong: transitions that click (stale
-    banks on a state load or OFF -> ON, the hard ON -> OFF switch, an order crossfade
+    banks on OFF -> ON, the hard ON -> OFF switch, an order crossfade
     reversed mid-fade, boundary chatter, a large-buffer sweep) and a sub that does not
     leave clean (the transient tamer and the distortion products below the crossover).
     The large-buffer sweeps (F6) pass today and are asserted always.
@@ -480,7 +480,6 @@ private:
     void expectPending(bool ok, const juce::String& message);
 
     void runCleanSubTests();
-    void runStateLoadTests(bool distorted);
     void runOffThenOnTest(bool distorted);
     void runOnThenOffTest(bool distorted);
     void runReverseMidFadeTest(bool distorted);
@@ -488,6 +487,19 @@ private:
     void runLargeBufferSweepTest(bool distorted);
 
     bool pendingEnabled = false;
+};
+
+/** F8: a state load (preset or session) resets every Sub Guard bank, so the first blocks
+    after it match a processor whose banks were all reset, at each order (LR24 60 Hz,
+    LR18 100 Hz, LR12 150 Hz). Moved out of SubGuardPendingTests once fixed. */
+class SubGuardStateLoadTest : public juce::UnitTest
+{
+public:
+    SubGuardStateLoadTest() : UnitTest("Sub Guard State Load", TestCategories::DSP) {}
+    void runTest() override;
+
+private:
+    void runStateLoadTests(bool distorted);
 };
 
 /** Input multimode filter shapes correctly in true bypass (distortion + comp off):
@@ -1211,6 +1223,7 @@ inline void registerAllTests()
     static StatefulDistortionTests statefulDistortionTests;
     static SubGuardFlatnessTest subGuardFlatnessTest;
     static SubGuardPendingTests subGuardPendingTests;
+    static SubGuardStateLoadTest subGuardStateLoadTest;
     static InputFilterModeTest inputFilterModeTest;
     static ShapeFilterTests shapeFilterTests;
     static ShapeProcessorTests shapeProcessorTests;

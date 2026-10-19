@@ -5155,7 +5155,6 @@ void SubGuardPendingTests::runTest()
 
     for (bool distorted : { false, true })
     {
-        runStateLoadTests(distorted);
         runOffThenOnTest(distorted);
         runOnThenOffTest(distorted);
         runReverseMidFadeTest(distorted);
@@ -5254,9 +5253,15 @@ void SubGuardPendingTests::runCleanSubTests()
     }
 }
 
-void SubGuardPendingTests::runStateLoadTests(bool distorted)
+void SubGuardStateLoadTest::runTest()
 {
-    // F8: a state load resets the LR24 bank but not LR12 (150 Hz) or LR18 (100 Hz). The
+    for (bool distorted : { false, true })
+        runStateLoadTests(distorted);
+}
+
+void SubGuardStateLoadTest::runStateLoadTests(bool distorted)
+{
+    // F8: a state load once reset the LR24 bank but not LR12 (150 Hz) or LR18 (100 Hz). The
     // load restarts the whole chain from zero (oversamplers, delay lines, envelopes), so
     // the output after it is never near the steady slew, whatever the banks do. The
     // reference is a second processor with the same history that is re-prepared (which
@@ -5304,7 +5309,8 @@ void SubGuardPendingTests::runStateLoadTests(bool distorted)
         const juce::String numbers = juce::String(c.fc == 60.0f ? "control: " : "") + "state load at " + label
             + ": gap to a re-prepared reference " + juce::String(gap, 5) + " (limit " + juce::String(limit, 5)
             + "); steady slew " + juce::String(baseline, 5) + ", peak step after the load " + juce::String(step, 5);
-        expectPending(gap <= limit, numbers);
+        logMessage("  " + numbers);
+        expect(gap <= limit, numbers);
     }
 }
 

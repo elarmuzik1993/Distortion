@@ -21,6 +21,9 @@ Full development history, newest first.
 - **EXTREME reads less saturated.** The whole texture surface — base artwork and crack layer together — eases back by 26% as EXTREME comes in, rather than the intensified layer stacking on top of a base still at full strength. Roughly 18% less red across the panel; the resting state is unchanged.
 - **Nothing is drawn across the middle of the oscilloscope any more.** Silence is a flat buffer, so with no audio the trace drew as a hard line through the centre, and the zero-reference graticule sat under it — together they read as a divider rather than a scope. Signal presence is now tracked per channel: an idle scope draws no trace, a mono source no longer leaves a flat line beside its live channel, and the only thing crossing the centre is the waveform.
 
+**Fixes**
+- **No more click on preset or session load with Sub Guard at 100-150 Hz.** Loading a preset or session while playing reset only the crossover used at low Sub Guard settings, so at 100 Hz and 150 Hz the first moment after the load ran filters still holding the previous audio and could pop. Every Sub Guard crossover is now cleared on load.
+
 **Licensing**
 - **Sledge Distortion is now free software under the GNU General Public License v3**, replacing PolyForm Noncommercial 1.0.0. JUCE 7 offers either paid tier-leveled terms or the GPL v3, and this project takes the GPL route — which is also why a permissive licence is not an option while the build links the non-ISC JUCE modules. Practical effects: the source may be used, modified and redistributed commercially provided derivatives stay GPL v3 with source available, and JUCE's $50k revenue limit no longer applies.
 - **Distribution model**: pay-what-you-want. The GPL guarantees the freedom to use and share the plugin whether or not anyone pays; what is sold is prebuilt, ready-to-install binaries and continued development.
