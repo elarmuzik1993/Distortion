@@ -389,6 +389,8 @@ target_compile_definitions(DistortionTests
         DISTORTION_UNIT_TEST=1
         # NAM Core's own example models serve as profile fixtures (MIT, see THIRD-PARTY-NOTICES).
         DISTORTION_NAM_TEST_MODELS_DIR="${nam_core_SOURCE_DIR}/example_models"
+        # Golden audio references (GoldenAudioTests), read from the source tree.
+        DISTORTION_TEST_AUDIO_DIR="${CMAKE_SOURCE_DIR}/Resources/TestAudio"
 )
 
 target_link_libraries(DistortionTests

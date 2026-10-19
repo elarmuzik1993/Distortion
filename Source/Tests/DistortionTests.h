@@ -389,21 +389,14 @@ private:
 // Golden Audio Tests
 //==============================================================================
 
-/** Tests comparing output to golden reference files */
+/** Renders fixed cases (explicit parameters, seeded noise, a synthetic 808 + mids input)
+    and compares them with the 32-bit float WAVs in Resources/TestAudio. A missing reference
+    fails; DISTORTION_GOLDEN_GENERATE=1 writes the references instead of comparing. */
 class GoldenAudioTests : public juce::UnitTest
 {
 public:
     GoldenAudioTests() : UnitTest("Golden Audio Reference", TestCategories::GoldenAudio) {}
     void runTest() override;
-
-private:
-    // Set to true to generate new reference files instead of comparing
-    static constexpr bool GENERATE_MODE = false;
-
-    juce::File getTestAudioDirectory();
-    void testSilencePassthrough();
-    void testDistortionOutput(int clipType, const juce::String& label);
-    void test808BandSplit();
 };
 
 //==============================================================================

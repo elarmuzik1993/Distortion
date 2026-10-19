@@ -8,6 +8,7 @@
 #include "../RTAllocationGuard.h"
 #include "../ShapeFilter.h"
 #include <atomic>
+#include <set>
 #include <iostream>
 #include <thread>
 
@@ -3274,105 +3275,259 @@ void FactoryPresetTests::testPresetsLeaveLegacyFilterOff()
 // GoldenAudioTests Implementation
 //==============================================================================
 
-void GoldenAudioTests::runTest()
+#ifndef DISTORTION_TEST_AUDIO_DIR
+ #error "DISTORTION_TEST_AUDIO_DIR must be defined by CMake (the repo's Resources/TestAudio)"
+#endif
+
+namespace
 {
-    beginTest("Silence Passthrough");
-    testSilencePassthrough();
+    constexpr double kGoldenRate = 44100.0;
+    constexpr int kGoldenBlock = 512;
+    constexpr int kGoldenWarmupBlocks = 87;   // ~1 s: smoothers, auto-gain, LA-2A and DC blocker settle
+    constexpr int kGoldenCaptureSamples = 22050;   // 0.5 s
+    constexpr juce::int64 kGoldenSeed = 1;
 
-    beginTest("Distortion Output - Brutal Fuzz");
-    testDistortionOutput(0, "brutal_fuzz");
+    // Largest |output - reference| allowed on any sample, unless a case sets its own.
+    // Measured against a GCC Release build with FMA contraction (-mfma -ffp-contract=fast,
+    // a stand-in for AppleClang arm64 and MSVC rounding): most cases differ by -105 to
+    // -128 dBFS, so -90 leaves 15 dB for other compilers. Drive 60 -> 61 moves every
+    // driven case by -53 to -64 dBFS, so the limit still catches a one-step knob change.
+    constexpr double kGoldenToleranceDb = -90.0;
 
-    beginTest("808 Band Split");
-    test808BandSplit();
-}
+    using ParamList = std::vector<std::pair<juce::String, float>>;
 
-juce::File GoldenAudioTests::getTestAudioDirectory()
-{
-    // Get the directory where test audio files are stored
-    auto currentFile = juce::File::getSpecialLocation(juce::File::currentExecutableFile);
-    auto projectDir = currentFile.getParentDirectory().getParentDirectory().getParentDirectory()
-                        .getParentDirectory().getParentDirectory();
-    return projectDir.getChildFile("Resources").getChildFile("TestAudio");
-}
-
-void GoldenAudioTests::testSilencePassthrough()
-{
-    PluginProcessor processor;
-    processor.setRateAndBufferSizeDetails(44100.0, 512);
-    processor.prepareToPlay(44100.0, 512);
-
-    // True bypass mode
-    processor.parameters.getParameter("distortionAmount")->setValueNotifyingHost(0.0f);
-    processor.parameters.getParameter("compEnabled")->setValueNotifyingHost(0.0f);
-
-    auto buffer = generateSilence(512);
-    juce::MidiBuffer midi;
-
-    processor.processBlock(buffer, midi);
-
-    // Output should be silent
-    expect(isSilent(buffer, Tolerances::SILENCE_DB),
-           "Silence passthrough failed - output is not silent");
-}
-
-void GoldenAudioTests::testDistortionOutput(int clipType, const juce::String& label)
-{
-    PluginProcessor processor;
-    processor.setRateAndBufferSizeDetails(44100.0, 512);
-    processor.prepareToPlay(44100.0, 512);
-
-    // Enable distortion with this clip type
-    setParameter(processor.parameters, "distortionAmount", 60.0f);
-    setParameter(processor.parameters, "clipType", static_cast<float>(clipType));
-
-    // Generate test signal
-    auto buffer = generateSineWave(1000.0, 44100.0, 512, 0.7f);
-    juce::MidiBuffer midi;
-
-    processor.processBlock(buffer, midi);
-
-    // Basic validation - output should be valid and not silent
-    expect(!containsInvalidSamples(buffer), label + " produced invalid samples");
-    expect(!isSilent(buffer), label + " produced silence");
-
-    // If in generate mode, save reference file
-    if (GENERATE_MODE)
+    // Every parameter, pinned. A case changes only what it is about, so a new default
+    // elsewhere cannot move a reference unnoticed; a new parameter fails the coverage
+    // check below until it is pinned here.
+    ParamList goldenBaseline()
     {
-        auto dir = getTestAudioDirectory();
-        if (!dir.exists())
-            dir.createDirectory();
+        ParamList p {
+            { "inputGain", 50.0f },        { "outputGain", 50.0f },
+            { "distortionAmount", 60.0f }, { "clipType", 0.0f },
+            { "highPassFreq", 20.0f },     { "filterMode", 0.0f },
+            { "shape", 0.0f },             { "legacyFilter", 0.0f },
+            { "subGuardFreq", 0.0f },
+            { "lfoRate", 0.0f },           { "lfoDepth", 0.0f },
+            { "lfoWaveform", 0.0f },       { "lfoEnabled", 0.0f },
+            { "lfoDestination", 0.0f },    { "lfoBpmSync", 0.0f },
+            { "lfoBpmDivision", 2.0f },    { "lfoInvert", 0.0f },
+            { "waveshaperMix", 0.0f },     { "waveshaperClean", 0.0f },
+            { "compPeakReduction", 0.0f }, { "compMakeupGain", 50.0f },
+            { "compRatio", 0.0f },         { "compEnabled", 0.0f },
+            { "distMix", 100.0f },         { "tone", 20000.0f },
+            { "autoGainEnabled", 1.0f },   { "extremeEnabled", 0.0f },
+            { "globalMix", 100.0f },       { "linearPhaseDry", 0.0f },
+            { "monoInput", 0.0f },         { "cleanBoost", 0.0f },
+            { "eqEnabled", 1.0f },
+        };
+        for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
+            p.push_back({ "eqBand" + juce::String(i), 0.0f });
+        return p;
+    }
 
-        auto file = dir.getChildFile("golden_" + label + "_44100.wav");
-        if (saveWavFile(buffer, file, 44100.0))
-            logMessage("Generated: " + file.getFullPathName());
+    struct GoldenCase
+    {
+        const char* name;
+        ParamList overrides;
+        double toleranceDb = kGoldenToleranceDb;
+    };
+
+    std::vector<GoldenCase> goldenCases()
+    {
+        return {
+            { "clip_brutal_fuzz", { { "clipType", 0.0f } } },
+            { "clip_tube",        { { "clipType", 1.0f } } },
+            { "clip_bit_crusher", { { "clipType", 2.0f } } },
+            { "clip_tape",        { { "clipType", 3.0f } } },
+            { "clip_transformer", { { "clipType", 4.0f } } },
+            { "clip_diode",       { { "clipType", 5.0f } } },
+            { "clip_decimator",   { { "clipType", 6.0f } } },
+            { "subguard_60",      { { "subGuardFreq", 60.0f },  { "distortionAmount", 70.0f } } },
+            { "subguard_150",     { { "subGuardFreq", 150.0f }, { "distortionAmount", 70.0f } } },
+            // These three run float IIRs at the 4x rate (and the LA-2A's feedback), which
+            // turns coefficient rounding into a steady error: the FMA build measured -98.4,
+            // -78.6 and -92.6 dBFS. Each limit leaves about 13 dB above that; drive +1
+            // still moves them by -64, -59 and -55 dBFS.
+            { "compression",      { { "compEnabled", 1.0f }, { "compPeakReduction", 60.0f } }, -85.0 },
+            { "clean_boost",      { { "cleanBoost", 1.0f } }, -66.0 },
+            { "shape_bark",       { { "shape", -60.0f } }, -80.0 },
+            { "waveshaper_tone",  { { "waveshaperMix", 50.0f }, { "tone", 6000.0f } } },
+            { "bypass",           { { "distortionAmount", 0.0f } } },
+            { "dist_mix_50",      { { "distMix", 50.0f } } },
+            { "extreme",          { { "extremeEnabled", 1.0f } } },
+        };
+    }
+
+    // An 808-like sub with two beating mids, phase-continuous across blocks. The right
+    // channel's mids start at other phases, so a channel swap shows.
+    void fillGoldenInput(juce::AudioBuffer<float>& buffer, juce::int64 startSample)
+    {
+        constexpr double twoPi = juce::MathConstants<double>::twoPi;
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+        {
+            const double offset = ch == 0 ? 0.0 : 1.0;
+            auto* d = buffer.getWritePointer(ch);
+            for (int i = 0; i < buffer.getNumSamples(); ++i)
+            {
+                const double t = static_cast<double>(startSample + i) / kGoldenRate;
+                d[i] = static_cast<float>(0.5  * std::sin(twoPi * 50.0 * t)
+                                        + 0.15 * std::sin(twoPi * 1000.0 * t + offset)
+                                        + 0.15 * std::sin(twoPi * 1037.0 * t + 2.0 * offset));
+            }
+        }
+    }
+
+    juce::AudioBuffer<float> renderGoldenCase(const GoldenCase& c)
+    {
+        PluginProcessor processor;
+        processor.requestedOversamplingStages.store(2);   // 4x, the shipped default
+
+        auto& apvts = processor.parameters;
+        for (auto& [id, value] : goldenBaseline())
+            setParameter(apvts, id, value);
+        for (auto& [id, value] : c.overrides)
+            setParameter(apvts, id, value);
+
+        processor.seedNoiseForTesting(kGoldenSeed);
+        processor.setRateAndBufferSizeDetails(kGoldenRate, kGoldenBlock);
+        processor.prepareToPlay(kGoldenRate, kGoldenBlock);
+
+        juce::AudioBuffer<float> block(2, kGoldenBlock);
+        juce::MidiBuffer midi;
+        juce::int64 pos = 0;
+        for (int b = 0; b < kGoldenWarmupBlocks; ++b, pos += kGoldenBlock)
+        {
+            fillGoldenInput(block, pos);
+            processor.processBlock(block, midi);
+        }
+
+        juce::AudioBuffer<float> out(2, kGoldenCaptureSamples);
+        for (int written = 0; written < kGoldenCaptureSamples; pos += kGoldenBlock)
+        {
+            fillGoldenInput(block, pos);
+            processor.processBlock(block, midi);
+            const int n = std::min(kGoldenBlock, kGoldenCaptureSamples - written);
+            for (int ch = 0; ch < 2; ++ch)
+                out.copyFrom(ch, written, block, ch, 0, n);
+            written += n;
+        }
+        processor.releaseResources();
+        return out;
+    }
+
+    juce::File goldenDir() { return juce::File(DISTORTION_TEST_AUDIO_DIR); }
+
+    juce::File goldenFile(const GoldenCase& c)
+    {
+        return goldenDir().getChildFile("golden_" + juce::String(c.name) + "_44100.wav");
+    }
+
+    bool writeFloatWav(const juce::AudioBuffer<float>& buffer, const juce::File& file)
+    {
+        file.deleteFile();
+        auto stream = file.createOutputStream();
+        if (stream == nullptr)
+            return false;
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(
+            stream.get(), kGoldenRate, static_cast<unsigned int>(buffer.getNumChannels()),
+            32, {}, 0));   // 32 bits: JUCE writes IEEE float
+        if (writer == nullptr)
+            return false;
+        stream.release();   // the writer owns it now
+        return writer->writeFromAudioSampleBuffer(buffer, 0, buffer.getNumSamples());
+    }
+
+    bool goldenGenerateRequested()
+    {
+        return juce::SystemStats::getEnvironmentVariable("DISTORTION_GOLDEN_GENERATE", {}) == "1";
+    }
+
+    juce::String goldenDbText(double v)
+    {
+        return v > 0.0 ? juce::String(20.0 * std::log10(v), 1) + " dBFS" : juce::String("-inf dBFS");
     }
 }
 
-void GoldenAudioTests::test808BandSplit()
+void GoldenAudioTests::runTest()
 {
-    PluginProcessor processor;
-    processor.setRateAndBufferSizeDetails(44100.0, 2048);
-    processor.prepareToPlay(44100.0, 2048);
+    beginTest("Every parameter is pinned");
+    {
+        PluginProcessor processor;
+        std::set<juce::String> pinned;
+        for (auto& [id, value] : goldenBaseline())
+            pinned.insert(id);
+        for (auto* p : processor.getParameters())
+            if (auto* withId = dynamic_cast<juce::AudioProcessorParameterWithID*>(p))
+                expect(pinned.count(withId->getParameterID()) == 1,
+                       "Golden baseline does not pin '" + withId->getParameterID()
+                       + "': add it to goldenBaseline() and regenerate the references");
+        expectEquals(static_cast<int>(pinned.size()), processor.getParameters().size(),
+                     "Golden baseline pins a parameter the processor does not have");
+    }
 
-    // Enable Sub Guard mode (60 Hz crossover = PRESERVE mode)
-    setParameter(processor.parameters, "subGuardFreq", 60.0f);
-    setParameter(processor.parameters, "distortionAmount", 70.0f);
+    const bool generate = goldenGenerateRequested();
+    if (generate)
+        goldenDir().createDirectory();
 
-    // Low frequency test (should pass through clean)
-    auto lowBuffer = generateSineWave(60.0, 44100.0, 2048, 0.7f);
-    auto lowOriginal = lowBuffer;
-    juce::MidiBuffer midi;
+    for (const auto& c : goldenCases())
+    {
+        beginTest(juce::String("Golden ") + c.name);
+        const auto rendered = renderGoldenCase(c);
+        const auto file = goldenFile(c);
 
-    processor.processBlock(lowBuffer, midi);
+        expect(! containsInvalidSamples(rendered), juce::String(c.name) + " rendered non-finite samples");
+        expect(! isSilent(rendered), juce::String(c.name) + " rendered silence");
 
-    expect(!containsInvalidSamples(lowBuffer), "808 band split produced invalid samples");
+        if (generate)
+        {
+            expect(writeFloatWav(rendered, file), "Could not write " + file.getFullPathName());
+            logMessage("Generated " + file.getFullPathName());
+            continue;
+        }
 
-    // Low band should retain significant energy (not heavily distorted)
-    float originalRMS = calculateRMS(lowOriginal);
-    float processedRMS = calculateRMS(lowBuffer);
+        if (! file.existsAsFile())
+        {
+            expect(false, "Missing golden reference " + file.getFullPathName()
+                          + ". Generate it with: DISTORTION_GOLDEN_GENERATE=1 DistortionTests Golden");
+            continue;
+        }
 
-    expect(processedRMS > originalRMS * 0.3f,
-           "808-safe mode killed too much low frequency energy");
+        double fileRate = 0.0;
+        const auto reference = loadWavFile(file, fileRate);
+        expectEquals(fileRate, kGoldenRate, juce::String(c.name) + ": reference sample rate");
+        if (reference.getNumChannels() != rendered.getNumChannels()
+            || reference.getNumSamples() != rendered.getNumSamples())
+        {
+            expect(false, juce::String(c.name) + ": reference is "
+                          + juce::String(reference.getNumChannels()) + " ch x "
+                          + juce::String(reference.getNumSamples()) + " samples, render is "
+                          + juce::String(rendered.getNumChannels()) + " ch x "
+                          + juce::String(rendered.getNumSamples()));
+            continue;
+        }
+
+        double maxErr = 0.0;
+        int maxCh = 0, maxIdx = 0;
+        for (int ch = 0; ch < rendered.getNumChannels(); ++ch)
+        {
+            const auto* a = rendered.getReadPointer(ch);
+            const auto* b = reference.getReadPointer(ch);
+            for (int i = 0; i < rendered.getNumSamples(); ++i)
+            {
+                const double e = std::abs(static_cast<double>(a[i]) - static_cast<double>(b[i]));
+                if (e > maxErr) { maxErr = e; maxCh = ch; maxIdx = i; }
+            }
+        }
+
+        const auto where = " (channel " + juce::String(maxCh) + ", sample " + juce::String(maxIdx) + ")";
+        logMessage(juce::String(c.name) + ": max error " + goldenDbText(maxErr) + where);
+        expect(maxErr <= juce::Decibels::decibelsToGain(c.toleranceDb, -1000.0),
+               juce::String("Golden '") + c.name + "' differs from its reference: max error "
+               + goldenDbText(maxErr) + where + ", limit " + juce::String(c.toleranceDb, 0)
+               + " dBFS. If the sound change is intended, regenerate with "
+                 "DISTORTION_GOLDEN_GENERATE=1 and say why in the PR.");
+    }
 }
 
 //==============================================================================
