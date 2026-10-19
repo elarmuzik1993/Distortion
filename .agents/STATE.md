@@ -9,34 +9,34 @@
   the drive (double), on/off click-free (15 ms weight `g`, splitter warm). Sub Guard off renders
   byte-identical to before. `SubGuardBehaviourTests` asserts it; nothing is pending.
 - Drive noise is seedable (`seedNoiseForTesting`; `DistortionRender --seed`, default 1).
-- Verified 2026-10-19 on Linux (cloud, Debug) at `2a3e511`: `verify.sh` passes, 4152
-  assertions; soak 10 x 20 s passes (unverified this session). pluginval not run.
+- Golden audio: 16 seeded cases with every parameter pinned, compared with
+  `Resources/TestAudio/golden_*.wav` (max error -90 dBFS; compression -85, Shape -80, Clean
+  Boost -66). Regenerate: `DISTORTION_GOLDEN_GENERATE=1 DistortionTests Golden`.
+- Verified 2026-10-19 on Linux (cloud, Debug): `verify.sh` passes, 4262 assertions, golden
+  cases exact run to run. Golden limits not yet seen on MSVC or macOS CI. pluginval not run.
 
 ## Next
-1. Golden references (owner asked, 2026-10-19). `GoldenAudioTests` compares nothing today. Make
-   it: seed the noise; ~15 cases with explicit params, never factory presets (7 clip types on a
-   fixed 808 + mids input; Sub Guard off/60/150; comp on; bypass), 0.5 s stereo float 44.1 kHz
-   WAVs in `Resources/TestAudio/`; generate with an env var (`DISTORTION_GOLDEN_GENERATE=1`)
-   instead of `GENERATE_MODE`; compare with a tolerance (about -90 dBFS max error, not bytes:
-   MSVC, GCC and arm64 round differently); pass the repo path in from CMake instead of
-   climbing from the executable. Add an AGENTS.md rule: a PR that changes the sound
-   regenerates the references and says why. Branch `test/golden-references`.
-2. Owner: one listening pass on the Sub Guard work (real 808 and bass line, Sub Guard on vs
+1. Owner: one listening pass on the Sub Guard work (real 808 and bass line, Sub Guard on vs
    bypassed, preset changes while playing, Sub Guard off and back); re-voice the seven presets
    at 100-150 Hz (Hard Clip, 808 Safe, Vocal Warmth, EXTREME, Bass Driver, Lo-Fi Crush, Diode
    Bite); the "150Hz AGGRO" label no longer fits. Sub Guard costs ~12% more CPU (Debug); measure
    Release.
-3. Plan step 8, only if measured: per-sub-block coefficients (F6); the 20 Hz input high-pass
+2. Plan step 8, only if measured: per-sub-block coefficients (F6); the 20 Hz input high-pass
    (C5, owner decides); a C3 hint on the knob ("set it above your 808's note").
-4. Owner, Release build: clip column (keep the small clip-type font?), Legacy Filter (v2.3 Low or
+3. Owner, Release build: clip column (keep the small clip-type font?), Legacy Filter (v2.3 Low or
    Band Pass session opens in Legacy, same sound), profile browser, Shape by ear.
-5. #44 (pluginval Automation segfault, Linux 96 kHz / 64 samples); `prepareToPlay` shrinks band
+4. #44 (pluginval Automation segfault, Linux 96 kHz / 64 samples); `prepareToPlay` shrinks band
    buffers below `rebuildOversampling`'s size. Then pluginval (strictness 10), bump CMake
    `VERSION 2.3.0`, tag. Owner: ASIO standalone pass.
-6. Follow-ups: Legacy switch may click; XY Y-axis silent in Legacy; arrow click lists the library
+5. Follow-ups: Legacy switch may click; XY Y-axis silent in Legacy; arrow click lists the library
    twice; failed import is silent. Delete merged Sub Guard branches (owner to confirm); decide
    `claude/ui-screenshot-readme-6vbm01`, `docs/profile-morph*`, `fix/profile-browser-review`,
    `fix/transition-clicks`, `test/crossing-probe`.
+6. Sub Guard follow-ups from review: leaving true bypass resumes the splitter with stale state
+   (reset it, `toneFilterLow` and `g` there, as `shapePost` is); warm switch-on is only proven at
+   distMix 0 (the warm post-drive half fed full-range drive while off may be the weak part);
+   in NAM mode `g` after the island leads by D during the 15 ms ramp; knob labels
+   PRESERVE/CONTROL/AGGRO describe slopes that are gone (owner).
 
 ## Decisions
 - `legacyFilter` is a session param; state v3 turns it on for v2.3 states that used the filter.
