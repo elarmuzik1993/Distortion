@@ -484,6 +484,25 @@ so before/after renders compare byte for byte.
    the high band, which still carries half the signal at the crossover, so this PR
    measures the real number. Side effect, likely welcome: a loud sub no longer ducks the
    mids going into the drive.
+   *Done (`fix/subguard-tamer-high-band`).* Clean-sub measurements, drive 70, before → after:
+
+   | Case | Sub level | 3rd harmonic | Product below the crossover |
+   |---|---|---|---|
+   | 150 Hz, 45 Hz sub | −3.18 → −0.17 dB | −44.9 → −61.6 dBFS | |
+   | 150 Hz, 45 Hz sub + mids | −4.50 → −0.25 dB | −47.4 → −71.1 dBFS | 8 Hz: −41.3 → −37.2 dBFS |
+   | 100 Hz, 45 Hz sub | −3.19 → −0.17 dB | −45.6 → −57.5 dBFS | |
+   | 100 Hz, 45 Hz sub + mids | −4.47 → −0.18 dB | −48.9 → −69.3 dBFS | 8 Hz: −47.9 → −36.4 dBFS |
+   | 60 Hz, 30 Hz sub | −3.15 → −0.78 dB | −43.8 → −75.2 dBFS | |
+   | 60 Hz, 30 Hz sub + mids | −4.87 → −0.82 dB | −45.1 → −96.1 dBFS | 7 Hz: −47.7 → −40.8 dBFS |
+
+   Expected levels are −0.17 dB (45 Hz) and −0.78 dB (30 Hz), the 20 Hz input high-pass
+   (C5). The sub-level check is now asserted always. The product below the crossover rose
+   4-11 dB: the mids now reach the drive unducked, so they intermodulate harder with the
+   sub leaking past the first half of the crossover. Step 6's post-drive high-pass is what
+   removes that product; it stays pending. With Sub Guard off, renders are byte-identical
+   (seeded, drive 0 and 70). Interim order: the tamer now runs after Clean Boost's lift
+   and pre-emphasis with Sub Guard on, since both sit before the split; step 5 moves Clean
+   Boost onto the high band after the tamer, which restores the original order.
 5. **Clean Boost on the high band only (C4).** Lift, emphasis and de-emphasis all on the
    high band with Sub Guard on, so the sub's level stays put and the de-emphasis
    leftover disappears.

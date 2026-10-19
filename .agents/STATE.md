@@ -14,7 +14,10 @@
 ## Next
 1. Merge the seeding hook PR (`test/seed-drive-noise`): `seedNoiseForTesting`,
    `DistortionRender --seed` (default 1, renders repeat byte for byte), seeded test rigs.
-2. Sub Guard step 4 (transient tamer on the high band), then 5, 6, 7. Owner listens before each.
+2. Sub Guard step 4 on `fix/subguard-tamer-high-band` (stacked on the seeding PR): tamer on
+   the high band; sub level now within 0.3 dB (was -3 to -5 dB), Sub Guard off byte-identical.
+   The product below the crossover rose 4-11 dB (step 6 removes it). Owner listens, then merge.
+   Then steps 5, 6, 7; owner listens before each.
 3. Owner, Release build: clip column (PROFILE ends step, middle opens menu; keep the small
    clip-type font?), Settings > Legacy Filter (v2.3 Low/Band Pass session opens in Legacy, same
    sound), profile browser (multi-load, wrap, card, bubble, moved file, Recall Profile), Shape.
