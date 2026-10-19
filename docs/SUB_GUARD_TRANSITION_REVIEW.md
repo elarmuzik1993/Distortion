@@ -538,6 +538,35 @@ so before/after renders compare byte for byte.
      above).
    - Tests: clean-sub, crossover flatness (on the splitter: true bypass skips Sub Guard
      at drive 0, so `processBlock` cannot show it), numerics, Golden Audio.
+   *Done (`fix/subguard-lr48-split`).* `SubGuardSplitter` is now one LR48: two 4th-order
+   Butterworth sections (Q 0.5412 and 1.3066) per half, transposed direct form II in
+   `double`, one writer (`writeSection`) for `prepare` and runtime. `process` gives the low
+   band both low-pass halves and the high band its first high-pass half;
+   `processPostDrive` runs the second, called in `applyAutoGainAndISP` after the soft
+   clipper and before `toneFilterLow` and the add-back. The sample rate is stored in
+   `prepare`. Orders, zones, the crossfade and the LR12 polarity flip are deleted;
+   `setInactive` and `justActivated` stay for step 7. Results:
+   - Product below the crossover, drive 70 with mids: −36 to −41 dBFS → −111 to −142
+     dBFS. 3rd harmonic of the sub −57 to −96 → −80 to −127 dBFS (60 Hz with a 45 Hz
+     sub, C3, is still −31 dBFS, as expected). The 60 Hz Clean Boost sub-only case now
+     reads −0.82 dB (expected −0.78). All clean-sub checks are asserted always.
+   - Reversal mid-fade and boundary chatter: 1.00-1.07x baseline (no zones left); now
+     asserted always. Only the on/off tests stay pending (step 7).
+   - Splitter alone (`SubGuardSplitterTest`): the sum is flat within 0.00001 dB from
+     20 Hz to 20 kHz at 60, 100, 150 and 200 Hz; at 192 kHz x 4 a step settles exactly at
+     1, 5, 25 (parked 10 s), 60 and 200 Hz. Through `processBlock` with the drive as
+     identity the sum is within 0.001 dB at 60-200 Hz (the limit tightened from −3 dB to
+     ±0.1 dB). The NAM-profile check ("Sub Guard stays flat through its crossover with a
+     profile loaded", 44.1 and 96 kHz, 200 Hz) passes unchanged.
+   - Renders (seeded): Sub Guard off byte-identical. With Sub Guard on and drive 70, RMS
+     moves under 0.5 dB and peaks rise up to 0.9 dB (the second half after the soft
+     clipper, as predicted).
+   - *Not done:* the seven presets at 100-150 Hz were not re-voiced (by ear; owner).
+     Golden Audio had nothing to regenerate: `GoldenAudioTests` checks for finite,
+     non-silent output and never compares with a reference file (none is in the repo).
+     The knob's "150Hz AGGRO" label no longer describes a gentler slope; owner to decide.
+     CPU not measured: 8 double sections per channel instead of 4 float (8 during a
+     crossfade).
 7. **On/off weight `g` (F1, F2).** Ramp over 10-20 ms, applied at every point listed under
    "On/off as a weight". No reset when `g` leaves 0: the splitter is warm. Replace
    `setInactive` and `justActivated` with `g`. Today the OFF path calls `setInactive` and
