@@ -17,7 +17,9 @@
 2. Sub Guard step 4 on `fix/subguard-tamer-high-band` (stacked on the seeding PR): tamer on
    the high band; sub level now within 0.3 dB (was -3 to -5 dB), Sub Guard off byte-identical.
    The product below the crossover rose 4-11 dB (step 6 removes it). Owner listens, then merge.
-   Then steps 5, 6, 7; owner listens before each.
+   Step 5 on `fix/subguard-boost-high-band` (stacked on step 4): Clean Boost on the high band;
+   sub with Boost +3.5..+5.7 dB -> within 0.4 dB. Owner asked to go on without listening
+   (2026-10-19); listen before release instead. Then steps 6, 7.
 3. Owner, Release build: clip column (PROFILE ends step, middle opens menu; keep the small
    clip-type font?), Settings > Legacy Filter (v2.3 Low/Band Pass session opens in Legacy, same
    sound), profile browser (multi-load, wrap, card, bubble, moved file, Recall Profile), Shape.

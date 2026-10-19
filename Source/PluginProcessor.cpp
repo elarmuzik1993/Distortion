@@ -1823,7 +1823,10 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     }
 
     // Clean Boost pre-emphasis: lift + high-shelf into the distortion (reduces IMD).
-    applyCleanBoostEmphasis();
+    // With Sub Guard on, both halves run on the high band inside applySubGuardSplit,
+    // so the clean low band is neither lifted nor left with a de-emphasis residue.
+    if (!subGuardWillBeActive)
+        applyCleanBoostEmphasis(pb_oversampledBlock);
 
     if (!applySubGuardSplit())
     {
@@ -1832,7 +1835,8 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     }
 
     // Clean Boost de-emphasis: complementary high-shelf cut restoring spectral balance.
-    applyCleanBoostDeEmphasis();
+    if (!pb_subGuardActive)
+        applyCleanBoostDeEmphasis(pb_oversampledBlock);
 
     // ========== SUB GUARD: Remove clean low band before post-distortion processing ==========
     // When Sub Guard is active, subtract the clean low band from oversampledBlock
@@ -3310,12 +3314,13 @@ bool PluginProcessor::applySubGuardSplit()
         delayInPlace(subGuardLowDelayLine, lowBandBuffer.getArrayOfWritePointers(),
                      static_cast<int>(pb_numChannels), static_cast<int>(pb_numSamples));
 
-    // Transient tamer on the high band only: the clean low band must leave at its
-    // input level, so it is never compressed. Before the auto-gain reference, as the
-    // full-range path measures after its tamer too.
-    applyPreCompression(juce::dsp::AudioBlock<float>(highBandBuffer)
-                            .getSubBlock(0, pb_numSamples)
-                            .getSubsetChannelBlock(0, pb_numChannels));
+    // The high band's own pre-drive chain, in the full-range path's order: tamer,
+    // auto-gain reference, Clean Boost emphasis, drive, de-emphasis. The clean low band
+    // must leave at its input level, so none of it touches the low band.
+    auto highBlock = juce::dsp::AudioBlock<float>(highBandBuffer)
+                         .getSubBlock(0, pb_numSamples)
+                         .getSubsetChannelBlock(0, pb_numChannels);
+    applyPreCompression(highBlock);
 
     // ========== AUTO-GAIN: Measure high-band input RMS (post-crossover, pre-distortion) ==========
     // Matches the band the output RMS is measured on (high band only, after the clean low
@@ -3339,6 +3344,8 @@ bool PluginProcessor::applySubGuardSplit()
             autoGainInputEnvelope = autoGainReleaseCoeff * autoGainInputEnvelope + (1.0f - autoGainReleaseCoeff) * inputRms;
     }
 
+    applyCleanBoostEmphasis(highBlock);
+
     // Apply studio distortion ONLY to the (possibly blended) high band
     const float lfoOversampledPhaseIncSG = pb_lfoPhaseIncrement / static_cast<float>(oversamplingFactor);
 
@@ -3360,6 +3367,8 @@ bool PluginProcessor::applySubGuardSplit()
             }
         }
     }
+
+    applyCleanBoostDeEmphasis(highBlock);
 
     // Recombine: Clean low + Distorted high
     for (size_t channel = 0; channel < pb_numChannels; ++channel)
@@ -3961,7 +3970,7 @@ void PluginProcessor::updateCleanBoostCoefficients(float depth, double sampleRat
         writeHighShelfCoeffs(*deEmphasisFilter.state, sampleRate, freq, q, -shelfDb);
 }
 
-void PluginProcessor::applyCleanBoostEmphasis()
+void PluginProcessor::applyCleanBoostEmphasis(juce::dsp::AudioBlock<float> block)
 {
     // Process while engaged OR still fading out; once settled at 0, true-bypass.
     pb_boostProcessedThisBlock =
@@ -3981,10 +3990,10 @@ void PluginProcessor::applyCleanBoostEmphasis()
     // Broadband level lift (allowed to get louder — not undone by de-emphasis),
     // scaled by depth so the toggle morphs in click-free.
     const float boostGain = juce::Decibels::decibelsToGain(depth * DSPConstants::CLEAN_BOOST_DB);
-    pb_oversampledBlock.multiplyBy(boostGain);
+    block.multiplyBy(boostGain);
 
     if (emphasisFilter.state != nullptr)
-        emphasisFilter.process(juce::dsp::ProcessContextReplacing<float>(pb_oversampledBlock));
+        emphasisFilter.process(juce::dsp::ProcessContextReplacing<float>(block));
 }
 
 void PluginProcessor::applyShapePostDrive()
@@ -3992,13 +4001,13 @@ void PluginProcessor::applyShapePostDrive()
     shapePost.process(pb_oversampledBlock);
 }
 
-void PluginProcessor::applyCleanBoostDeEmphasis()
+void PluginProcessor::applyCleanBoostDeEmphasis(juce::dsp::AudioBlock<float> block)
 {
     if (!pb_boostProcessedThisBlock)
         return;  // mirrors the emphasis gate so the shelves stay paired
 
     if (deEmphasisFilter.state != nullptr)
-        deEmphasisFilter.process(juce::dsp::ProcessContextReplacing<float>(pb_oversampledBlock));
+        deEmphasisFilter.process(juce::dsp::ProcessContextReplacing<float>(block));
 }
 
 //Add Parameter Definition Here
