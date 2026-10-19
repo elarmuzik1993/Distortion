@@ -1789,7 +1789,12 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const size_t numSamples = pb_oversampledBlock.getNumSamples();
     const size_t numChannels = pb_oversampledBlock.getNumChannels();
 
-    applyPreCompression();
+    // Transient tamer. With Sub Guard on it runs on the high band instead (inside
+    // applySubGuardSplit), so a loud sub neither ducks itself nor the mids going
+    // into the drive, and the clean low band leaves at its input level.
+    const bool subGuardWillBeActive = (pb_subGuardFreq > 1.0f);
+    if (!subGuardWillBeActive)
+        applyPreCompression(pb_oversampledBlock);
 
     // ========== AUTO-GAIN COMPENSATION: Measure input RMS ==========
     // When Sub Guard is active the clean low band is removed before the output RMS
@@ -1798,7 +1803,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // ratio and dumping excess makeup gain onto the distorted high band (harshness).
     // In that case the high-band input reference is measured inside applySubGuardSplit
     // (post-crossover, pre-distortion) so both envelopes share the same band.
-    const bool subGuardWillBeActive = (pb_subGuardFreq > 1.0f);
     if (autoGainEnabled && !subGuardWillBeActive)
     {
         // Calculate input RMS for auto-gain compensation (before distortion)
@@ -2871,7 +2875,7 @@ void PluginProcessor::applyPreHighpass(juce::AudioBuffer<float>& buffer)
         : pb_inputBlock;
 }
 
-void PluginProcessor::applyPreCompression()
+void PluginProcessor::applyPreCompression(juce::dsp::AudioBlock<float> block)
 {
     // Light compression to even out dynamics before distortion
     if (pb_modulatedDistortionParam < 0.5f || pb_extremeEnabled)
@@ -2886,7 +2890,7 @@ void PluginProcessor::applyPreCompression()
     {
         for (size_t channel = 0; channel < pb_numChannels && channel < 2; ++channel)
         {
-            float* data = pb_oversampledBlock.getChannelPointer(channel);
+            float* data = block.getChannelPointer(channel);
             const float input = data[sample];
             const float level = std::abs(input);
 
@@ -3305,6 +3309,13 @@ bool PluginProcessor::applySubGuardSplit()
     if (profileMode && islandDelay > 0)
         delayInPlace(subGuardLowDelayLine, lowBandBuffer.getArrayOfWritePointers(),
                      static_cast<int>(pb_numChannels), static_cast<int>(pb_numSamples));
+
+    // Transient tamer on the high band only: the clean low band must leave at its
+    // input level, so it is never compressed. Before the auto-gain reference, as the
+    // full-range path measures after its tamer too.
+    applyPreCompression(juce::dsp::AudioBlock<float>(highBandBuffer)
+                            .getSubBlock(0, pb_numSamples)
+                            .getSubsetChannelBlock(0, pb_numChannels));
 
     // ========== AUTO-GAIN: Measure high-band input RMS (post-crossover, pre-distortion) ==========
     // Matches the band the output RMS is measured on (high band only, after the clean low

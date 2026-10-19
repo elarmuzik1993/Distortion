@@ -464,8 +464,9 @@ public:
 /** Sub Guard behaviour the current code gets wrong: transitions that click (stale
     banks on OFF -> ON, the hard ON -> OFF switch, an order crossfade
     reversed mid-fade, boundary chatter, a large-buffer sweep) and a sub that does not
-    leave clean (the transient tamer and the distortion products below the crossover).
-    The large-buffer sweeps (F6) pass today and are asserted always.
+    leave clean (the distortion products below the crossover). The large-buffer sweeps
+    (F6) pass today, and the clean sub's level passes since the transient tamer moved to
+    the high band (step 4, C1); both are asserted always.
     Every measurement is always logged; the fixed-behaviour assertions only run with
     DISTORTION_PENDING_TESTS=1, so the default run stays green until each fix lands and
     moves its test into an always-on class. */

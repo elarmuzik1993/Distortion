@@ -690,7 +690,7 @@ private:
     void applyPreHighpass(juce::AudioBuffer<float>& buffer);
     void applyInputFilter(juce::dsp::AudioBlock<float>& block);  // base-rate multimode filter
     bool isInputFilterActive() const;                            // true when not transparent
-    void applyPreCompression();
+    void applyPreCompression(juce::dsp::AudioBlock<float> block);
     bool applySubGuardSplit();  // returns false to abort processBlock (band buffer overflow)
     // Per-sample distortion: harmonic-density envelope + studio distortion + wet/dry mix.
     // Called from both applySubGuardSplit branches (OFF: full-range; ACTIVE: high band only).

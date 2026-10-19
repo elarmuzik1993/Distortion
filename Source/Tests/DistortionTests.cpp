@@ -5229,6 +5229,7 @@ void SubGuardPendingTests::runCleanSubTests()
             const double inAmp = goertzelAmplitude(buf.getReadPointer(0, analyseStart), analyseLen, c.subHz, sr);
 
             PluginProcessor proc;
+            proc.seedNoiseForTesting(1);
             proc.setRateAndBufferSizeDetails(sr, 512);
             proc.prepareToPlay(sr, 512);
             setParameter(proc.parameters, "globalMix",        100.0f);
@@ -5260,7 +5261,10 @@ void SubGuardPendingTests::runCleanSubTests()
                 continue;
             }
 
-            expectPending(std::abs(levelDb - expectedDb) <= 0.3, "sub level within 0.3 dB: " + numbers);
+            // Step 4 (C1) runs the transient tamer on the high band only, so the sub
+            // leaves at its input level; asserted always. It measured -3.2 to -4.9 dB
+            // while the tamer ducked the full-range input.
+            expect(std::abs(levelDb - expectedDb) <= 0.3, "sub level within 0.3 dB: " + numbers);
             if (withMids)
                 expectPending(imDbfs < -80.0, "product below the crossover under -80 dBFS: " + numbers);
         }
