@@ -16,18 +16,16 @@
 1. Owner, Release standalone or FL: the clip column. Hover and click each PROFILE end (steps
    profiles), click the middle (menu); lit, the arrows turn white. The clip-type letters now share
    the pills' smaller font: keep, or enlarge just that pill?
-2. CHANGELOG `Unreleased` says the arrows sit "either side of the PROFILE button"; they are now on
-   its ends. Fix it, and add a line for the column, in the next code PR (not on `main` directly).
-3. Owner, same build: Settings > Legacy Filter (knob and picker swap in, Shape silent, LFO target
+2. Owner, same build: Settings > Legacy Filter (knob and picker swap in, Shape silent, LFO target
    reads Filter); a real v2.3.0 session that used Low or Band Pass opens in Legacy mode, same sound.
-4. Owner: the profile browser (Load profile... with several files; arrows wrap; card slides, holds
+3. Owner: the profile browser (Load profile... with several files; arrows wrap; card slides, holds
    while loading, fades; bubble with the scope folded; a moved download still loads from the
    library; a new instance gets the last profile, none with Recall Profile off). Shape by ear.
-5. #44 (pluginval Automation segfault, Linux, 96 kHz / 64-sample blocks): sweep seeds; stop
+4. #44 (pluginval Automation segfault, Linux, 96 kHz / 64-sample blocks): sweep seeds; stop
    `prepareToPlay` shrinking band buffers below `rebuildOversampling`'s size; fixed CI seed.
-6. pluginval (strictness 10) on the Release VST3, bump the version (CMake `VERSION 2.3.0`), tag.
-7. Owner: ASIO standalone at 44.1/96 kHz: swap/clear profiles while playing, Mono Input, latency.
-8. Follow-ups: the switch may click mid-playback; XY Y-axis is inaudible in Legacy mode; each arrow
+5. pluginval (strictness 10) on the Release VST3, bump the version (CMake `VERSION 2.3.0`), tag.
+6. Owner: ASIO standalone at 44.1/96 kHz: swap/clear profiles while playing, Mono Input, latency.
+7. Follow-ups: the switch may click mid-playback; XY Y-axis is inaudible in Legacy mode; each arrow
    click lists the library twice; a failed import copy is silent. Decide on the unmerged remotes
    (`claude/ui-screenshot-readme-6vbm01`, `docs/profile-morph*`, `fix/transition-clicks`,
    `test/crossing-probe`) and `origin/main`'s `Claude <noreply@anthropic.com>` commits.
