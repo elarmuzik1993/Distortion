@@ -500,12 +500,20 @@ so before/after renders compare byte for byte.
    4-11 dB: the mids now reach the drive unducked, so they intermodulate harder with the
    sub leaking past the first half of the crossover. Step 6's post-drive high-pass is what
    removes that product; it stays pending. With Sub Guard off, renders are byte-identical
-   (seeded, drive 0 and 70). Interim order: the tamer now runs after Clean Boost's lift
-   and pre-emphasis with Sub Guard on, since both sit before the split; step 5 moves Clean
-   Boost onto the high band after the tamer, which restores the original order.
+   (seeded, drive 0 and 70). Interim order, until step 5: the tamer ran after Clean
+   Boost's lift and pre-emphasis with Sub Guard on, since both sat before the split.
 5. **Clean Boost on the high band only (C4).** Lift, emphasis and de-emphasis all on the
    high band with Sub Guard on, so the sub's level stays put and the de-emphasis
    leftover disappears.
+   *Done (`fix/subguard-boost-high-band`).* With Sub Guard on the high band now runs
+   tamer → auto-gain reference → lift and emphasis → drive → de-emphasis, the full-range
+   path's order, so step 4's interim order is gone. Clean-sub cases with Clean Boost, drive
+   70, before → after: 150 Hz, 45 Hz sub +5.67 → −0.21 dB (expected −0.17); with mids
+   +3.75 → −0.21 dB; 60 Hz, 30 Hz sub +5.18 → −0.41 dB (expected −0.78); with mids +3.53 →
+   −0.78 dB. The 60 Hz sub-only case misses the 0.3 dB limit: the 30 Hz sub leaks into the
+   high band at about −24 dB and the 6 dB lift raises that leak. It stays pending for step
+   6, whose post-drive high-pass cuts the leak. Seeded renders are byte-identical except
+   with Sub Guard and Clean Boost both on.
 6. **The new crossover (C2).** LR48 split around the drive (decided), in `double` or TPT
    (numerics above). The second half goes after all the high band's nonlinear stages
    (drive, waveshaper, compressor, soft clipper), right before the add-back. Delete the

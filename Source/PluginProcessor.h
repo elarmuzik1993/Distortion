@@ -391,8 +391,8 @@ private:
 
     // Clean Boost helpers
     void updateCleanBoostCoefficients(float depth, double sampleRate);
-    void applyCleanBoostEmphasis();
-    void applyCleanBoostDeEmphasis();
+    void applyCleanBoostEmphasis(juce::dsp::AudioBlock<float> block);
+    void applyCleanBoostDeEmphasis(juce::dsp::AudioBlock<float> block);
     void applyShapePostDrive();
     // The Shape knob's value, or Flat while the legacy filter has the knob.
     float effectiveShape() const noexcept;

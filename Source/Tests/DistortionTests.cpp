@@ -5200,11 +5200,17 @@ void SubGuardPendingTests::runCleanSubTests()
         return 20.0 * std::log10(r2 / std::sqrt(1.0 + r2 * r2));
     };
 
-    struct Case { float crossover; double subHz; bool asserted; };
+    struct Case { float crossover; double subHz; bool asserted; bool cleanBoost = false; bool levelPending = false; };
     // 60 Hz with a 45 Hz sub is section 2a's own row; 45 Hz sits too close to that
     // crossover to be clean by any filter (C3), so it is logged for comparison only.
+    // Clean Boost (C4) lifts and shelves the high band only, so the sub stays put. At
+    // 60 Hz the 30 Hz sub still leaks into the high band at about -24 dB, and the 6 dB
+    // lift on that leak leaves the sum about 0.4 dB loud (it was over 5 dB loud while the
+    // lift hit the whole input). Step 6's post-drive high-pass cuts the leak, so that
+    // level stays pending until then.
     const Case cases[] = { { 150.0f, 45.0, true }, { 100.0f, 45.0, true },
-                           { 60.0f, 30.0, true },  { 60.0f, 45.0, false } };
+                           { 60.0f, 30.0, true },  { 60.0f, 45.0, false },
+                           { 150.0f, 45.0, true, true }, { 60.0f, 30.0, true, true, true } };
 
     for (const auto& c : cases)
     {
@@ -5212,7 +5218,8 @@ void SubGuardPendingTests::runCleanSubTests()
         {
             const juce::String label = "Sub Guard " + juce::String((int) c.crossover) + " Hz, "
                                      + juce::String((int) c.subHz) + " Hz sub"
-                                     + (withMids ? " + mids" : "");
+                                     + (withMids ? " + mids" : "")
+                                     + (c.cleanBoost ? ", Clean Boost" : "");
             beginTest("Clean sub: " + label);
 
             juce::AudioBuffer<float> buf(2, total);
@@ -5236,6 +5243,7 @@ void SubGuardPendingTests::runCleanSubTests()
             setParameter(proc.parameters, "subGuardFreq",     c.crossover);
             setParameter(proc.parameters, "distortionAmount", 70.0f);
             setParameter(proc.parameters, "distMix",          100.0f);
+            setParameter(proc.parameters, "cleanBoost",       c.cleanBoost ? 1.0f : 0.0f);
             runInBlocks(proc, buf, 512);
 
             expect(! containsInvalidSamples(buf), "Non-finite output: " + label);
@@ -5264,7 +5272,11 @@ void SubGuardPendingTests::runCleanSubTests()
             // Step 4 (C1) runs the transient tamer on the high band only, so the sub
             // leaves at its input level; asserted always. It measured -3.2 to -4.9 dB
             // while the tamer ducked the full-range input.
-            expect(std::abs(levelDb - expectedDb) <= 0.3, "sub level within 0.3 dB: " + numbers);
+            const bool levelOk = std::abs(levelDb - expectedDb) <= 0.3;
+            if (c.levelPending && ! withMids)
+                expectPending(levelOk, "sub level within 0.3 dB: " + numbers);
+            else
+                expect(levelOk, "sub level within 0.3 dB: " + numbers);
             if (withMids)
                 expectPending(imDbfs < -80.0, "product below the crossover under -80 dBFS: " + numbers);
         }
