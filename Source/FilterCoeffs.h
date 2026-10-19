@@ -4,7 +4,8 @@
 #include <cmath>
 
 // In-place RBJ biquad coefficient writers (a0-normalised, 5 raw coefficients) so
-// nothing allocates on the audio thread. Shared by PluginProcessor and ShapeFilter.
+// nothing allocates on the audio thread. Shared by PluginProcessor, ShapeFilter and
+// SubGuardSplitter.
 
 // RBJ peaking-EQ biquad, written in place (a0-normalized to 5 raw coeffs) so we
 // never allocate on the audio thread. Mirrors juce::dsp::IIR::Coefficients::
@@ -63,4 +64,72 @@ inline void writeHighShelfCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
     coeffs[2] = static_cast<float>(b2 * invA0);
     coeffs[3] = static_cast<float>(a1 * invA0);
     coeffs[4] = static_cast<float>(a2 * invA0);
+}
+
+// Butterworth / Linkwitz-Riley low- and high-pass sections, written in place
+// (a0-normalized). Used by the tone filter and by SubGuardSplitter.
+inline void writeSecondOrderLowPassCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
+                                          const double sampleRate,
+                                          const double cutoffHz,
+                                          const double q) noexcept
+{
+    const auto n = 1.0 / std::tan(juce::MathConstants<double>::pi * cutoffHz / sampleRate);
+    const auto nSquared = n * n;
+    const auto invQ = 1.0 / q;
+    const auto c1 = 1.0 / (1.0 + invQ * n + nSquared);
+    auto* coeffs = dest.getRawCoefficients();
+
+    coeffs[0] = static_cast<float>(c1);
+    coeffs[1] = static_cast<float>(c1 * 2.0);
+    coeffs[2] = static_cast<float>(c1);
+    coeffs[3] = static_cast<float>(c1 * 2.0 * (1.0 - nSquared));
+    coeffs[4] = static_cast<float>(c1 * (1.0 - invQ * n + nSquared));
+}
+
+inline void writeSecondOrderHighPassCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
+                                           const double sampleRate,
+                                           const double cutoffHz,
+                                           const double q) noexcept
+{
+    const auto n = std::tan(juce::MathConstants<double>::pi * cutoffHz / sampleRate);
+    const auto nSquared = n * n;
+    const auto invQ = 1.0 / q;
+    const auto c1 = 1.0 / (1.0 + invQ * n + nSquared);
+    auto* coeffs = dest.getRawCoefficients();
+
+    coeffs[0] = static_cast<float>(c1);
+    coeffs[1] = static_cast<float>(c1 * -2.0);
+    coeffs[2] = static_cast<float>(c1);
+    coeffs[3] = static_cast<float>(c1 * 2.0 * (nSquared - 1.0));
+    coeffs[4] = static_cast<float>(c1 * (1.0 - invQ * n + nSquared));
+}
+
+// First-order Butterworth sections, written in place (a0-normalized) so we never
+// allocate on the audio thread. These mirror juce::dsp::IIR::Coefficients
+// makeFirstOrderLowPass / makeFirstOrderHighPass exactly, so live coefficient
+// updates match the prepare-time initialisation bit-for-bit.
+inline void writeFirstOrderLowPassCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
+                                         const double sampleRate,
+                                         const double cutoffHz) noexcept
+{
+    const auto n = std::tan(juce::MathConstants<double>::pi * cutoffHz / sampleRate);
+    const auto a0inv = 1.0 / (n + 1.0);
+    auto* coeffs = dest.getRawCoefficients();
+
+    coeffs[0] = static_cast<float>(n * a0inv);
+    coeffs[1] = static_cast<float>(n * a0inv);
+    coeffs[2] = static_cast<float>((n - 1.0) * a0inv);
+}
+
+inline void writeFirstOrderHighPassCoeffs(juce::dsp::IIR::Coefficients<float>& dest,
+                                          const double sampleRate,
+                                          const double cutoffHz) noexcept
+{
+    const auto n = std::tan(juce::MathConstants<double>::pi * cutoffHz / sampleRate);
+    const auto a0inv = 1.0 / (n + 1.0);
+    auto* coeffs = dest.getRawCoefficients();
+
+    coeffs[0] = static_cast<float>( 1.0 * a0inv);
+    coeffs[1] = static_cast<float>(-1.0 * a0inv);
+    coeffs[2] = static_cast<float>((n - 1.0) * a0inv);
 }
