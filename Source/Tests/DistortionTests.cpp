@@ -5013,6 +5013,15 @@ namespace
 
     // Peak step allowed after a transition, as a multiple of the steady-state step.
     constexpr float kSubGuardStepRatio = 1.5f;
+    // On/off (F1, F2) changes the output's character, not just its filter state, so it
+    // gets more room. The limit assumes the planned on/off weight ramps over at least
+    // 10 ms; a shorter ramp would need a larger ratio.
+    constexpr float kSubGuardOnOffRatio = 2.0f;
+    // State load (F8): the gap to a reference whose banks were all reset. The LR24 control
+    // measures 0.00000 with distMix 0 and about 0.0009 with distMix 100 (the drive's noise,
+    // below), so these bounds are roughly 5x the control where it is non-zero.
+    constexpr float kStateLoadGapClean = 1.0e-4f;
+    constexpr float kStateLoadGapDistorted = 5.0e-3f;
 
     // A processor fed a phase-continuous sum of sines one block at a time. Each block
     // reports its peak sample-to-sample step on channel 0, including the step across the
@@ -5094,13 +5103,15 @@ namespace
         bool hasLast = false;
     };
 
-    juce::String stepText(float measured, float baseline)
+    juce::String stepText(float measured, float baseline, float ratio = kSubGuardStepRatio)
     {
         return "peak step " + juce::String(measured, 5) + " vs baseline " + juce::String(baseline, 5)
              + " (" + juce::String(measured / juce::jmax(baseline, 1.0e-9f), 2) + "x, limit "
-             + juce::String(kSubGuardStepRatio, 1) + "x)";
+             + juce::String(ratio, 1) + "x)";
     }
 
+    // distMix 100 runs the drive, whose noise comes from the processor's distortionRandom
+    // (a juce::Random seeded from the clock), so those numbers vary by about 1% run to run.
     juce::String variantText(bool distorted) { return distorted ? " [distMix 100]" : " [distMix 0]"; }
 
     // Amplitude of one frequency by a single-bin DFT (Goertzel). Exact, with no window,
@@ -5126,7 +5137,10 @@ namespace
 
 void SubGuardPendingTests::expectPending(bool ok, const juce::String& message)
 {
-    logMessage((ok ? "  pending pass: " : "  PENDING FAIL: ") + message);
+    if (ok)
+        logMessage("  pending pass: " + message);
+    else
+        logMessage((pendingEnabled ? "  PENDING FAIL: " : "  pending (expected to fail today): ") + message);
     if (pendingEnabled)
         expect(ok, message);
 }
@@ -5165,7 +5179,8 @@ void SubGuardPendingTests::runCleanSubTests()
 
     // The legacy input filter runs at its 20 Hz high-pass default whenever the drive is on
     // (C5, a 2nd-order Butterworth TPT filter). It is not Sub Guard's doing and no planned
-    // step removes it, so the expected level carries its loss.
+    // step removes it, so the expected level carries its loss. If step 8 removes that
+    // filter, drop this term (expected level 0 dB).
     auto inputHighPassDb = [](double f)
     {
         const double r2 = (f / 20.0) * (f / 20.0);
@@ -5224,6 +5239,8 @@ void SubGuardPendingTests::runCleanSubTests()
                 + (withMids ? ", " + juce::String(imHz, 0) + " Hz product " + juce::String(imDbfs, 1) + " dBFS"
                             : juce::String());
 
+            // The 3rd harmonic is logged, not asserted: it sits just below the crossover,
+            // in the region any crossover shares between the bands (C3).
             if (! c.asserted)
             {
                 logMessage("  logged only (C3): " + numbers);
@@ -5283,37 +5300,47 @@ void SubGuardPendingTests::runStateLoadTests(bool distorted)
         loaded.runBlocks(c.fc, 16);
         expect(loaded.allFinite && reference.allFinite, "Non-finite output after a state load: " + label);
 
-        const juce::String numbers = juce::String(c.fc == 60.0f ? "control: " : "") + "state load at " + label + ": gap to a re-prepared reference "
-            + juce::String(gap, 5) + " vs baseline " + juce::String(baseline, 5)
-            + " (" + juce::String(gap / juce::jmax(baseline, 1.0e-9f), 2) + "x, limit "
-            + juce::String(kSubGuardStepRatio, 1) + "x); peak step after the load " + juce::String(step, 5);
-        expectPending(gap <= kSubGuardStepRatio * baseline, numbers);
+        const float limit = distorted ? kStateLoadGapDistorted : kStateLoadGapClean;
+        const juce::String numbers = juce::String(c.fc == 60.0f ? "control: " : "") + "state load at " + label
+            + ": gap to a re-prepared reference " + juce::String(gap, 5) + " (limit " + juce::String(limit, 5)
+            + "); steady slew " + juce::String(baseline, 5) + ", peak step after the load " + juce::String(step, 5);
+        expectPending(gap <= limit, numbers);
     }
 }
 
 void SubGuardPendingTests::runOffThenOnTest(bool distorted)
 {
     // F1: OFF leaves the banks and toneFilterLow holding their last state, and ON resumes
-    // from it with a hard switch.
-    const juce::String label = "Sub Guard 60 -> 0 -> 60 Hz, 80 Hz sine" + variantText(distorted);
-    beginTest("Off then on: " + label);
+    // from it with a hard switch. distMix 0 is the main evidence: with the drive an
+    // identity, the step is the crossover's alone. Coming back at 150 Hz also exercises the
+    // smoother, which is not updated while off and so glides from 60 Hz.
+    for (float onFreq : { 60.0f, 150.0f })
+    {
+        const juce::String label = "Sub Guard 60 -> 0 -> " + juce::String((int) onFreq) + " Hz, 80 Hz sine"
+                                 + variantText(distorted);
+        beginTest("Off then on: " + label);
 
-    SubGuardToneRig rig(256, { { 80.0, 0.5f } }, distorted, 60.0f);
-    rig.runBlocks(60.0f, 32);
-    const float baselineOn = rig.runBlocks(60.0f, 8);
-    rig.runBlocks(0.0f, 8);
-    const float baselineOff = rig.runBlocks(0.0f, 8);
-    const float baseline = std::max(baselineOn, baselineOff);
+        SubGuardToneRig rig(256, { { 80.0, 0.5f } }, distorted, 60.0f);
+        rig.runBlocks(60.0f, 32);
+        const float baselineFrom = rig.runBlocks(60.0f, 8);
+        rig.runBlocks(0.0f, 8);
+        const float baselineOff = rig.runBlocks(0.0f, 8);
 
-    const float after = rig.runBlocks(60.0f, 4);
-    expect(rig.allFinite, "Non-finite output: " + label);
-    expectPending(after <= kSubGuardStepRatio * baseline, label + ": " + stepText(after, baseline));
+        const float after = rig.runBlocks(onFreq, 4);
+        rig.runBlocks(onFreq, 32);
+        const float baselineTo = rig.runBlocks(onFreq, 8);
+        const float baseline = std::max({ baselineFrom, baselineOff, baselineTo });
+
+        expect(rig.allFinite, "Non-finite output: " + label);
+        expectPending(after <= kSubGuardOnOffRatio * baseline,
+                      label + ": " + stepText(after, baseline, kSubGuardOnOffRatio));
+    }
 }
 
 void SubGuardPendingTests::runOnThenOffTest(bool distorted)
 {
     // F2: ON -> OFF swaps clean low + distorted high for full-range distortion at a block
-    // boundary, with no fade.
+    // boundary, with no fade. Same on/off limit as F1.
     const juce::String label = "Sub Guard 60 -> 0 Hz, 45 Hz + 1000 Hz" + variantText(distorted);
     beginTest("On then off: " + label);
 
@@ -5326,7 +5353,8 @@ void SubGuardPendingTests::runOnThenOffTest(bool distorted)
     const float baseline = std::max(baselineOn, baselineOff);
 
     expect(rig.allFinite, "Non-finite output: " + label);
-    expectPending(after <= kSubGuardStepRatio * baseline, label + ": " + stepText(after, baseline));
+    expectPending(after <= kSubGuardOnOffRatio * baseline,
+                  label + ": " + stepText(after, baseline, kSubGuardOnOffRatio));
 }
 
 void SubGuardPendingTests::runReverseMidFadeTest(bool distorted)
@@ -5334,8 +5362,10 @@ void SubGuardPendingTests::runReverseMidFadeTest(bool distorted)
     // F3: the smoothed crossover crosses 92 Hz (LR24 -> LR18 crossfade starts) and comes
     // back on the next block, inside the 10 ms fade. The retarget then resets the bank
     // carrying live audio and runs it twice over the block. 64-sample blocks put several
-    // blocks inside one fade.
-    const juce::String label = "90 -> 92+ -> 90 Hz inside one crossfade, 80 Hz sine" + variantText(distorted);
+    // blocks inside one fade. The target goes 90 -> 100 Hz until the smoothed value crosses
+    // 92 Hz, then to 80 Hz: aiming below the start pulls the smoothed value back under
+    // 92 Hz on the very next block, so the return lands inside the fade.
+    const juce::String label = "90 -> 100 Hz until 92 Hz is crossed, then 80 Hz, 80 Hz sine" + variantText(distorted);
     beginTest("Reverse mid-fade: " + label);
 
     constexpr int blockSize = 64;
@@ -5358,6 +5388,8 @@ void SubGuardPendingTests::runReverseMidFadeTest(bool distorted)
     after = std::max(after, rig.runBlocks(80.0f, 64));
     rig.runBlocks(80.0f, 200);
 
+    // Without a crossing there is no reversal, and the test would pass vacuously.
+    expect(upBlocks < 4 * steps, "The smoothed crossover never crossed 92 Hz: " + label);
     expect(rig.allFinite, "Non-finite output or filter state after the reversal: " + label);
     expectPending(after <= kSubGuardStepRatio * baseline,
                   label + " (crossed after " + juce::String(upBlocks) + " blocks): " + stepText(after, baseline));
@@ -5428,8 +5460,10 @@ void SubGuardPendingTests::runLargeBufferSweepTest(bool distorted)
     for (int b = 0; b <= sweepBlocks; ++b)
         sweep = std::max(sweep, rig.runBlock(200.0f - 140.0f * static_cast<float>(b) / sweepBlocks));
 
+    // F6 does not show here today, so the sweeps are ordinary assertions, not pending ones.
     expect(rig.allFinite, "Non-finite output: " + label);
-    expectPending(sweep <= kSubGuardStepRatio * baseline, label + ": " + stepText(sweep, baseline));
+    logMessage("  " + label + ": " + stepText(sweep, baseline));
+    expect(sweep <= kSubGuardStepRatio * baseline, label + ": " + stepText(sweep, baseline));
 
     // The same range in 8 + 8 blocks: each block is one large coefficient step.
     const juce::String fastLabel = "60 -> 200 -> 60 Hz in 16 blocks of 2048, 80 Hz sine" + variantText(distorted);
@@ -5443,7 +5477,8 @@ void SubGuardPendingTests::runLargeBufferSweepTest(bool distorted)
         fast = std::max(fast, rig.runBlock(200.0f - 140.0f * static_cast<float>(b) / fastBlocks));
 
     expect(rig.allFinite, "Non-finite output: " + fastLabel);
-    expectPending(fast <= kSubGuardStepRatio * baseline, fastLabel + ": " + stepText(fast, baseline));
+    logMessage("  " + fastLabel + ": " + stepText(fast, baseline));
+    expect(fast <= kSubGuardStepRatio * baseline, fastLabel + ": " + stepText(fast, baseline));
 }
 
 void InputFilterModeTest::runTest()
