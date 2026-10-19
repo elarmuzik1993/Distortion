@@ -22,8 +22,8 @@ namespace DSPConstants
     The splitter only splits. The processor drives the high band, recombines, and owns
     what follows: the low band's island delay, its tone-filter mirror and the add-back.
 
-    Thread use: prepare / startTracking on the message thread (under the callback lock),
-    everything else on the audio thread. Nothing allocates after prepare.
+    Thread use: prepare / startTracking from prepareToPlay, and prepare again from an
+    oversampling rebuild (under the callback lock); everything else on the audio thread. Nothing allocates after prepare.
 */
 class SubGuardSplitter
 {
@@ -52,7 +52,8 @@ public:
     void setTargetFrequency(float hz) noexcept;
 
     // Splits the first numChannels x numSamples of input into the low and high band
-    // buffers. Returns false, touching no band buffer, when they are too small.
+    // buffers. Returns false, touching no band buffer, when they are too small; the
+    // order, crossfade and coefficient state still advance for that block.
     bool process(const juce::dsp::AudioBlock<float>& input,
                  size_t numChannels, size_t numSamples, double sampleRate) noexcept;
 
