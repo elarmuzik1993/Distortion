@@ -26,8 +26,8 @@
 5. #44 (pluginval Automation segfault, Linux, 96 kHz / 64-sample blocks): sweep seeds; stop
    `prepareToPlay` shrinking band buffers below `rebuildOversampling`'s size; fixed CI seed.
 6. Sub Guard transition clicks (`docs/SUB_GUARD_TRANSITION_REVIEW.md`, PR #72, unreproduced):
-   tests first, then F8 (`resetDSPState` skips the LR12/LR18 banks: pop on a preset load at
-   100/150 Hz), F1 (stale state on enable), F2 (hard switch on disable), F3/F5 (retarget).
+   order in its section 5: failing tests; F8 alone (`resetDSPState` skips the LR12/LR18
+   banks); extract `SubGuardSplitter` (bit-exact); warm banks + F3/F5; on/off weight (F1/F2).
 7. pluginval (strictness 10) on the Release VST3, bump the version (CMake `VERSION 2.3.0`), tag.
 8. Owner: ASIO standalone at 44.1/96 kHz: swap/clear profiles while playing, Mono Input, latency.
 9. Follow-ups: the switch may click mid-playback; XY Y-axis is inaudible in Legacy mode; each arrow

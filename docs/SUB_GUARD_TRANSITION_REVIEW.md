@@ -295,18 +295,72 @@ probably inaudible. Note only.
 Move the Sub Guard state and its per-block processing into its own class with a small
 interface (prepare, set target frequency, process block, reset). That contains the eight
 state variables and the `sgWasActive` handshake with `resetDSPState`. Do this after the
-regression tests are in, not before.
+regression tests are in and before the larger fixes; see section 5, step 3.
 
-## 5. Suggested order of work
+## 5. Implementation order
 
-1. Add the tests in section 6 so F8, F1, F2 and F3 fail on the current tree.
-2. Fix F8 (reset every bank on a state load). Small and self-contained.
-3. Fix F1 (reset or warm the state on enable, including `toneFilterLow` and the smoother).
-   If the OFF-to-ON snap resets the target bank, F8 is covered there too.
-4. Fix F2 (glide or gain-ramp on disable). The most common transition, see F2.
-5. Fix F3 and F5 together (defer retarget plus hysteresis).
-6. Fix F4 (warm banks) and measure CPU.
-7. F6 and F7 if the tests show a problem.
+The order follows dependencies, not the severity ranking. Two observations drive it:
+
+- **Warm banks (F4) remove most of the reset logic.** If all three banks run whenever Sub
+  Guard is active, nothing resets a bank mid-signal. F3's "reset a live bank, run one bank
+  twice" goes away, and a reversal becomes reversing the weight ramp. The cost is small:
+  10 biquads per channel instead of 4, at most 192 kHz at 4x, a few percent of one
+  core at worst. So F4 goes before F3 rather than last, and the F3 fix gets simpler.
+- **On/off should be a weight, not a glide.** Introduce one smoothed weight `g` (0 = off,
+  1 = on) and apply it at every place the low band is used: the distortion input becomes
+  `(1 - g) * x + g * high`, and the low band is subtracted, tone-filtered and added back
+  scaled by `g`. At `g = 0` this is the OFF path, at `g = 1` today's ON path, and between
+  them it is continuous with one distortion pass per block (the F2 constraint). Unlike the
+  glide, it never pushes the crossover toward a very low cutoff, so the stability risk in
+  section 3 doesn't arise. The UI snap to 0 stops mattering, because the processor ramps
+  whatever the parameter does. Today the low band is used in four places: the auto-gain
+  reference and the low-band subtraction in `processBlock`, and `toneFilterLow` and the
+  add-back in `applyAutoGainAndISP`. Each needs `g`, which is why the extraction in step 3
+  comes before it.
+
+Steps. Each is one PR that passes `bash scripts/verify.sh`, with renders from
+`RenderHarness` before and after.
+
+1. **Transition test harness and failing tests.** A test helper that processes blocks
+   while changing `subGuardFreq` at given blocks and reports the peak sample step against
+   the steady-state baseline of both settings (with distortion on, the baseline has to
+   come from the same settings). Write the section 6 tests. F8, F1, F2 and F3 should fail.
+   **Any that doesn't fail is downgraded, not fixed.** This is the point where the
+   hypotheses become facts, and it may reorder what follows.
+2. **F8 alone.** Reset all three banks in `resetDSPState`. One small change that makes its
+   test pass and changes nothing else. Ship it first: it's the likeliest pop (any preset
+   change while playing) and costs nothing.
+3. **Extract `SubGuardSplitter`** (prepare, set target frequency, process block, reset,
+   plus read access to the low band and `g`). This changes structure only. Prove it with
+   bit-exact `RenderHarness` renders at Sub Guard off, 60, 100 and 150 Hz, before and
+   after, and the existing tests unchanged. The failing tests from step 1 must still fail
+   the same way. Doing this before steps 4 and 5 keeps their state (`g`, warm banks,
+   ramp direction) inside one class instead of more `pb_*` and `sg*` members.
+4. **Warm banks, then F3 and F5.** Run all three banks whenever active, keep coefficients
+   in step (already true in `updateSubGuardCoefficients`), and delete the incoming-bank
+   resets. Then make a retarget during a fade reverse it in place
+   (`pos = len - pos`, swap from/to) and add hysteresis to `determineSubGuardFilterOrder`
+   (it takes the current order; for example 92 up / 88 down, 142 up / 136 down). The F3,
+   F4 and chatter tests pass. Measure CPU with `DistortionSoak`.
+5. **On/off weight `g` (F1 and F2).** Ramp `g` over about 10-20 ms. When `g` leaves 0:
+   reset all banks and `toneFilterLow`, and snap `smoothedSubGuardFreq` to the target
+   (`setCurrentAndTargetValue`), so nothing resumes from minutes ago and the crossover
+   doesn't glide from an old value (the F1 smoother bullet). The cold banks start under
+   `g ≈ 0`, so their onset is faded in. Take the OFF path only once `g` has reached 0.
+   Drive the auto-gain reference from the same `g`, so its input envelope doesn't jump.
+   `resetDSPState` sets `g` straight to its target (a state load is already a reset). The
+   on-then-off and off-then-on tests pass.
+6. **F6, then F7, only if measured.** Run the large-buffer sweep test after step 5. If it
+   fails, move the coefficient update to sub-blocks (every 32 samples, as Shape does). F7
+   stays a note unless a render shows the blend dip.
+
+Not in this plan: automation can park `subGuardFreq` at 1-25 Hz, which is an active, very
+low crossover today. Check that region for float-biquad stability at 4x separately (a
+test that sweeps 2-25 Hz and asserts finite, bounded output). It is unrelated to
+transitions.
+
+Listening pass after steps 2, 4 and 5, with a real 808 or bass line: preset changes while
+playing, dragging Sub Guard to off and back, and automation drawn across 92 and 142 Hz.
 
 ## 6. Testing
 
