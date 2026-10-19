@@ -2,11 +2,14 @@
 
 Status: static read of the code. Nothing here has been built, run, or reproduced.
 Every finding is a hypothesis with a concrete mechanism and a proposed test. The
-first job is to turn each one into a failing test, or to disprove it.
+first job is to turn each one into a failing test, or to disprove it. A review pass
+re-checked the claims against `main` at `d924b6d`; that pass added F8 and corrected the
+trigger analysis for F2, F3 and F5.
 
 Scope: `PluginProcessor::applySubGuardSplit` and its helpers in
 `Source/PluginProcessor.cpp`, plus the state declared in `Source/PluginProcessor.h`.
-Line numbers are from the tree at commit `75e1348` and will drift.
+Code is referenced by function name, checked against `main` at `d924b6d`. Line
+numbers drift, so search for the function instead.
 
 ## 1. How Sub Guard works (context)
 
@@ -19,8 +22,7 @@ Per block, in the oversampled domain:
 1. `applySubGuardSplit()` copies the input into `lowBandBuffer` and `highBandBuffer`,
    filters them into a Linkwitz-Riley low and high band, distorts only the high band
    (or runs the NAM profile stage on it), then writes `low + high` back to the main block.
-2. `processBlock` then subtracts the low band from the main block again
-   (`PluginProcessor.cpp` around line 2022), so the waveshaper, tone filter,
+2. `processBlock` then subtracts the low band from the main block again, so the waveshaper, tone filter,
    LA-2A and soft clipper see only the distorted high band.
 3. `applyAutoGainAndISP` runs those stages, applies a mirror tone filter
    (`toneFilterLow`) to the low band, and adds the low band back after the soft clipper.
@@ -35,14 +37,25 @@ The crossover slope depends on frequency zone:
 
 Slope changes crossfade over `SUBGUARD_CROSSFADE_TIME_S` (10 ms). Frequency changes are
 smoothed over `SUBGUARD_FREQ_SMOOTH_TIME_S` (50 ms), with the smoother advanced once per
-block (`prepareToPlay` re-rates it to the block rate, around line 957).
+block (`prepareToPlay` re-rates it to the block rate).
 
-Relevant state (`PluginProcessor.h` around line 421):
+Relevant state (`PluginProcessor.h`):
 `currentSubGuardOrder`, `smoothedSubGuardFreq`, `lastSubGuardFreq`, `sgCrossfadeActive`,
 `sgCrossfadePos`, `sgFromOrder`, `sgToOrder`, `sgWasActive`.
 
 Existing test: `SubGuardOrderCrossfadeTest::runTest` in
-`Source/Tests/DistortionTests.cpp` (around line 3977). See section 6 for why it is weak.
+`Source/Tests/DistortionTests.cpp`. See section 6 for why it is weak.
+
+How the parameter actually moves matters for which findings a user can hit:
+
+- `subGuardFreq` is continuous 0-200 Hz, so host automation can reach any value,
+  including 1-25 Hz (active, very low crossover).
+- The editor snaps it (`subGuardSlider.onValueChange` in `PluginEditor.cpp`): anything
+  at or below 25 Hz snaps to 0 (off), 52-68 to 60, 92-108 to 100, and 142-158 to 150.
+  A knob drag therefore cannot rest on either order boundary (92 and 142 Hz both snap
+  away), and every downward drag ends in a jump from 26 Hz or more straight to off.
+- Sub Guard is not an LFO destination. Presets, Randomize and session loads move it in a
+  single jump.
 
 ## 2. Findings, in priority order
 
@@ -50,11 +63,11 @@ Severity means how likely a user is to hear it, not how hard the fix is.
 
 ### F1. Turning Sub Guard on resumes stale filter state (high)
 
-Code: `applySubGuardSplit` lines around 3358-3404.
+Code: the OFF path and the OFF-to-ON snap in `applySubGuardSplit`.
 
 While `pb_subGuardFreq <= 1`, the function takes the OFF path and returns. None of the
 crossover banks are run or reset there. The mirror filter `toneFilterLow` is only
-processed when `pb_subGuardActive` (`applyAutoGainAndISP`, around line 3876), so it also
+processed when `pb_subGuardActive` (`applyAutoGainAndISP`), so it also
 holds stale state while Sub Guard is off.
 
 On OFF to ON the code does:
@@ -78,24 +91,57 @@ Related and unverified:
   OFF period the smoother glides from the last active frequency to the new one. The first
   ~50 ms may use the wrong crossover.
 - Auto-gain switches its input reference from the full-range signal to the high band when
-  Sub Guard turns on (`processBlock` around line 1986, `applySubGuardSplit` around 3521).
+  Sub Guard turns on (`processBlock` and the end of `applySubGuardSplit`).
   The input envelope may jump.
-- `resetDSPState` sets `sgWasActive = false` (around line 4146) but check whether it also
-  clears the filter banks. It is not the runtime-toggle path but it shares the concern.
+- `resetDSPState` has the same snap-without-reset problem for two of the three banks.
+  That is F8.
 
 Test: loud sine (for example 80 Hz at amplitude 0.5) with Sub Guard on, then set
 `subGuardFreq` to 0 for some blocks, then back to 60. Assert the peak inter-sample step
 in the first blocks after re-enabling stays close to the steady-state slew.
 
+### F8. A state load leaves the LR12 and LR18 banks stale (high)
+
+Finding IDs are stable; F8 was added later but belongs here in priority order.
+
+Code: `resetDSPState`, reached at runtime from `processBlock` when `stateNeedsReset` is set
+(`setStateInformation`, so any preset or session load), and from the oversampler rebuild.
+
+`resetDSPState` resets the LR24 bank (`lowPassFilter1/2`, `highPassFilter1/2`) and
+`toneFilterLow`, then sets `sgWasActive = false`. It never resets the LR12 bank
+(`subGuardLP12`, `subGuardHP12`) or the LR18 bank (`subGuardLP18_1/2`, `subGuardHP18_1/2`).
+On the next active block the OFF-to-ON snap in `applySubGuardSplit` picks the target order
+without resetting it either, so with Sub Guard at 100 Hz (LR18) or 150 Hz (LR12) the first
+block after a state load runs a bank holding whatever it last processed. The same
+stale-state pop as F1, on every preset change while playing.
+
+The oversampler rebuild re-prepares and resets all three banks before it calls
+`resetDSPState`, so that path is clean. `prepareToPlay` is also clean.
+
+Fix: reset all three banks in `resetDSPState` (`resetSubGuardOrderFilters` for each order
+already does the work). Cheap and independent of the larger F1/F2 design, so it can land
+first. Better still, have the OFF-to-ON snap reset the target bank itself, which covers F8
+and the filter-bank half of F1 in one place.
+
+Test: Sub Guard at 150 Hz with a loud 80 Hz sine for some blocks, then call
+`setStateInformation` with the same state (Sub Guard still 150 Hz) and process on. Assert
+the peak step in the first block after the reset stays near baseline. Repeat at 100 Hz
+(LR18) and 60 Hz (LR24, the control that should already pass).
+
 ### F2. Turning Sub Guard off is a hard switch (high)
 
-Code: OFF path, lines around 3358-3383.
+Code: the OFF path at the top of `applySubGuardSplit`.
 
 The output changes from `clean low + distorted high` to `distortion(full range)` at a
 block boundary. There is no fade. With sub-frequency content present the two waveforms
 differ, so the output has a step discontinuity at the switch. Downstream state also flips
 at once: the subtract and add-back of the low band stop, and `toneFilterLow` stops being
 processed.
+
+This is the most common transition in practice: the editor snaps anything at or below
+25 Hz to 0, so every time a user drags Sub Guard down to switch it off, the output jumps
+from a crossover of 26 Hz or more straight to full-range distortion. Unchecking it by
+automation or loading a preset with Sub Guard off does the same.
 
 Constraint for any fix: `advanceSampleControls`, `inputGainRamp`, `driveRamp`,
 `distMixRamp`, the LFO phase and the harmonic-density envelopes are consumed per sample
@@ -106,9 +152,9 @@ distortion runs once per block. See section 4.
 Test: sub tone plus a mid tone, Sub Guard on, then off. Assert the peak step at the switch
 stays below a threshold derived from the steady-state slew.
 
-### F3. Reversing the order change mid-crossfade corrupts filters (medium-high)
+### F3. Reversing the order change mid-crossfade corrupts filters (medium)
 
-Code: lines around 3413-3430.
+Code: the crossfade start and retarget in `applySubGuardSplit`.
 
 ```cpp
 if (!sgCrossfadeActive) { ... start A->B ... }
@@ -121,7 +167,7 @@ else if (targetOrder != sgToOrder)
 }
 ```
 
-`currentSubGuardOrder` only updates when a fade completes (line around 3506). So while
+`currentSubGuardOrder` only updates when a fade completes. So while
 fading A to B:
 
 - If the target returns to A: `sgFromOrder == sgToOrder == A`. The code resets the A bank,
@@ -133,8 +179,12 @@ fading A to B:
 - If the target becomes a third order C: the blend weights snap back to `wFrom = 1` on A,
   discarding the partial fade toward B, and the B bank state is thrown away.
 
-Trigger: any frequency wobble around 92 Hz or 142 Hz. Automation, an LFO, a jittery
-controller, or a slow drag that pauses on the boundary will do it (see F5).
+Trigger: the smoothed frequency crossing 92 Hz or 142 Hz and coming back within one
+10 ms crossfade. The knob cannot do this: it snaps across both boundaries (section 1),
+and the 50 ms smoother turns a snap into one monotonic glide. Sub Guard is not an LFO
+destination. That leaves host automation that wobbles around a boundary (a drawn curve,
+a hardware controller mapped through the host). Real, but rarer than F1, F2 and F8, so
+the severity is medium.
 
 Test: hold `subGuardFreq` at 90 Hz, then alternate 90 and 94 Hz every block or two for
 many blocks with a sine near 80 Hz. Assert no discontinuity and no NaN or blow-up.
@@ -142,32 +192,34 @@ This should also run under a sanitizer or with the `DISTORTION_RT_GUARD` build.
 
 ### F4. The incoming bank starts from zero state (medium)
 
-Code: `resetSubGuardOrderFilters(sgToOrder)` at lines around 3421 and 3429.
+Code: the two `resetSubGuardOrderFilters(sgToOrder)` calls in `applySubGuardSplit`.
 
 The comment says this hides the stale-state pop. It does, but the incoming bank starts
 with no history while the signal is already mid-flight:
 
-- Its low band has not settled when the 10 ms fade ends. An LR24 at 60 Hz has group delay
-  and settling time well above 10 ms, so the low band dips during and after the fade.
+- Its low band has not settled when the 10 ms fade ends. The argument is settling time,
+  not group delay: an LR24 at 60 Hz has a low-frequency group delay of about
+  2*sqrt(2)/(2*pi*60) = 7.5 ms, under the fade, but its step response rings for several
+  cycles of 60 Hz (tens of ms). So the low band dips during and after the fade.
 - Its high-pass banks pass a low-frequency transient in the first samples. That energy
   enters the distortion as an audible thump, weighted by the ramping `wTo`.
 
 Test: steady 50 Hz sine at moderate level, cross 92 Hz once, and compare the low-band
 RMS in the 50 ms after the crossfade with steady state.
 
-### F5. The order selection has no hysteresis (medium, amplifies F3)
+### F5. The order selection has no hysteresis (low-medium, amplifies F3)
 
-Code: `determineSubGuardFilterOrder` around line 4158.
+Code: `determineSubGuardFilterOrder`.
 
 The comment says "with hysteresis", but the function is stateless. The effective
 boundaries are exactly 92 Hz (LR24 to LR18) and 142 Hz (LR18 to LR12). Any small motion
-across a boundary retriggers a crossfade. The intended snap points are 60, 100 and 150 Hz,
-which sit comfortably inside their zones, so this only matters while the knob is between
-snap points or under modulation.
+across a boundary retriggers a crossfade. The editor snaps 92-108 Hz to 100 and
+142-158 Hz to 150 (section 1), so the knob jumps over both boundaries and cannot rest on
+them. Only host automation can hold the frequency at a boundary.
 
 ### F6. Coefficients change once per block (low-medium)
 
-Code: lines around 3386-3393 and `updateSubGuardCoefficients` around line 4180.
+Code: the coefficient update in `applySubGuardSplit` and `updateSubGuardCoefficients`.
 
 The smoother is consumed once per block and coefficients are rewritten only if the
 frequency moved more than 0.5 Hz. Small blocks give many small steps. Large host buffers
@@ -177,7 +229,7 @@ version of the sweep test.
 
 ### F7. Blending different orders is not exactly flat (low)
 
-Code: dual-bank blend, lines around 3479-3500.
+Code: the dual-bank blend in `applySubGuardSplit`.
 
 LR12, LR18 and LR24 each sum flat on their own, but they differ in phase. A linear blend of
 their band outputs can dip slightly near the crossover during the 10 ms fade. The code
@@ -191,14 +243,14 @@ probably inaudible. Note only.
 - The distortion stage is stateful and single-pass (see F2), which rules out the naive
   "run both paths and crossfade" fix for on/off.
 - Filters are float biquads in transposed direct form running at the oversampled rate
-  (up to 8x). Very low cutoffs are numerically delicate. A comment in
-  `applyAutoGainAndISP` (around line 3728) records that a 5 Hz DC blocker at 176 kHz was
+  (Off, 2x or 4x; 4x is the default). Very low cutoffs are numerically delicate. A
+  comment in `applyAutoGainAndISP` records that a 5 Hz DC blocker at 176 kHz was
   unstable. Any fix that moves the crossover toward a very low frequency must be checked
   for that.
 - `pb_*` members are shared block-scope state written in `processBlock` and read in the
   stage helpers. New state should not add more coupling.
 
-## 4. Fix options (for the stronger model to evaluate, not prescriptions)
+## 4. Fix options (to evaluate, not prescriptions)
 
 ### F3 and F5
 
@@ -229,7 +281,10 @@ probably inaudible. Note only.
 - Treat "off" as a glide to the lowest usable crossover, then switch to the OFF path only
   once the low band is negligible, and treat "on" as the reverse. This reuses the
   existing 50 ms smoother and needs no second distortion pass. Risk: numerical stability
-  at very low cutoff (section 3).
+  at very low cutoff (section 3). The glide has to live in the processor, keyed off the
+  parameter reaching 0, not the knob: the editor jumps straight from 26 Hz or more to 0,
+  and automation can also park the parameter anywhere in 1-25 Hz, which is already an
+  active, very low crossover today.
 - Or ramp the low-band gain, and the amount removed and re-added around the nonlinear
   stages, over ~10 ms at the boundary instead of switching. Keep the distortion single-pass.
 - For F1 specifically: on OFF to ON, reset `toneFilterLow` and prime or warm the target
@@ -244,16 +299,18 @@ regression tests are in, not before.
 
 ## 5. Suggested order of work
 
-1. Add the tests in section 6 so F1, F2 and F3 fail on the current tree.
-2. Fix F3 and F5 together (defer retarget plus hysteresis).
+1. Add the tests in section 6 so F8, F1, F2 and F3 fail on the current tree.
+2. Fix F8 (reset every bank on a state load). Small and self-contained.
 3. Fix F1 (reset or warm the state on enable, including `toneFilterLow` and the smoother).
-4. Fix F2 (glide or gain-ramp on disable).
-5. Fix F4 (warm banks) and measure CPU.
-6. F6 and F7 if the tests show a problem.
+   If the OFF-to-ON snap resets the target bank, F8 is covered there too.
+4. Fix F2 (glide or gain-ramp on disable). The most common transition, see F2.
+5. Fix F3 and F5 together (defer retarget plus hysteresis).
+6. Fix F4 (warm banks) and measure CPU.
+7. F6 and F7 if the tests show a problem.
 
 ## 6. Testing
 
-The existing test (`SubGuardOrderCrossfadeTest`, `DistortionTests.cpp` around line 3977):
+The existing test (`SubGuardOrderCrossfadeTest`, `DistortionTests.cpp`):
 
 - sweeps 60 to 200 Hz to 60 Hz monotonically in 80-block steps;
 - uses an 80 Hz sine at amplitude 0.1, 256-sample blocks, 44.1 kHz;
@@ -267,6 +324,7 @@ It cannot catch F1, F2 or F3. Add:
 
 | Test | What it drives | Assertion |
 |---|---|---|
+| State load | Sub Guard 150, 100 and 60 Hz with a loud 80 Hz sine, then `setStateInformation` with the same state | step in the first block after the reset near baseline (F8) |
 | Boundary chatter | alternate `subGuardFreq` around 92 Hz and 142 Hz every 1-2 blocks | peak step within a small multiple of baseline; all samples finite |
 | Off then on | loud 80 Hz sine, Sub Guard 60, then 0, then 60 | step in the first blocks after re-enable near baseline |
 | On then off | sub tone plus mid tone, Sub Guard on then off | step at the switch near baseline |
@@ -278,11 +336,9 @@ Use the relative form (`step <= k * baselineStep`) and print both numbers in the
 message. Where possible, also compare the high-band and low-band RMS before and after a
 transition to catch the dip in F4.
 
-Environment notes: the repo has a JUCE build and unit test runner
-(`Source/Tests/TestRunner.cpp`, `DistortionTests.jucer`, CMake). I did not build it in the
-session that produced this report, so check `scripts/` and CI (`.github/workflows`) for the
-supported way to run the tests. The session start hook reported that `AGENTS.md` and
-`scripts/verify.sh` are missing, so there may be no single verify command yet.
+Running the tests: `bash scripts/verify.sh` configures, builds `DistortionTests` and runs
+it; it is the definition of done (`AGENTS.md`). `DistortionTests <name filter>` runs one
+group. On Linux it needs the apt packages from `.github/workflows/build.yml`.
 
 ## 7. Not checked
 
@@ -294,5 +350,4 @@ supported way to run the tests. The session start hook reported that `AGENTS.md`
 - The interaction between Sub Guard transitions and the NAM profile path
   (`profileMode`, `islandDelay`, `subGuardLowDelayLine`) is not analysed beyond noting
   that the low band is delayed by the same amount as the high band.
-- Whether `resetDSPState` clears the filter banks is unread.
 - Auto-gain envelope behaviour across a Sub Guard toggle is unmeasured.
