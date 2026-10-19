@@ -1,10 +1,11 @@
-# Sub Guard crossover: transition artifact review
+# Sub Guard: transition artifacts and a clean sub
 
 Status: static read of the code. Nothing here has been built, run, or reproduced.
 Every finding is a hypothesis with a concrete mechanism and a proposed test. The
 first job is to turn each one into a failing test, or to disprove it. A review pass
 re-checked the claims against `main` at `d924b6d`; that pass added F8 and corrected the
-trigger analysis for F2, F3 and F5.
+trigger analysis for F2, F3 and F5. Section 2a is different: it is measured, not read.
+It asks whether the sub really stays untouched while Sub Guard is on.
 
 Scope: `PluginProcessor::applySubGuardSplit` and its helpers in
 `Source/PluginProcessor.cpp`, plus the state declared in `Source/PluginProcessor.h`.
@@ -236,6 +237,77 @@ their band outputs can dip slightly near the crossover during the 10 ms fade. Th
 comment justifies linear over equal-power because the bands are correlated. The dip is
 probably inaudible. Note only.
 
+## 2a. Is the sub untouched while Sub Guard is on? (measured)
+
+The goal of Sub Guard is that everything below the crossover leaves the plugin exactly as
+it came in, only delayed, while everything above it is distorted. These findings were
+measured, not just read.
+
+**Method.** `DistortionRender` (Release, Linux, 44.1 kHz, 512-sample blocks, default clip
+type, mix 100) rendered two 4-second stereo inputs, analysed over the last 2 seconds:
+
+- *sub*: a 45 Hz sine at −6 dBFS;
+- *sub + mids*: the same sine plus 1000 Hz and 1037 Hz at −16.5 dBFS each. Their 37 Hz
+  beat shows anything that couples the mids' envelope into the low end.
+
+Sub Guard was set to off, 60, 100 and 150 Hz, with drive 0, 30 and 70. Drive 0 (true
+bypass) is bit-transparent at every setting. With any drive on:
+
+| Sub Guard, drive 70 | 45 Hz level | 3rd harmonic (135 Hz) | 8 Hz product (sub + mids) |
+|---|---|---|---|
+| 150 Hz, today | −3.2 dB (sub), −4.5 dB (sub + mids) | −45 dBFS | −41 dBFS |
+| 150 Hz, transient tamer disabled (experiment) | −0.2 dB / −0.3 dB | −62 / −71 dBFS | −37 dBFS |
+| 60 Hz, today | −3.2 / −4.7 dB | −37 dBFS | −37 dBFS |
+| 60 Hz, transient tamer disabled | −0.2 / −0.5 dB | −34 dBFS | −30 dBFS |
+
+### C1. The transient tamer compresses the sub (high, measured)
+
+`applyPreCompression` (1 ms attack, 50 ms release, −12 dB threshold, 2.5:1) runs on the
+full signal before the split whenever the drive is on. A loud sub is turned down by about
+3 dB even at 150 Hz, where it is nowhere near the crossover. Its 1 ms attack follows the
+waveform, so it also adds harmonics to the sub. And because sub and mids share one gain,
+each bounces the other's level ("pumping"). With the tamer disabled the sub keeps its
+level to within 0.2-0.5 dB, and at 150 Hz its added harmonic falls by 17-26 dB (at 60 Hz
+the crossover leak, C3, dominates instead).
+
+### C2. Distortion products land below the crossover (high, measured)
+
+The high band is high-passed only *before* the drive. The drive then creates new low
+frequencies (here 45 − (1037 − 1000) = 8 Hz, at −30 to −41 dBFS; also difference tones
+and offsets from asymmetric clip types), and nothing removes them, so they sum straight
+into the "clean" low end. This is the 8 Hz column above. The tamer doesn't explain it:
+the product stays with the tamer disabled.
+
+### C3. Sub near the crossover is shared, by design of any crossover (inherent)
+
+At its own frequency a Linkwitz-Riley crossover sends half the signal (−6 dB) to each band.
+Today's high-band filters let through (computed): at the 60 Hz setting, 50 Hz at −9.8 dB
+and 40 Hz at −15.7 dB; at 150 Hz with the gentle LR12, 80 Hz at −13 dB. With drive, a
+−10 dB leak is fully saturated. No filter makes the region just below the crossover
+untouched. Steeper slopes narrow it, and the user has to set the crossover above the
+sub's fundamental (an 808 at 50 Hz needs about 80 Hz or more, not 60).
+
+### C4. Clean Boost changes the sub's level (medium, read)
+
+`applyCleanBoostEmphasis` lifts the full signal by up to 6 dB and adds a treble boost
+before the split. `applyCleanBoostDeEmphasis` then cuts the treble on low + high
+*together*, but `processBlock` subtracts the low band as it was *before* the cut. So a
+small leftover of the low band goes through the waveshaper and compressor. Not measured
+(Clean Boost is off by default).
+
+### C5. Smaller full-signal stages (low, computed)
+
+- The input high-pass at 20 Hz runs whenever Legacy Filter is off (it is the legacy
+  filter at its "transparent" default): −0.8 dB at 30 Hz, −0.2 dB at 45 Hz, plus phase.
+  This is the remaining −0.2 dB in the table.
+- Pre-drive Shape, when it isn't flat: at most +0.3 / −0.5 dB at 60 Hz. It is the user's
+  own tone choice, so leaving it full-band is reasonable.
+- The output limiter (−0.5 dBFS) acts on low + high together, so a loud distorted top can
+  duck the sub. It's a safety stage that only acts on overs. Note only.
+
+Not measured: the other clip types (asymmetric ones should make C2 worse), NAM profiles,
+and the effect of Clean Boost.
+
 ## 3. Why the fixes need care
 
 - The crossfade and the state reset are entangled. Fixing F3 by making the retarget
@@ -295,72 +367,91 @@ probably inaudible. Note only.
 Move the Sub Guard state and its per-block processing into its own class with a small
 interface (prepare, set target frequency, process block, reset). That contains the eight
 state variables and the `sgWasActive` handshake with `resetDSPState`. Do this after the
-regression tests are in and before the larger fixes; see section 5, step 3.
+regression tests are in and before the larger fixes; see section 5, step 5.
 
 ## 5. Implementation order
 
-The order follows dependencies, not the severity ranking. Two observations drive it:
+Two goals: the sub below the crossover leaves exactly as it came in (section 2a), and
+nothing clicks when Sub Guard changes (section 2). The order follows dependencies, not
+the severity ranking.
 
-- **Warm banks (F4) remove most of the reset logic.** If all three banks run whenever Sub
-  Guard is active, nothing resets a bank mid-signal. F3's "reset a live bank, run one bank
-  twice" goes away, and a reversal becomes reversing the weight ramp. The cost is small:
-  10 biquads per channel instead of 4, at most 192 kHz at 4x, a few percent of one
-  core at worst. So F4 goes before F3 rather than last, and the F3 fix gets simpler.
-- **On/off should be a weight, not a glide.** Introduce one smoothed weight `g` (0 = off,
-  1 = on) and apply it at every place the low band is used: the distortion input becomes
-  `(1 - g) * x + g * high`, and the low band is subtracted, tone-filtered and added back
-  scaled by `g`. At `g = 0` this is the OFF path, at `g = 1` today's ON path, and between
-  them it is continuous with one distortion pass per block (the F2 constraint). Unlike the
-  glide, it never pushes the crossover toward a very low cutoff, so the stability risk in
-  section 3 doesn't arise. The UI snap to 0 stops mattering, because the processor ramps
-  whatever the parameter does. Today the low band is used in four places: the auto-gain
-  reference and the low-band subtraction in `processBlock`, and `toneFilterLow` and the
-  add-back in `applyAutoGainAndISP`. Each needs `g`, which is why the extraction in step 3
-  comes before it.
+### The decision that shapes the rest: one crossover, split around the drive
 
-Steps. Each is one PR that passes `bash scripts/verify.sh`, with renders from
-`RenderHarness` before and after.
+C2 needs a high-pass *after* the drive as well as before it. Adding one on top of today's
+filters would break the flat sum. A Linkwitz-Riley crossover is two identical filters in
+series, so the pair can be split instead: one half before the drive, one half after.
+With the drive at zero the sum is still exactly an LR crossover (flat), and products
+below the crossover are cut by the second half.
 
-1. **Transition test harness and failing tests.** A test helper that processes blocks
-   while changing `subGuardFreq` at given blocks and reports the peak sample step against
-   the steady-state baseline of both settings (with distortion on, the baseline has to
-   come from the same settings). Write the section 6 tests. F8, F1, F2 and F3 should fail.
-   **Any that doesn't fail is downgraded, not fixed.** This is the point where the
-   hypotheses become facts, and it may reorder what follows.
-2. **F8 alone.** Reset all three banks in `resetDSPState`. One small change that makes its
-   test pass and changes nothing else. Ship it first: it's the likeliest pop (any preset
-   change while playing) and costs nothing.
-3. **Extract `SubGuardSplitter`** (prepare, set target frequency, process block, reset,
-   plus read access to the low band and `g`). This changes structure only. Prove it with
-   bit-exact `RenderHarness` renders at Sub Guard off, 60, 100 and 150 Hz, before and
-   after, and the existing tests unchanged. The failing tests from step 1 must still fail
-   the same way. Doing this before steps 4 and 5 keeps their state (`g`, warm banks,
-   ramp direction) inside one class instead of more `pb_*` and `sg*` members.
-4. **Warm banks, then F3 and F5.** Run all three banks whenever active, keep coefficients
-   in step (already true in `updateSubGuardCoefficients`), and delete the incoming-bank
-   resets. Then make a retarget during a fade reverse it in place
-   (`pos = len - pos`, swap from/to) and add hysteresis to `determineSubGuardFilterOrder`
-   (it takes the current order; for example 92 up / 88 down, 142 up / 136 down). The F3,
-   F4 and chatter tests pass. Measure CPU with `DistortionSoak`.
-5. **On/off weight `g` (F1 and F2).** Ramp `g` over about 10-20 ms. When `g` leaves 0:
-   reset all banks and `toneFilterLow`, and snap `smoothedSubGuardFreq` to the target
-   (`setCurrentAndTargetValue`), so nothing resumes from minutes ago and the crossover
-   doesn't glide from an old value (the F1 smoother bullet). The cold banks start under
-   `g ≈ 0`, so their onset is faded in. Take the OFF path only once `g` has reached 0.
-   Drive the auto-gain reference from the same `g`, so its input envelope doesn't jump.
-   `resetDSPState` sets `g` straight to its target (a state load is already a reset). The
-   on-then-off and off-then-on tests pass.
-6. **F6, then F7, only if measured.** Run the large-buffer sweep test after step 5. If it
-   fails, move the coefficient update to sub-blocks (every 32 samples, as Shape does). F7
-   stays a note unless a render shows the blend dip.
+That pairing works cleanly for one even order. **Recommendation: LR48 (8th order) at
+every frequency.** The high path becomes a 4th-order Butterworth high-pass before the
+drive and another after it; the low path is the matching LR48 low-pass. Before the drive
+it falls at 24 dB/oct like today's LR24, though it lets a little more through right at
+the crossover (−3 dB there instead of −6). After it, products fall another 24 dB/oct.
+Costs: about 8 biquads per channel instead of 4, and more low-end delay, about 14 ms at
+60 Hz (7.5 ms today) and 5.5 ms at 150 Hz. Both bands are delayed alike, so the sum
+stays flat, but the owner should judge a kick's punch by ear.
 
-Not in this plan: automation can park `subGuardFreq` at 1-25 Hz, which is an active, very
-low crossover today. Check that region for float-biquad stability at 4x separately (a
-test that sweeps 2-25 Hz and asserts finite, bounded output). It is unrelated to
-transitions.
+It also removes the slope switching (LR24/LR18/LR12 by zone), and with it F3, F4, F5, F7
+and the crossfade code, plus F8's two extra banks. The price is the "AGGRO" character:
+today 150 Hz uses a gentle slope that lets more low-mids into the drive on purpose. If
+the owner wants to keep that, give the slope its own control later. Don't keep the
+automatic zones: the zones are what cause the transition bugs.
 
-Listening pass after steps 2, 4 and 5, with a real 808 or bass line: preset changes while
-playing, dragging Sub Guard to off and back, and automation drawn across 92 and 142 Hz.
+The alternative, keeping the zones, means a post-drive filter per order (LR18 has no
+clean split), then warm banks plus the F3/F5 fixes from the earlier plan. It is more code
+and still doesn't fix C2 at LR18.
+
+**On/off as a weight, not a glide** (F1, F2): one smoothed weight `g` (0 = off, 1 = on)
+applied wherever the low band is used. The drive input becomes `(1 − g)·x + g·high`, and
+the low band is subtracted, tone-filtered and added back scaled by `g`. At `g = 0` this is
+the OFF path, at `g = 1` the ON path, continuous between, with one drive pass per block.
+Today the low band is used in four places: the auto-gain reference and the subtraction in
+`processBlock`, and `toneFilterLow` and the add-back in `applyAutoGainAndISP`.
+
+### Steps
+
+Each step is one PR that passes `bash scripts/verify.sh`, with `DistortionRender` renders
+before and after. Steps 2-4 change the sound on purpose; the owner listens before merging.
+
+1. **Tests that fail today.** The clean-sub test (section 6) fails now: sub level −3.2 dB,
+   8 Hz product at −41 dBFS. The transition tests from section 6 should fail for F8, F1,
+   F2 and F3; any that passes is downgraded, not fixed.
+2. **F8 alone.** Reset all three banks in `resetDSPState`. It ships now because it is
+   tiny and helps until step 6 replaces the banks.
+3. **Transient tamer on the high band only (C1).** With Sub Guard on, run
+   `applyPreCompression` on the high band inside `applySubGuardSplit`, after the split and
+   before the drive. With Sub Guard off, behaviour is unchanged. Measured effect: sub
+   level −3.2 → −0.2 dB. Side effect, likely welcome: a loud sub no longer ducks the mids
+   going into the drive.
+4. **Clean Boost on the high band only (C4).** Lift, emphasis and de-emphasis all on the
+   high band with Sub Guard on, so the sub's level stays put and the de-emphasis
+   leftover disappears.
+5. **Extract `SubGuardSplitter`** (prepare, set target frequency, process block, reset,
+   access to the low band and `g`). Structure only, proven by bit-identical renders at
+   off, 60, 100 and 150 Hz. It comes before steps 6 and 7 so their new state lives in
+   one class.
+6. **The new crossover (C2).** LR48 split around the drive: the second half goes after
+   all the high band's nonlinear stages (drive, waveshaper, compressor, soft clipper),
+   right before the add-back. Delete the order zones and the order crossfade. Latency is
+   unchanged (it's an IIR crossover). Run the clean-sub, crossover-flatness and
+   Golden Audio tests.
+7. **On/off weight `g` (F1, F2).** Ramp over 10-20 ms. When `g` leaves 0, reset the
+   crossover and `toneFilterLow` and snap the frequency smoother to the target. Take the
+   OFF path only once `g` reaches 0. Drive the auto-gain reference from the same `g`.
+   `resetDSPState` sets `g` straight to its target.
+8. **Remaining, each only if measured:** coefficient updates per sub-block (F6); the
+   20 Hz input high-pass (C5), whose removal would make the bass below 40 Hz slightly
+   louder in every session, so the owner decides; a stability test that sweeps
+   automation through 1-25 Hz.
+
+What no step can fix: content just below the crossover is shared (C3). Make that clear
+to users, for example in the manual or a hint on the knob: "protects what sits well below
+the setting, so set it above your 808's note."
+
+Listening pass after steps 3, 4, 6 and 7, with a real 808 and bass line: hold Sub Guard on
+and compare the sub with the plugin bypassed; change presets while playing; drag Sub
+Guard to off and back.
 
 ## 6. Testing
 
@@ -378,6 +469,7 @@ It cannot catch F1, F2 or F3. Add:
 
 | Test | What it drives | Assertion |
 |---|---|---|
+| Clean sub | 45 Hz sine at −6 dBFS, then plus 1000 + 1037 Hz; Sub Guard 100 and 150 Hz (also 60 Hz with a 30 Hz sine); drive 70 | 45 Hz level within 0.3 dB of the input; nothing below the crossover except the input tone above −80 dBFS (the 8 Hz product, C2) |
 | State load | Sub Guard 150, 100 and 60 Hz with a loud 80 Hz sine, then `setStateInformation` with the same state | step in the first block after the reset near baseline (F8) |
 | Boundary chatter | alternate `subGuardFreq` around 92 Hz and 142 Hz every 1-2 blocks | peak step within a small multiple of baseline; all samples finite |
 | Off then on | loud 80 Hz sine, Sub Guard 60, then 0, then 60 | step in the first blocks after re-enable near baseline |

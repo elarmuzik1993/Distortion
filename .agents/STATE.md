@@ -25,9 +25,11 @@
    library; a new instance gets the last profile, none with Recall Profile off). Shape by ear.
 5. #44 (pluginval Automation segfault, Linux, 96 kHz / 64-sample blocks): sweep seeds; stop
    `prepareToPlay` shrinking band buffers below `rebuildOversampling`'s size; fixed CI seed.
-6. Sub Guard transition clicks (`docs/SUB_GUARD_TRANSITION_REVIEW.md`, PR #72, unreproduced):
-   order in its section 5: failing tests; F8 alone (`resetDSPState` skips the LR12/LR18
-   banks); extract `SubGuardSplitter` (bit-exact); warm banks + F3/F5; on/off weight (F1/F2).
+6. Sub Guard (`docs/SUB_GUARD_TRANSITION_REVIEW.md`, PR #72): measured, the sub is not clean
+   with drive on (−3.2 dB from the transient tamer; distortion products below the crossover).
+   Plan in its section 5: failing tests; F8; tamer and Clean Boost on the high band only;
+   extract `SubGuardSplitter`; LR48 split around the drive (owner decides: drops the slope
+   zones); on/off weight. Owner listens after each sound change.
 7. pluginval (strictness 10) on the Release VST3, bump the version (CMake `VERSION 2.3.0`), tag.
 8. Owner: ASIO standalone at 44.1/96 kHz: swap/clear profiles while playing, Mono Input, latency.
 9. Follow-ups: the switch may click mid-playback; XY Y-axis is inaudible in Legacy mode; each arrow
