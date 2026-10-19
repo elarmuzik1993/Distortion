@@ -4345,7 +4345,7 @@ void CoefficientPropagationTest::runTest()
     {
         // Direct verification: write changes through .state must mutate the
         // Coefficients object the per-channel Filter is bound to. Inspect raw
-        // coefficients on lowPassFilter1 (LR24 mode @ 60 Hz) and confirm they
+        // coefficients on the first LR24 low-pass (@ 60 Hz) and confirm they
         // differ from the same filter rewritten for a different frequency.
         // Bypass the parameter smoother (via friend access) so the coefficient
         // update fires on the first block at the new target frequency.
@@ -4365,12 +4365,12 @@ void CoefficientPropagationTest::runTest()
         auto snapshotLP1 = [&](float hz) {
             subGuardFreq->setValueNotifyingHost(subGuardFreqFloat->convertTo0to1(hz));
             // Snap the smoother directly to the target so the next processBlock
-            // sees currentSubGuardFreq = hz and triggers updateSubGuardCoefficients.
-            processor.smoothedSubGuardFreq.setCurrentAndTargetValue(hz);
+            // sees the frequency at hz and triggers SubGuardSplitter::updateCoefficients.
+            processor.subGuardSplitter.smoothedFreq.setCurrentAndTargetValue(hz);
             // Single processBlock to fire the coefficient update path.
             auto warm = generateSineWave(1000.0, 48000.0, 512, 0.1f);
             processor.processBlock(warm, midi);
-            auto* coeffs = processor.lowPassFilter1.state->getRawCoefficients();
+            auto* coeffs = processor.subGuardSplitter.lr24Low1.state->getRawCoefficients();
             return std::array<float, 5>{ coeffs[0], coeffs[1], coeffs[2], coeffs[3], coeffs[4] };
         };
 

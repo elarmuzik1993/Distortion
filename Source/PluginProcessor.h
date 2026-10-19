@@ -13,6 +13,7 @@
 #include <JuceHeader.h>
 #include <juce_dsp/juce_dsp.h>
 #include "ShapeFilter.h"
+#include "SubGuardSplitter.h"
 #include "LinearRamp.h"
 #include <atomic>
 #include <array>
@@ -29,11 +30,7 @@
 //==============================================================================
 namespace DSPConstants
 {
-    // Sub Guard crossover configuration (replaces 808-Safe mode)
-    constexpr float SUBGUARD_FREQ_MAX = 200.0f;               // Maximum crossover frequency
-    constexpr float SUBGUARD_FREQ_DEFAULT = 60.0f;            // Default to 60Hz LR24 (sub-preserving, Saturn 2 style)
-    constexpr float SUBGUARD_CROSSFADE_TIME_S = 0.010f;       // 10ms order transition crossfade
-    constexpr float SUBGUARD_FREQ_SMOOTH_TIME_S = 0.050f;     // 50ms frequency smoothing
+    // Sub Guard crossover constants (SUBGUARD_*) live in SubGuardSplitter.h.
 
     // Manual one-pole DC blocker corner (applied after downsampling, at base rate).
     // Kept constant across sample rates by deriving R = exp(-2*pi*fc/fs) per rate.
@@ -319,9 +316,6 @@ public:
     std::atomic<bool> debugHadDistortionCorruption{false};
     std::atomic<bool> debugHadUnexpectedSampleRateChange{false};
 
-    // Sub Guard filter order enum (public for method signatures)
-    enum class SubGuardFilterOrder { LR12, LR18, LR24 };
-
     //==============================================================================
     // NAM profile (prototype). A loaded .nam model replaces the built-in clip type
     // as the distortion stage. While one is loaded the chain runs at 1x and the
@@ -385,17 +379,6 @@ private:
     void buildReportPipeline (const juce::File& dir, diag::ITransport& transport);
     void enqueueAndComposeReport (const juce::String& trigger, const juce::String& message);
 
-    // Sub Guard helper methods
-    SubGuardFilterOrder determineSubGuardFilterOrder(float freq) const;
-    void updateSubGuardCoefficients(float freq, double sampleRate);
-    // Filter lowBuf/highBuf in place through the given order's bank and bake the
-    // LR12 flat-sum polarity (inverts the high band for 2nd-order Linkwitz-Riley).
-    void filterSubGuardBands(SubGuardFilterOrder order,
-                             juce::AudioBuffer<float>& lowBuf,
-                             juce::AudioBuffer<float>& highBuf);
-    // Clear just one order's filter state (incoming bank at a crossfade start).
-    void resetSubGuardOrderFilters(SubGuardFilterOrder order);
-
     // Clean Boost helpers
     void updateCleanBoostCoefficients(float depth, double sampleRate);
     void applyCleanBoostEmphasis();
@@ -423,46 +406,9 @@ private:
     float manualDCBlockerPrevOutput[2] = { 0.0f, 0.0f };
     float dcBlockerR = 0.9995f;  // ~3.5Hz at 44.1kHz; recomputed per sample rate
 
-    // Sub Guard LR24 filters (4th order = 2 cascaded 2nd-order stages).
-    // Coefficient updates mutate .state in place (see updateSubGuardCoefficients).
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> lowPassFilter1;
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> lowPassFilter2;
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> highPassFilter1;
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> highPassFilter2;
-
-    // Sub Guard LR12 filters (2nd order = single stage)
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> subGuardLP12;
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> subGuardHP12;
-
-    // Sub Guard LR18 filters (1st + 2nd order cascaded = 3rd order approximation)
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> subGuardLP18_1;  // First order
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> subGuardLP18_2;  // Second order
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> subGuardHP18_1;  // First order
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>> subGuardHP18_2;  // Second order
-
-    // Sub Guard state tracking
-    SubGuardFilterOrder currentSubGuardOrder = SubGuardFilterOrder::LR24;
-    juce::SmoothedValue<float> smoothedSubGuardFreq;
-    float lastSubGuardFreq = -1.0f;
-
-    // Sub Guard order-change crossfade. When the slope order switches (zone boundary),
-    // both the outgoing and incoming banks run for SUBGUARD_CROSSFADE_TIME_S and their
-    // band-split outputs are linearly blended, so the switch is click-free.
-    bool  sgCrossfadeActive = false;
-    int   sgCrossfadePos    = 0;           // samples elapsed in the current crossfade
-    SubGuardFilterOrder sgFromOrder = SubGuardFilterOrder::LR24;
-    SubGuardFilterOrder sgToOrder   = SubGuardFilterOrder::LR24;
-    bool  sgWasActive       = false;       // Sub Guard active last block? (OFF->ON snaps, no crossfade)
+    // Sub Guard crossover: the slope banks, their order crossfade, the per-block
+    // frequency smoother and the low/high band buffers (oversampled domain).
+    SubGuardSplitter subGuardSplitter;
 
     // Post-distortion tone filter (oversampled rate)
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
@@ -498,11 +444,6 @@ private:
     bool eqBandUsable[DSPConstants::EQ_NUM_BANDS] = {};
     double eqSampleRate = 44100.0;                                     // base rate for coeff writes
 
-    juce::AudioBuffer<float> lowBandBuffer;   // For clean low frequencies
-    juce::AudioBuffer<float> highBandBuffer;  // For distorted high frequencies
-    // Secondary band buffers — hold the incoming order's split during an order crossfade.
-    juce::AudioBuffer<float> lowBandBufferB;
-    juce::AudioBuffer<float> highBandBufferB;
     juce::AudioBuffer<float> dryBuffer;       // For global wet/dry mix
 
     // Phase-matched dry path for the global wet/dry mix. The dry is routed through a

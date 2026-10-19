@@ -88,7 +88,7 @@ python scripts/fix_moduleinfo_json.py build --all
 1. **Input Stage** → Legacy v2.3 input filter (`filterMode`/`highPassFreq`; transparent High Pass 20 Hz unless `legacyFilter` is on), then **Shape (pre-drive)** (held Flat while `legacyFilter` is on): bipolar Bark ↔ Scoop voicing (600 Hz peak/dip + opposing 2.5 kHz shelf, `ShapeFilter`, amount `SHAPE_PRE_AMOUNT`).
 2. **Oversampling** → Polyphase IIR, selectable Off / 2x / 4x (4x default; `oversamplingMode` in `settings.xml`)
 3. **Pre-Distortion Transient Tamer** → Hardcoded (1ms attack, 50ms release, 2.5:1 ratio, -12dB threshold)
-4. **Sub Guard Band-Split** (Optional) → 50-200Hz crossover protecting low band from distortion.
+4. **Sub Guard Band-Split** (Optional) → 50-200Hz crossover protecting low band from distortion. `SubGuardSplitter` (`Source/SubGuardSplitter.{h,cpp}`) owns the crossover (slope banks, order crossfade, frequency smoother, band buffers); `applySubGuardSplit` drives its high band and recombines.
 5. **Distortion Stage** → 7 Professional Clip Types (Brutal Fuzz, Tube, Bit Crusher, Tape, Transformer, Diode, Decimator), or a loaded NAM profile (prototype). In profile mode the chain runs at 1x and each model runs at its trained rate inside a `ResamplingIsland` (`Source/Nam/`), which delays the wet path by a whole number of samples, D. The Distortion Mix dry half, the Sub Guard low band and the global Mix dry wait the same D.
 6. **Shape (post-drive)** → the same curve at up to `SHAPE_POST_AMOUNT`, oversampled domain. It shapes the harmonics the drive created, which is what makes Shape audible on near-sine 808s. Its amount fades in with the drive (`ShapeFilter::postDriveAmount`: 0 at 0% distortion, full at `SHAPE_POST_FULL_DRIVE` 10%), so crossing the true-bypass threshold, where only the pre-drive half runs, does not jump the EQ; true bypass also clears its memory. Runs after the Clean Boost de-emphasis and **after the Sub Guard low-band subtraction**, so Sub Guard's clean low band is never shaped after the drive; before auto-gain, compression and the soft clipper; re-prepared with the oversampler (1x in NAM profile mode). The global-Mix dry capture precedes both Shape stages, so Shape colours only the wet path.
 7. **Tone Filter & Waveshaper** → Order depends on "Clean Mode" toggle. Runs in oversampled domain.
@@ -133,7 +133,7 @@ Steps 13–15 live inside `applyAutoGainAndISP`; 16–17 are in `processBlock` p
 - **Thread Safety**: Use `std::atomic` for parameters and a lock-free `juce::AbstractFifo` (SPSC) for Scope data. The scope path holds **no lock** — the old `SpinLock` was removed to keep the audio thread contention-free, so do not reintroduce one.
 - **Smoothing**: Always consume `SmoothedValue` in a **sample-first loop** to avoid buffer exhaustion.
 - **Bypass**: True bypass when `distortion < 0.5%` and `compression OFF`. Skips oversampling and the whole distortion/compression chain. **The legacy input filter (only when `isInputFilterActive()`) and the pre-drive Shape (only when off Flat) still run**, so Shape works as a standalone tone control; both at their transparent defaults leave bypass bit-clean. The bypass branch imposes the path's own latency through `bypassLatencyDelay`, then the shared output pad, reaching R (see Latency and rebuilds) in total, so toggling causes no timing jump. Full ordering in `docs/Architecture Contract.md`.
-- **Namespace**: DSP constants are centralized in the `DSPConstants` namespace in `PluginProcessor.h`, except the Shape voicing (`SHAPE_*`), which extends the same namespace in `Source/ShapeFilter.h` so the filter header stands alone.
+- **Namespace**: DSP constants are centralized in the `DSPConstants` namespace in `PluginProcessor.h`, except the Shape voicing (`SHAPE_*`) and Sub Guard (`SUBGUARD_*`), which extend the same namespace in `Source/ShapeFilter.h` and `Source/SubGuardSplitter.h` so those headers stand alone.
 
 ## Build & Test
 - **Framework**: JUCE UnitTest runner.
@@ -238,7 +238,7 @@ Cracked-glass / diamond-plate artwork behind the editor. `Resources/ui_texture.p
 **Replacing the artwork**: keep the 960x564 canvas and registration; export flattened, since Photoshop blend modes do not survive a PNG (a Screen/Linear-Dodge layer baked into alpha is what produces the low-alpha fill described above). Source art is authored on a 1202x778 canvas and cropped to `y=71..777, x=0..1200` before scaling — both layers share that crop, which is what registers them. Verify a replacement with `DistortionUiSnapshot --extreme` rather than by eye.
 
 ## Project Layout
-- `Source/`: PluginProcessor, PluginEditor, CustomKnob, `FactoryPresets.h`, and DSP logic.
+- `Source/`: PluginProcessor, PluginEditor, CustomKnob, `FactoryPresets.h`, and DSP logic (e.g. `ShapeFilter.h`, `SubGuardSplitter`, the in-place coefficient writers in `FilterCoeffs.h`).
 - `Source/Nam/`: NAM profiles: `NamProfile` (model + `ResamplingIsland`), `ProfileLibrary` (the browsable, importing Profiles folder). See "NAM profile browser" above.
 - `Source/Diagnostics/`: bug-reporting subsystem (`diag` namespace) — sink, store, composer, sender, transport. See "Diagnostics / Bug Reporting" above.
 - `Source/Tools/`: headless console tools — `RenderHarness` (audition; `--signal 808|bassnote`, `--shape <v>`, `--preset <name>`), `SoakHarness` (stress), `UiSnapshot` (editor screenshots).

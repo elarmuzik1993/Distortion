@@ -154,6 +154,8 @@ set(PLUGIN_SOURCES
     Source/FactoryPresets.h
     Source/FilterCoeffs.h
     Source/ShapeFilter.h
+    Source/SubGuardSplitter.cpp
+    Source/SubGuardSplitter.h
     Source/LegacyInputFilter.h
     Source/ProfileCardAnimation.h
     Source/Diagnostics/AppPaths.h
