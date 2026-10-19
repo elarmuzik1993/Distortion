@@ -4144,14 +4144,11 @@ void PluginProcessor::resetDSPState()
     inputFilter.reset();
     shapePre.reset();
     shapePost.reset();
-    if (lowPassFilter1.state)
-        lowPassFilter1.reset();
-    if (lowPassFilter2.state)
-        lowPassFilter2.reset();
-    if (highPassFilter1.state)
-        highPassFilter1.reset();
-    if (highPassFilter2.state)
-        highPassFilter2.reset();
+    // Every Sub Guard order, not just the active one: the next active block may pick any
+    // of them, and a bank left holding its last signal pops on a preset or session load.
+    resetSubGuardOrderFilters(SubGuardFilterOrder::LR24);
+    resetSubGuardOrderFilters(SubGuardFilterOrder::LR18);
+    resetSubGuardOrderFilters(SubGuardFilterOrder::LR12);
     if (toneFilter.state)
         toneFilter.reset();
     if (toneFilterLow.state)
