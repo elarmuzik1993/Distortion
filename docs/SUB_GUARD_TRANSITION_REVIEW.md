@@ -383,8 +383,8 @@ series, so the pair can be split instead: one half before the drive, one half af
 With the drive at zero the sum is still exactly an LR crossover (flat), and products
 below the crossover are cut by the second half.
 
-That pairing works cleanly for one even order. **Recommendation: LR48 (8th order) at
-every frequency.** The high path becomes a 4th-order Butterworth high-pass before the
+That pairing works cleanly for one even order. **Decided (owner, 2026-10-19): LR48 (8th
+order) at every frequency.** The high path becomes a 4th-order Butterworth high-pass before the
 drive and another after it; the low path is the matching LR48 low-pass. Before the drive
 it falls at 24 dB/oct like today's LR24, though it lets a little more through right at
 the crossover (−3 dB there instead of −6). After it, products fall another 24 dB/oct.
@@ -395,8 +395,9 @@ stays flat, but the owner should judge a kick's punch by ear.
 It also removes the slope switching (LR24/LR18/LR12 by zone), and with it F3, F4, F5, F7
 and the crossfade code, plus F8's two extra banks. The price is the "AGGRO" character:
 today 150 Hz uses a gentle slope that lets more low-mids into the drive on purpose. If
-the owner wants to keep that, give the slope its own control later. Don't keep the
-automatic zones: the zones are what cause the transition bugs.
+The owner accepted losing it. If it is wanted back, it returns as its own control (a
+soft/sharp switch), never as automatic zones: the zones are what cause the transition
+bugs. The knob's snap points (60, 100, 150 Hz) stay.
 
 The alternative, keeping the zones, means a post-drive filter per order (LR18 has no
 clean split), then warm banks plus the F3/F5 fixes from the earlier plan. It is more code
@@ -431,7 +432,7 @@ before and after. Steps 2-4 change the sound on purpose; the owner listens befor
    access to the low band and `g`). Structure only, proven by bit-identical renders at
    off, 60, 100 and 150 Hz. It comes before steps 6 and 7 so their new state lives in
    one class.
-6. **The new crossover (C2).** LR48 split around the drive: the second half goes after
+6. **The new crossover (C2).** LR48 split around the drive (decided): the second half goes after
    all the high band's nonlinear stages (drive, waveshaper, compressor, soft clipper),
    right before the add-back. Delete the order zones and the order crossfade. Latency is
    unchanged (it's an IIR crossover). Run the clean-sub, crossover-flatness and
