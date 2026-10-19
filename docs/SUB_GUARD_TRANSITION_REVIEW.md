@@ -459,9 +459,10 @@ regenerates Golden Audio, with a CHANGELOG note.
 
 Each step is one PR that passes `bash scripts/verify.sh`, with `DistortionRender` renders
 before and after. Steps 4-7 change the sound on purpose; the owner listens before merging.
-Renders with drive on are not repeatable today: `distortionRandom` and `waveshaperRandom`
-are clock-seeded, so each run adds different noise. Step 3 proved bit-identity only with a
-temporary seeding patch. Steps 4-7 need a real seeding hook first (section 8).
+Renders with drive on used to differ run to run: `distortionRandom` and `waveshaperRandom`
+are clock-seeded, so step 3 proved bit-identity only with a temporary seeding patch. The
+seeding hook is now in (section 8): `DistortionRender` seeds the noise (`--seed`, default 1),
+so before/after renders compare byte for byte.
 
 1. **Tests that fail today.** Done in #73. `SubGuardPendingTests` ("Sub Guard Pending")
    always logs its measurements and only asserts with `DISTORTION_PENDING_TESTS=1`. The
@@ -563,9 +564,9 @@ It cannot catch F1, F2 or F3. Add:
 Use the relative form (`step <= k * baselineStep`) and print both numbers in the failure
 message. Where possible, also compare the high-band and low-band RMS before and after a
 transition to catch the dip in F4. The state-load test is the exception: it compares with
-a reference processor. With the drive on, two processors never match exactly, because the
-drive's noise is clock-seeded. That is why its distorted limit is looser. A seeding hook
-(section 8) would let it tighten.
+a reference processor. The rig seeds the drive's noise, so with the drive on the two match
+to about 1e-5 and the distorted limit is the same 1e-4 as the clean one (it was 5e-3
+while the noise was clock-seeded).
 
 Running the tests: `bash scripts/verify.sh` configures, builds `DistortionTests` and runs
 it; it is the definition of done (`AGENTS.md`). `DistortionTests <name filter>` runs one
@@ -646,9 +647,11 @@ seeded `distortionRandom` and `waveshaperRandom`.
 
 **Before steps 4-7**
 
-- Add a test seeding hook, for example a processor method that seeds both `juce::Random`
-  members, usable from tests and `DistortionRender`. Steps 4 and 5 promise no change with
-  Sub Guard off, and only seeded renders can prove that.
+- Seeding hook: done. `PluginProcessor::seedNoiseForTesting(seed)` seeds both
+  `juce::Random` members. `DistortionRender` always calls it (`--seed <n>`, default 1),
+  `SubGuardToneRig` seeds every rig, and `ProcessBlockDecompTest` now asserts seeded peers
+  are bit-exact. Steps 4 and 5 promise no change with Sub Guard off: prove it by comparing
+  `sha1sum` of renders before and after, Sub Guard off, drive on.
 - Names moved in #75; sections 1-4 use the old ones. `determineSubGuardFilterOrder` is
   now `SubGuardSplitter::orderForFrequency`. `updateSubGuardCoefficients`,
   `filterSubGuardBands` and `resetSubGuardOrderFilters` are now `updateCoefficients`,

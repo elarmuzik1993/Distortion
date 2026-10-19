@@ -241,7 +241,7 @@ Cracked-glass / diamond-plate artwork behind the editor. `Resources/ui_texture.p
 - `Source/`: PluginProcessor, PluginEditor, CustomKnob, `FactoryPresets.h`, and DSP logic (e.g. `ShapeFilter.h`, `SubGuardSplitter`, the in-place coefficient writers in `FilterCoeffs.h`).
 - `Source/Nam/`: NAM profiles: `NamProfile` (model + `ResamplingIsland`), `ProfileLibrary` (the browsable, importing Profiles folder). See "NAM profile browser" above.
 - `Source/Diagnostics/`: bug-reporting subsystem (`diag` namespace) — sink, store, composer, sender, transport. See "Diagnostics / Bug Reporting" above.
-- `Source/Tools/`: headless console tools — `RenderHarness` (audition; `--signal 808|bassnote`, `--shape <v>`, `--preset <name>`), `SoakHarness` (stress), `UiSnapshot` (editor screenshots).
+- `Source/Tools/`: headless console tools — `RenderHarness` (audition; `--signal 808|bassnote`, `--shape <v>`, `--preset <name>`; the drive's noise is seeded, `--seed <n>` default 1, so renders repeat byte for byte), `SoakHarness` (stress), `UiSnapshot` (editor screenshots).
 - `Resources/`: embedded binary data — `ui_texture.png` / `ui_texture_extreme.png` (see "UI Texture" below), logo, Orbitron fonts.
 - `installer/`: Inno Setup script for the Windows installer.
 - `library/`: Shared utility code.

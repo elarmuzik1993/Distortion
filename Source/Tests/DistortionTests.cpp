@@ -4792,34 +4792,45 @@ void ProcessBlockDecompTest::runTest()
     const float amp = juce::Decibels::decibelsToGain(-6.0f);
     juce::AudioBuffer<float> inputRef = TestUtilities::generateSineWave(1000.0, 48000.0, 512, amp);
 
-    // Two independent instances initialised identically — avoids dangling
+    // Independent instances initialised identically — avoids dangling
     // pb_oversampledBlock view from a second prepareToPlay on the same instance.
-    PluginProcessor processorA, processorB;
+    // The drive's noise (distortionRandom, waveshaperRandom) is clock-seeded per
+    // instance, so A and B are seeded alike and C differently.
+    PluginProcessor processorA, processorB, processorC;
+    processorA.seedNoiseForTesting(7);
+    processorB.seedNoiseForTesting(7);
+    processorC.seedNoiseForTesting(8);
     setup(processorA);
     setup(processorB);
+    setup(processorC);
 
-    juce::AudioBuffer<float> runA(inputRef);
-    juce::MidiBuffer midiA;
-    processorA.processBlock(runA, midiA);
+    auto run = [&inputRef](PluginProcessor& p)
+    {
+        juce::AudioBuffer<float> out(inputRef);
+        juce::MidiBuffer midi;
+        p.processBlock(out, midi);
+        return out;
+    };
+    const auto runA = run(processorA);
+    const auto runB = run(processorB);
+    const auto runC = run(processorC);
 
-    juce::AudioBuffer<float> runB(inputRef);
-    juce::MidiBuffer midiB;
-    processorB.processBlock(runB, midiB);
-
-    // Per-instance random generators (distortionRandom, waveshaperRandom) make strict
-    // bit-exact comparison across instances impossible — they seed independently from time.
-    // The golden-audio tests are the authoritative decomposition gate. Here we verify the
-    // extracted code path is structurally sound: output is finite, audible, and matches a
-    // peer instance within the bounded analog-noise envelope (clip type 0 adds noise up to
-    // ~0.002 per sample).
     beginTest("processBlock output is finite and non-silent");
     expect(!TestUtilities::containsInvalidSamples(runA), "Output contains NaN or Inf");
     expect(TestUtilities::calculatePeak(runA) > 1e-6f,   "Output is silent");
 
-    beginTest("processBlock output matches peer instance within analog-noise envelope");
+    beginTest("processBlock output is bit-exact across identically seeded instances");
     const float maxDiff = TestUtilities::calculateMaxDifference(runA, runB);
-    expect(maxDiff < 0.01f, "Output diverges beyond analog-noise envelope (maxDiff="
-                            + juce::String(maxDiff, 6) + ")");
+    expectEquals(maxDiff, 0.0f, "Seeded peer instance diverges (maxDiff=" + juce::String(maxDiff, 9) + ")");
+
+    // A different seed must change the output; otherwise the seed is not reaching the
+    // noise, and the bit-exact check above would pass for the wrong reason.
+    beginTest("a different noise seed changes the output, within the analog-noise envelope");
+    const float seedDiff = TestUtilities::calculateMaxDifference(runA, runC);
+    expect(seedDiff > 0.0f, "Output ignores the noise seed");
+    // Clip type 0 adds noise up to ~0.002 per sample.
+    expect(seedDiff < 0.01f, "Output diverges beyond analog-noise envelope (maxDiff="
+                             + juce::String(seedDiff, 6) + ")");
 }
 
 //==============================================================================
@@ -5018,10 +5029,10 @@ namespace
     // 10 ms; a shorter ramp would need a larger ratio.
     constexpr float kSubGuardOnOffRatio = 2.0f;
     // State load (F8): the gap to a reference whose banks were all reset. The LR24 control
-    // measures 0.00000 with distMix 0 and about 0.0009 with distMix 100 (the drive's noise,
-    // below), so these bounds are roughly 5x the control where it is non-zero.
+    // measures 0.00000 with distMix 0 and about 0.00001 with distMix 100 once the rig seeds
+    // the drive's noise (about 0.0009 when it was clock-seeded), so both bounds are 1e-4.
     constexpr float kStateLoadGapClean = 1.0e-4f;
-    constexpr float kStateLoadGapDistorted = 5.0e-3f;
+    constexpr float kStateLoadGapDistorted = 1.0e-4f;
 
     // A processor fed a phase-continuous sum of sines one block at a time. Each block
     // reports its peak sample-to-sample step on channel 0, including the step across the
@@ -5033,6 +5044,9 @@ namespace
             : blockSize(blockSizeIn), tones(std::move(tonesIn)),
               phases(tones.size(), 0.0), buffer(2, blockSizeIn)
         {
+            // Every rig draws the same drive noise, so distorted runs repeat exactly and
+            // two rigs with the same history match.
+            processor.seedNoiseForTesting(1);
             processor.setRateAndBufferSizeDetails(sampleRate, blockSize);
             processor.prepareToPlay(sampleRate, blockSize);
 
@@ -5110,8 +5124,8 @@ namespace
              + juce::String(ratio, 1) + "x)";
     }
 
-    // distMix 100 runs the drive, whose noise comes from the processor's distortionRandom
-    // (a juce::Random seeded from the clock), so those numbers vary by about 1% run to run.
+    // distMix 100 runs the drive, whose noise comes from the processor's distortionRandom.
+    // The rig seeds it, so those numbers repeat run to run.
     juce::String variantText(bool distorted) { return distorted ? " [distMix 100]" : " [distMix 0]"; }
 
     // Amplitude of one frequency by a single-bin DFT (Goertzel). Exact, with no window,

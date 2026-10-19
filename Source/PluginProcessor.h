@@ -365,6 +365,16 @@ public:
     // or cleared before then, so a saved project always decides for itself.
     void setStartupProfile(const juce::File& file) { startupProfile = file; }
 
+    // Test seam: seeds the drive's noise (distortionRandom, which also feeds the LFO's
+    // Random waveform) and the waveshaper's hiss (waveshaperRandom). Both are seeded
+    // from the clock by default, so two renders with the drive on never match; seeding
+    // makes them byte-identical. Call before processing starts, not during playback.
+    void seedNoiseForTesting(juce::int64 seed)
+    {
+        distortionRandom.setSeed(seed);
+        waveshaperRandom.setSeed(seed + 1);
+    }
+
 private:
     // --- Bug reporting (USE-53) ---
     std::atomic<bool>                   bugReportsEnabled { true };   // default ON (opt-out)
