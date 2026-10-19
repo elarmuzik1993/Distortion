@@ -17,6 +17,7 @@
 #include "../Diagnostics/ReportSender.h"
 #include "../Diagnostics/PingSender.h"
 #include "../Nam/ResamplingIsland.h"
+#include "../LegacyInputFilter.h"
 
 //==============================================================================
 // Test Categories
@@ -44,7 +45,7 @@ public:
     void runTest() override;
 
 private:
-    void testClipType(PluginProcessor& processor, int clipType, const juce::String& name);
+    void testClipType(PluginProcessor& processor, int clipType, const juce::String& label);
     void testEdgeCases(PluginProcessor& processor);
     void testOutputRange(PluginProcessor& processor);
 };
@@ -117,7 +118,7 @@ public:
     void runTest() override;
 
 private:
-    void testWaveformShape(PluginProcessor& processor, int waveformType, const juce::String& name);
+    void testWaveformShape(PluginProcessor& processor, int waveformType, const juce::String& label);
     void testOutputRange(PluginProcessor& processor);
     void testRandomSampleHold(PluginProcessor& processor);
 };
@@ -369,6 +370,7 @@ private:
     void testBankSize();
     void testParamIdsExist();
     void testPresetsProduceFiniteOutput();
+    void testPresetsLeaveLegacyFilterOff();
 };
 
 //==============================================================================
@@ -388,7 +390,7 @@ private:
 
     juce::File getTestAudioDirectory();
     void testSilencePassthrough();
-    void testDistortionOutput(int clipType, const juce::String& name);
+    void testDistortionOutput(int clipType, const juce::String& label);
     void test808BandSplit();
 };
 
@@ -469,6 +471,30 @@ public:
     void runTest() override;
 };
 
+class ShapeFilterTests : public juce::UnitTest
+{
+public:
+    ShapeFilterTests() : UnitTest("Shape Filter", TestCategories::DSP) {}
+    void runTest() override;
+};
+
+class ShapeProcessorTests : public juce::UnitTest
+{
+public:
+    ShapeProcessorTests() : UnitTest("Shape Processor", TestCategories::DSP) {}
+    void runTest() override;
+};
+
+/** The Shape / Legacy switch (legacyFilter): only the chosen input-stage control
+    runs, the LFO's Shape target follows it, and older states open in the mode that
+    keeps them sounding the same. */
+class LegacyFilterSwitchTests : public juce::UnitTest
+{
+public:
+    LegacyFilterSwitchTests() : UnitTest("Legacy Filter Switch", TestCategories::DSP) {}
+    void runTest() override;
+};
+
 //==============================================================================
 // Test Runner Function
 //==============================================================================
@@ -501,7 +527,7 @@ public:
         expect(buffer.getNumChannels() == 2, "Channel count mismatch");
         expect(buffer.getNumSamples() == 512, "Sample count mismatch");
         buffer.clear();
-        expect(buffer.getMagnitude(0, 512) == 0.0f, "Buffer not cleared");
+        expect(juce::exactlyEqual(buffer.getMagnitude(0, 512), 0.0f), "Buffer not cleared");
     }
 };
 
@@ -973,6 +999,7 @@ public:
         saved.scopeLength         = 1024;
         saved.bugReportsEnabled   = false;
         saved.scopeOverlayMode    = 2;
+        saved.recallLastProfile   = false;
         saved.saveToFile (file);
 
         SettingsState loaded;
@@ -985,6 +1012,21 @@ public:
         expectEquals (loaded.scopeLength,        saved.scopeLength);
         expectEquals (loaded.scopeOverlayMode,   saved.scopeOverlayMode);
         expect (! loaded.bugReportsEnabled, "revoked consent did not survive a reload");
+        expect (! loaded.recallLastProfile, "Recall Profile off did not survive a reload");
+        expect (SettingsState().recallLastProfile, "Recall Profile defaults on");
+
+        beginTest ("saving keeps attributes written on their own");
+        // lastProfile and profileImportFolder are written as profiles load, not
+        // from SettingsState; an editor saving its settings must not drop them.
+        {
+            auto xml = juce::parseXML (file);
+            xml->setAttribute ("lastProfile", "/profiles/amp.nam");
+            xml->writeTo (file);
+            saved.saveToFile (file);
+            auto after = juce::parseXML (file);
+            expectEquals (after->getStringAttribute ("lastProfile"), juce::String ("/profiles/amp.nam"));
+            expect (! after->getBoolAttribute ("recallLastProfile", true), "And the processor sees the toggle");
+        }
 
         beginTest ("processor reads the consent attribute the editor wrote");
         // Mirrors PluginProcessor's ctor exactly (parseXML + getBoolAttribute),
@@ -1076,6 +1118,20 @@ public:
     void runTest() override;
 };
 
+class ProfileLibraryTests : public juce::UnitTest
+{
+public:
+    ProfileLibraryTests() : UnitTest("Profile Library", TestCategories::StateIO) {}
+    void runTest() override;
+};
+
+class ProfileCardAnimationTests : public juce::UnitTest
+{
+public:
+    ProfileCardAnimationTests() : UnitTest("Profile Card Animation", TestCategories::Parameters) {}
+    void runTest() override;
+};
+
 // Force static test registration
 inline void registerAllTests()
 {
@@ -1126,6 +1182,9 @@ inline void registerAllTests()
     static StatefulDistortionTests statefulDistortionTests;
     static SubGuardFlatnessTest subGuardFlatnessTest;
     static InputFilterModeTest inputFilterModeTest;
+    static ShapeFilterTests shapeFilterTests;
+    static ShapeProcessorTests shapeProcessorTests;
+    static LegacyFilterSwitchTests legacyFilterSwitchTests;
     static DiagReportJsonTest diagReportJsonTest;
     static DiagReportStoreTest diagReportStoreTest;
     static DiagSinkComposerTest diagSinkComposerTest;
@@ -1135,6 +1194,8 @@ inline void registerAllTests()
     static SettingsPersistenceTest settingsPersistenceTest;
     static ResamplingIslandTests resamplingIslandTests;
     static NamProfileTests namProfileTests;
+    static ProfileLibraryTests profileLibraryTests;
+    static ProfileCardAnimationTests profileCardAnimationTests;
 }
 
 #endif // JUCE_DEBUG

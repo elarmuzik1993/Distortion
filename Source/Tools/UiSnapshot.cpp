@@ -16,6 +16,7 @@
       DistortionUiSnapshot --scale 70 --out shots
       DistortionUiSnapshot --signal --out shots   # scope shows a waveform
       DistortionUiSnapshot --profile drive.nam    # a NAM profile loaded
+      DistortionUiSnapshot --profile drive.nam --profile-card   # the browser's name card
 
   ==============================================================================
 */
@@ -106,7 +107,8 @@ void feedScope(PluginProcessor& proc)
 }
 
 bool snapshot(PluginProcessor& proc, int width, int height, const juce::File& out,
-              bool extreme = false, bool withSignal = false)
+              bool extreme = false, bool withSignal = false, bool profileCard = false,
+              bool settings = false)
 {
     PluginEditor editor(proc);
     editor.setSize(width, height);
@@ -140,6 +142,21 @@ bool snapshot(PluginProcessor& proc, int width, int height, const juce::File& ou
     if (proc.isProfileLoaded())
         juce::MessageManager::getInstance()->runDispatchLoopUntil(100);
 
+    // Last, so the card is captured settled: in after its slide, well before it
+    // starts to fade.
+    if (profileCard)
+    {
+        editor.showProfileCardForSnapshot(1);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(400);
+    }
+
+    // The Settings panel over the editor, as its gear button opens it.
+    if (settings)
+    {
+        editor.showSettingsForSnapshot();
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(400);
+    }
+
     // Lay out and paint synchronously into an offscreen image.
     juce::Image image(juce::Image::ARGB, width, height, true);
     {
@@ -165,11 +182,34 @@ int main(int argc, char* argv[])
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
 
+    for (int i = 1; i < argc; ++i)
+    {
+        const juce::String t(argv[i]);
+        if (t == "--help" || t == "-h")
+        {
+            std::cout <<
+                "Offline UI snapshot harness for Sledge Distortion (Monolit Beatz)\n\n"
+                "  --out <dir>      output directory (default ui-shots)\n"
+                "  --scale <pct>    render one window scale: 70, 80, 90 or 100 (default all)\n"
+                "  --collapsed      scope folded away\n"
+                "  --extreme        EXTREME mode engaged\n"
+                "  --signal         feed a signal so the scope shows a waveform\n"
+                "  --shape <v>      set Shape (-100..100) before rendering\n"
+                "  --legacy         Legacy Filter mode, Low Pass at 800 Hz (the knob slot shows the filter)\n"
+                "  --profile <f>    load a NAM profile (copied into a scratch library)\n"
+                "  --profile-card   show the profile browser's name card\n"
+                "  --settings       open the Settings panel\n";
+            return 0;
+        }
+    }
+
     juce::String outDir = "ui-shots";
     int onlyScale = 0;
     bool collapsed = false;
     bool extreme = false;
     bool signal = false;
+    float shapeValue = 0.0f;
+    bool hasShape = false, legacy = false, profileCard = false, settings = false;
     juce::String profilePath;
     for (int i = 1; i < argc; ++i)
     {
@@ -180,6 +220,10 @@ int main(int argc, char* argv[])
         else if (t == "--collapsed")             collapsed = true;
         else if (t == "--extreme")               extreme   = true;
         else if (t == "--signal")                signal    = true;
+        else if (t == "--shape" && i + 1 < argc) { shapeValue = juce::String(argv[++i]).getFloatValue(); hasShape = true; }
+        else if (t == "--legacy")                legacy    = true;
+        else if (t == "--profile-card")          profileCard = true;
+        else if (t == "--settings")              settings  = true;
     }
 
     // Collapsed (scope folded away) is the other fold state. The harness drives it
@@ -199,8 +243,26 @@ int main(int argc, char* argv[])
     proc.setRateAndBufferSizeDetails(44100.0, 512);
     proc.prepareToPlay(44100.0, 512);
 
-    if (profilePath.isNotEmpty()
-        && ! proc.loadProfileBlocking(juce::File::getCurrentWorkingDirectory().getChildFile(profilePath)))
+    auto setParam = [&proc](const char* id, float v)
+    {
+        if (auto* p = proc.parameters.getParameter(id))
+            p->setValueNotifyingHost(p->convertTo0to1(v));
+    };
+    if (hasShape) setParam("shape", shapeValue);
+    if (legacy)   { setParam("legacyFilter", 1.0f); setParam("filterMode", 1.0f); setParam("highPassFreq", 800.0f); }
+
+    // The profile library lives in the scratch root too, so the card's position
+    // ("1 / 1") never depends on what this machine has collected.
+    proc.setProfileLibraryRoot(scratchRoot.getChildFile("Profiles"));
+    juce::File profileFile;
+    if (profilePath.isNotEmpty())
+    {
+        juce::String importError;
+        profileFile = proc.getProfileLibrary().import(
+            juce::File::getCurrentWorkingDirectory().getChildFile(profilePath), importError);
+    }
+
+    if (profilePath.isNotEmpty() && ! proc.loadProfileBlocking(profileFile))
     {
         std::cout << "Profile failed to load: " << proc.getProfileStatus().error << "\n";
         return 1;
@@ -227,9 +289,17 @@ int main(int argc, char* argv[])
             name += "-extreme";
         if (signal)
             name += "-signal";
+        if (hasShape)
+            name += "-shape" + juce::String(shapeValue, 0);
+        if (legacy)
+            name += "-legacy";
         if (profilePath.isNotEmpty())
             name += "-profile";
-        allOk &= snapshot(proc, w, h, dir.getChildFile(name + ".png"), extreme, signal);
+        if (profileCard)
+            name += "-card";
+        if (settings)
+            name += "-settings";
+        allOk &= snapshot(proc, w, h, dir.getChildFile(name + ".png"), extreme, signal, profileCard, settings);
     }
 
     scratchRoot.deleteRecursively();

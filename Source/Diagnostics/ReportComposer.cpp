@@ -1,5 +1,5 @@
 #include "ReportComposer.h"
-#include "../GitVersion.h"
+#include "GitVersion.h"
 
 namespace diag
 {

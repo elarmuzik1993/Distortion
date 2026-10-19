@@ -5,6 +5,7 @@
 #include "CyclingComboBox.h"
 #include "FontHelper.h"
 #include "PluginProcessor.h"
+#include "ProfileCardAnimation.h"
 
 //==============================================================================
 class Oscilloscope : public juce::Component, public juce::Timer
@@ -954,19 +955,27 @@ struct SettingsState
     // Which overlay owns the scope: 0 = Off (clicks pass through), 1 = XY Morph,
     // 2 = Graphic EQ. Replaces the legacy boolean xyMorph flag.
     int scopeOverlayMode = 0;
+    // New instances start with the last profile chosen (the processor reads it).
+    bool recallLastProfile = true;
 
     void saveToFile(const juce::File& file) const
     {
-        juce::XmlElement xml("Settings");
-        xml.setAttribute("oscilloscope", oscilloscopeEnabled);
-        xml.setAttribute("oscilloscopeStereo", oscilloscopeStereo);
-        xml.setAttribute("tooltips", tooltipsEnabled);
-        xml.setAttribute("windowScale", windowScalePercent);
-        xml.setAttribute("oversampling", oversamplingMode);
-        xml.setAttribute("scopeLength", scopeLength);
-        xml.setAttribute("bugReports", bugReportsEnabled);
-        xml.setAttribute("scopeOverlay", scopeOverlayMode);
-        xml.writeTo(file);
+        // Starts from what is on disk, so attributes written on their own as
+        // profiles load (lastProfile, profileImportFolder) survive an editor
+        // saving its settings, including one opened before they were written.
+        auto xml = juce::parseXML(file);
+        if (xml == nullptr || ! xml->hasTagName("Settings"))
+            xml = std::make_unique<juce::XmlElement>("Settings");
+        xml->setAttribute("oscilloscope", oscilloscopeEnabled);
+        xml->setAttribute("oscilloscopeStereo", oscilloscopeStereo);
+        xml->setAttribute("tooltips", tooltipsEnabled);
+        xml->setAttribute("windowScale", windowScalePercent);
+        xml->setAttribute("oversampling", oversamplingMode);
+        xml->setAttribute("scopeLength", scopeLength);
+        xml->setAttribute("bugReports", bugReportsEnabled);
+        xml->setAttribute("scopeOverlay", scopeOverlayMode);
+        xml->setAttribute("recallLastProfile", recallLastProfile);
+        xml->writeTo(file);
     }
 
     void loadFromFile(const juce::File& file)
@@ -984,6 +993,7 @@ struct SettingsState
         // Migrate the legacy boolean xyMorph flag → overlay mode (1 = XY Morph).
         const int legacyXy = xml->getBoolAttribute("xyMorph", false) ? 1 : 0;
         scopeOverlayMode = juce::jlimit(0, 2, xml->getIntAttribute("scopeOverlay", legacyXy));
+        recallLastProfile = xml->getBoolAttribute("recallLastProfile", true);
     }
 };
 
@@ -1116,8 +1126,8 @@ class SettingsContent : public juce::Component,
                        private juce::Timer
 {
 public:
-    // Summed height of all rows below the header (406px of content + 12px bottom slack).
-    static constexpr int kContentHeight = 418;
+    // Summed height of all rows below the header (454px of content + 12px bottom slack).
+    static constexpr int kContentHeight = 466;
 
     SettingsContent(juce::AudioProcessorValueTreeState& apvts, SettingsState& state, PluginProcessor& proc)
         : settingsState(state), processor(proc)
@@ -1249,6 +1259,23 @@ public:
                 onScopeLengthChanged(val);
         };
 
+        // Legacy Filter: the knob beside Input Gain is the v2.3 input filter instead
+        // of Shape. A parameter, so it is saved with the session like Mono Input.
+        addAndMakeVisible(legacyFilterToggle);
+        legacyFilterToggle.setButtonText("");
+        legacyFilterToggle.setLookAndFeel(&pillLnf);
+        legacyFilterAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+            apvts, "legacyFilter", legacyFilterToggle);
+
+        // Recall Profile: new instances start with the last profile chosen.
+        addAndMakeVisible(recallProfileToggle);
+        recallProfileToggle.setButtonText("");
+        recallProfileToggle.setLookAndFeel(&pillLnf);
+        recallProfileToggle.setToggleState(state.recallLastProfile, juce::dontSendNotification);
+        recallProfileToggle.onClick = [this]() {
+            settingsState.recallLastProfile = recallProfileToggle.getToggleState();
+        };
+
         // Bug Reports consent toggle
         addAndMakeVisible(bugReportsToggle);
         bugReportsToggle.setButtonText("");
@@ -1289,6 +1316,8 @@ public:
         windowScaleCombo.setLookAndFeel(nullptr);
         overlayModeCombo.setLookAndFeel(nullptr);
         bugReportsToggle.setLookAndFeel(nullptr);
+        recallProfileToggle.setLookAndFeel(nullptr);
+        legacyFilterToggle.setLookAndFeel(nullptr);
     }
 
     void paint(juce::Graphics& g) override
@@ -1340,6 +1369,16 @@ public:
         g.drawText(hint ? "Mono Input  â" : "Mono Input",
                    miRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
         g.setColour(juce::Colours::white);
+        inner.removeFromTop(4.0f);
+
+        // Legacy Filter row label
+        auto lfRow = inner.removeFromTop(20.0f);
+        g.drawText("Legacy Filter", lfRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
+        inner.removeFromTop(4.0f);
+
+        // Recall Profile row label
+        auto rpRow = inner.removeFromTop(20.0f);
+        g.drawText("Recall Profile", rpRow.removeFromLeft(140.0f), juce::Justification::centredLeft);
         inner.removeFromTop(12.0f);
 
         // INTERFACE section header
@@ -1445,6 +1484,18 @@ public:
         auto miRow = inner.removeFromTop(20);
         miRow.removeFromLeft(140);
         monoInputToggle.setBounds(miRow.removeFromLeft(50).reduced(0, 2));
+        inner.removeFromTop(4);
+
+        // Legacy Filter row - must stay in step with the label in paint()
+        auto lfRow = inner.removeFromTop(20);
+        lfRow.removeFromLeft(140);
+        legacyFilterToggle.setBounds(lfRow.removeFromLeft(50).reduced(0, 2));
+        inner.removeFromTop(4);
+
+        // Recall Profile row - must stay in step with the label in paint()
+        auto rpRow = inner.removeFromTop(20);
+        rpRow.removeFromLeft(140);
+        recallProfileToggle.setBounds(rpRow.removeFromLeft(50).reduced(0, 2));
         inner.removeFromTop(12);
 
         // INTERFACE header + divider
@@ -1536,6 +1587,8 @@ private:
     juce::ToggleButton autoGainToggle;
     juce::ToggleButton linearPhaseToggle;
     juce::ToggleButton monoInputToggle;
+    juce::ToggleButton recallProfileToggle;
+    juce::ToggleButton legacyFilterToggle;
     bool lastMonoHint = false;
     juce::ComboBox oversamplingCombo;
     juce::ComboBox windowScaleCombo;
@@ -1551,6 +1604,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> autoGainAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> linearPhaseAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> monoInputAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> legacyFilterAttachment;
 
     void timerCallback() override
     {
@@ -1933,7 +1987,7 @@ public:
     {
         if (getBandGainDb)
             for (int i = 0; i < kNumBands; ++i)
-                gains[i] = getBandGainDb(i);
+                gains[(size_t) i] = getBandGainDb(i);
         if (getBypassed)
             bypassed = getBypassed();
         repaint();
@@ -1983,9 +2037,10 @@ public:
         for (int i = 0; i < kNumBands; ++i)
         {
             const float g = getBandGainDb(i);
-            if (std::abs(g - gains[i]) > 1.0e-3f)
+            auto& gain = gains[(size_t) i];
+            if (std::abs(g - gain) > 1.0e-3f)
             {
-                gains[i] = g;
+                gain = g;
                 changed = true;
             }
         }
@@ -2042,8 +2097,9 @@ public:
         for (int i = 0; i < kNumBands; ++i)
         {
             const float x = bandX(i, b);
-            const float y = dbToY(gains[i], b);
-            const bool active = std::abs(gains[i]) > 0.05f;
+            const float gain = gains[(size_t) i];
+            const float y = dbToY(gain, b);
+            const bool active = std::abs(gain) > 0.05f;
             g.setColour((active ? neon : neon.withAlpha(0.45f)).withMultipliedAlpha(ca));
             g.fillEllipse(x - 2.6f, y - 2.6f, 5.2f, 5.2f);
         }
@@ -2117,10 +2173,12 @@ private:
         const int i3 = juce::jmin(kNumBands - 1, i1 + 2);
         const float t = fb - (float) i1;
         const float t2 = t * t, t3 = t2 * t;
-        return 0.5f * ((2.0f * gains[i1])
-                     + (-gains[i0] + gains[i2]) * t
-                     + (2.0f * gains[i0] - 5.0f * gains[i1] + 4.0f * gains[i2] - gains[i3]) * t2
-                     + (-gains[i0] + 3.0f * gains[i1] - 3.0f * gains[i2] + gains[i3]) * t3);
+        const float p0 = gains[(size_t) i0], p1 = gains[(size_t) i1];
+        const float p2 = gains[(size_t) i2], p3 = gains[(size_t) i3];
+        return 0.5f * ((2.0f * p1)
+                     + (-p0 + p2) * t
+                     + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t2
+                     + (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t3);
     }
 
     void paintAt(juce::Point<float> p)
@@ -2160,7 +2218,7 @@ private:
     void setBand(int i, float db)
     {
         db = juce::jlimit(-kRangeDb, kRangeDb, db);
-        gains[i] = db;
+        gains[(size_t) i] = db;
         if (onBandChanged)
             onBandChanged(i, db);
         repaint();
@@ -2290,6 +2348,285 @@ private:
     float uiScale = 1.0f;
 };
 
+//==============================================================================
+// The clip-type column (clip type, EXTREME, BOOST, PROFILE) as four matching
+// pills: one shape, outline and type, so the stack reads as a group. Each
+// outline takes its control's accent (textColourOffId on the buttons), so
+// PROFILE's amber error state reaches its border too. A pill flagged with
+// hasEndZones keeps its label clear of the end zones the profile arrows sit in.
+class ClipColumnLookAndFeel : public ComboBoxLookAndFeel
+{
+public:
+    static inline const juce::Identifier hasEndZones { "hasEndZones" };
+    static int endZoneWidth(int pillHeight) { return juce::roundToInt(pillHeight * 0.68f); }
+    static juce::Font pillFont(int pillHeight) { return juce::Font(pillHeight * 0.56f, juce::Font::bold); }
+
+    void drawComboBox(juce::Graphics& g, int width, int height, bool,
+                      int, int, int, int, juce::ComboBox& box) override
+    {
+        drawPill(g, { 0.0f, 0.0f, (float) width, (float) height }, juce::Colour(0xFF1A1A1A),
+                 box.findColour(juce::ComboBox::outlineColourId));
+        g.setColour(box.findColour(juce::ComboBox::textColourId));
+        g.setFont(pillFont(height));
+        g.drawFittedText(getInitials(box), textArea(box, width, height), juce::Justification::centred, 1, 0.7f);
+    }
+
+    void drawButtonBackground(juce::Graphics& g, juce::Button& button, const juce::Colour& background,
+                              bool highlighted, bool down) override
+    {
+        // JUCE passes buttonOnColourId here while the button is toggled on.
+        auto fill = background;
+        if (down || highlighted)
+            fill = fill.brighter(down ? 0.3f : 0.15f);
+        drawPill(g, button.getLocalBounds().toFloat(), fill,
+                 button.findColour(juce::TextButton::textColourOffId));
+    }
+
+    juce::Font getTextButtonFont(juce::TextButton&, int buttonHeight) override { return pillFont(buttonHeight); }
+
+    void drawButtonText(juce::Graphics& g, juce::TextButton& button, bool, bool) override
+    {
+        g.setFont(pillFont(button.getHeight()));
+        g.setColour(button.findColour(button.getToggleState() ? juce::TextButton::textColourOnId
+                                                              : juce::TextButton::textColourOffId)
+                        .withMultipliedAlpha(button.isEnabled() ? 1.0f : 0.5f));
+        g.drawFittedText(button.getButtonText(), textArea(button, button.getWidth(), button.getHeight()),
+                         juce::Justification::centred, 1, 0.7f);
+    }
+
+private:
+    static void drawPill(juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour fill, juce::Colour outline)
+    {
+        const auto r = bounds.reduced(0.5f);
+        g.setColour(fill);
+        g.fillRoundedRectangle(r, r.getHeight() * 0.5f);
+        g.setColour(outline);
+        g.drawRoundedRectangle(r, r.getHeight() * 0.5f, 1.0f);
+    }
+
+    static juce::Rectangle<int> textArea(juce::Component& pill, int width, int height)
+    {
+        const bool zones = pill.getProperties().getWithDefault(hasEndZones, false);
+        return juce::Rectangle<int>(width, height).reduced(zones ? endZoneWidth(height) : height / 2, 0);
+    }
+};
+
+//==============================================================================
+// The browse arrows, laid over the ends of the PROFILE pill: a small filled
+// triangle in each end zone, inked like the pill's text so it stays legible
+// when the pill lights up. Hovering tints the end, clipped to the pill's
+// rounded cap, which is what shows the ends are buttons of their own.
+class ProfileArrowButton : public juce::Button
+{
+public:
+    ProfileArrowButton(bool isForward, juce::Button& pillToDrawOn)
+        : juce::Button(isForward ? "Next profile" : "Previous profile"), forward(isForward), pill(pillToDrawOn) {}
+
+    void paintButton(juce::Graphics& g, bool highlighted, bool down) override
+    {
+        const auto b = getLocalBounds().toFloat();
+        const auto ink = pill.findColour(pill.getToggleState() ? juce::TextButton::textColourOnId
+                                                               : juce::TextButton::textColourOffId);
+        if (isEnabled() && (highlighted || down))
+        {
+            // The whole pill in this end's coordinates; the component bounds clip it to the cap.
+            const auto pillArea = (forward ? b.withLeft(b.getRight() - (float) pill.getWidth())
+                                           : b.withWidth((float) pill.getWidth())).reduced(1.0f);
+            g.setColour(ink.withAlpha(down ? 0.3f : 0.15f));
+            g.fillRoundedRectangle(pillArea, pillArea.getHeight() * 0.5f);
+        }
+
+        const float h = b.getHeight() * 0.4f;
+        const float w = h * 0.8f;
+        // Nudged towards the outer end, so the triangle sits in the cap's curve,
+        // clear of the label.
+        const float nudge = b.getHeight() * 0.08f;
+        const float cx = b.getCentreX() + (forward ? nudge : -nudge);
+        const float cy = b.getCentreY();
+        const float back = forward ? cx - w * 0.5f : cx + w * 0.5f;
+        const float tip  = forward ? cx + w * 0.5f : cx - w * 0.5f;
+
+        juce::Path triangle;
+        triangle.addTriangle(back, cy - h * 0.5f, tip, cy, back, cy + h * 0.5f);
+        g.setColour(ink.withAlpha(! isEnabled() ? 0.3f : (highlighted || down ? 1.0f : 0.8f)));
+        g.fillPath(triangle);
+    }
+
+private:
+    bool forward;
+    juce::Button& pill;
+};
+
+//==============================================================================
+// The card that names the profile while you step through the library: over the
+// scope when it is showing, otherwise a bubble above the PROFILE pill. Purely a
+// display; it never takes the mouse, so the XY pad and the EQ keep working
+// under it. Timing lives in ProfileCardAnimation; the editor's 60 Hz tick calls
+// tick(), and the card repaints only while something moves or changes.
+class ProfileCard : public juce::Component
+{
+public:
+    struct Content
+    {
+        juce::String name;     // the profile, or what to do when there is none
+        juce::String detail;   // its folder and place in the library: "FENDER  |  3 / 24"
+        juce::String status;   // "LOADING..." or the load error
+        bool attention = false;
+    };
+
+    ProfileCard()
+    {
+        setInterceptsMouseClicks(false, false);
+        setVisible(false);
+    }
+
+    // Where the card sits, in the parent's coordinates, and how far it slides in.
+    // A bubble points down at pointerX (parent coordinates); over the scope it
+    // has no pointer.
+    void setGeometry(juce::Rectangle<int> cardInParent, int travelPx, bool isBubble, int pointerX, float uiScale)
+    {
+        travel = travelPx;
+        bubble = isBubble;
+        scale = uiScale;
+        const int pad = juce::roundToInt(16.0f * scale);
+        setBounds(cardInParent.expanded(travel + pad, pad));
+        card = cardInParent.translated(-getX(), -getY()).toFloat();
+        pointer = static_cast<float>(pointerX - getX());
+        repaint();
+    }
+
+    void show(const Content& content, int direction, double now)
+    {
+        if (animation.isActive(now))
+            previous = current;
+        current = content;
+        animation.trigger(direction, now);
+        lastNow = now;
+        toFront(false);
+        setVisible(true);
+        repaint();
+    }
+
+    // The status line of the profile it names, as its load progresses.
+    void setStatus(const juce::String& status, bool attention, double now)
+    {
+        if (status == current.status && attention == current.attention)
+            return;
+        current.status = status;
+        current.attention = attention;
+        lastNow = now;
+        repaint();
+    }
+
+    void keepAlive(double now) { animation.keepAlive(now); }
+
+    void tick(double now)
+    {
+        if (! animation.isActive(now))
+        {
+            if (isVisible())
+                setVisible(false);
+            return;
+        }
+        const bool moving = animation.isMoving(now) || animation.isMoving(lastNow);
+        lastNow = now;
+        if (moving)
+            repaint();
+    }
+
+    const Content& getContent() const noexcept { return current; }
+
+    void paint(juce::Graphics& g) override
+    {
+        const float alpha = animation.getCardAlpha(lastNow);
+        if (alpha <= 0.0f || card.isEmpty())
+            return;
+
+        const auto accent = juce::Colour(0xFFFF0044);
+        const auto box = card.translated(animation.getCardOffset(lastNow) * static_cast<float>(travel), 0.0f);
+        const float corner = 6.0f * scale;
+
+        // One outline: the rounded box, plus for the bubble a tab pointing down at
+        // the pill, traced into the bottom edge so no border line crosses its base.
+        juce::Path shape;
+        if (bubble)
+        {
+            const float tw = 7.0f * scale;
+            const float px = juce::jlimit(box.getX() + corner + tw, box.getRight() - corner - tw,
+                                          pointer + (box.getX() - card.getX()));
+            const float l = box.getX(), t = box.getY(), r = box.getRight(), b = box.getBottom();
+            shape.startNewSubPath(l + corner, t);
+            shape.lineTo(r - corner, t);
+            shape.quadraticTo(r, t, r, t + corner);
+            shape.lineTo(r, b - corner);
+            shape.quadraticTo(r, b, r - corner, b);
+            shape.lineTo(px + tw, b);
+            shape.lineTo(px, b + tw);
+            shape.lineTo(px - tw, b);
+            shape.lineTo(l + corner, b);
+            shape.quadraticTo(l, b, l, b - corner);
+            shape.lineTo(l, t + corner);
+            shape.quadraticTo(l, t, l + corner, t);
+            shape.closeSubPath();
+        }
+        else
+        {
+            shape.addRoundedRectangle(box, corner);
+        }
+
+        juce::DropShadow(accent.withAlpha(0.35f * alpha), juce::roundToInt(14.0f * scale), {})
+            .drawForPath(g, shape);
+        // Over the scope the grid may show faintly through; the bubble sits on
+        // controls, which would only clutter the text, so it is opaque.
+        g.setColour(juce::Colour(0xFF101010).withAlpha((bubble ? 1.0f : 0.94f) * alpha));
+        g.fillPath(shape);
+        g.setColour(accent.withAlpha(alpha));
+        g.strokePath(shape, juce::PathStrokeType(1.5f * scale, juce::PathStrokeType::mitered));
+
+        // The names, clipped to the card so a sliding one leaves at its edge.
+        const auto inner = box.reduced(10.0f * scale, 4.0f * scale);
+        juce::Graphics::ScopedSaveState clip(g);
+        g.reduceClipRegion(inner.toNearestInt());
+
+        const float progress = animation.getNameProgress(lastNow);
+        const float shift = inner.getWidth() * 0.35f * static_cast<float>(animation.getNameDirection());
+        if (animation.isNameSliding(lastNow))
+            drawContent(g, previous, inner.translated(-shift * progress, 0.0f), alpha * (1.0f - progress));
+        const float incomingAlpha = animation.isNameSliding(lastNow) ? progress : 1.0f;
+        drawContent(g, current, inner.translated(shift * (1.0f - progress), 0.0f), alpha * incomingAlpha);
+    }
+
+private:
+    void drawContent(juce::Graphics& g, const Content& content, juce::Rectangle<float> area, float alpha) const
+    {
+        if (alpha <= 0.0f)
+            return;
+        const float nameH = area.getHeight() * (bubble ? 0.52f : 0.56f);
+        auto nameArea = area.removeFromTop(nameH);
+
+        g.setColour(juce::Colours::white.withAlpha(alpha));
+        g.setFont(Fonts::getOrbitron(nameH * 0.62f, true));
+        g.drawFittedText(content.name.toUpperCase(), nameArea.toNearestInt(), juce::Justification::centredBottom, 1, 0.6f);
+
+        juce::String line = content.detail;
+        if (content.status.isNotEmpty())
+            line = line.isEmpty() ? content.status : line + "  |  " + content.status;
+        const auto colour = content.attention ? juce::Colour(0xFFFFAA00) : juce::Colour(0xFFFF2244);
+        g.setColour(colour.withAlpha(alpha));
+        g.setFont(Fonts::getOrbitron(area.getHeight() * 0.58f, false));
+        g.drawFittedText(line.toUpperCase(), area.toNearestInt(), juce::Justification::centredTop, 1, 0.6f);
+    }
+
+    ProfileCardAnimation animation;
+    Content current, previous;
+    juce::Rectangle<float> card;
+    float pointer = 0.0f;
+    float scale = 1.0f;
+    int travel = 0;
+    bool bubble = false;
+    double lastNow = 0.0;
+};
+
 class PluginEditor : public juce::AudioProcessorEditor, public juce::Timer
 {
 public:
@@ -2305,6 +2642,13 @@ public:
     // squeezed into a collapsed window, which reads as a layout regression that
     // is not actually there. Pass an invalid File to restore the default root.
     static void setDataRootOverride(const juce::File& dir);
+
+    // Shows the profile card as an arrow click would: for the loaded profile when
+    // there is one, else for the first library step (the empty-library hint when
+    // the library is empty).
+    void showProfileCardForSnapshot(int direction);
+    // Opens the Settings panel as the gear button does.
+    void showSettingsForSnapshot() { showSettingsOverlay(); }
    #endif
 
     // Product data root and the settings file inside it. Static and free of
@@ -2331,12 +2675,20 @@ private:
     PhaseCorrelationMeter phaseCorrelationMeter;
     CheckboxLookAndFeel checkboxLookAndFeel;
     ComboBoxLookAndFeel comboBoxLookAndFeel;  // Neon red styling for dropdowns
+    ClipColumnLookAndFeel clipColumnLookAndFeel;  // The clip-type column's matching pills
     LogoTitle logoTitle;  // Logo image title
     juce::Label versionLabel;  // Build version display at bottom left
 
     // UI Components
-    CustomKnob inputGainSlider, distortionAmountSlider, outputGainSlider, highPassFreqSlider, distMixSlider, toneSlider;
-    juce::Label inputGainLabel, distortionAmountLabel, outputGainLabel, highPassFreqLabel, distMixLabel, toneLabel;
+    CustomKnob inputGainSlider, distortionAmountSlider, outputGainSlider, shapeSlider, distMixSlider, toneSlider;
+    juce::Label inputGainLabel, distortionAmountLabel, outputGainLabel, shapeLabel, distMixLabel, toneLabel;
+    // The v2.3 input filter: its knob, with the mode picker in the label slot. Takes
+    // Shape's slot while Settings > Legacy Filter is on (updateInputStageControls).
+    CustomKnob legacyFilterSlider;
+    juce::Label legacyFilterLabel;     // setupSlider needs one; never shown, the picker has the slot
+    CyclingComboBox legacyFilterModeBox;
+    std::atomic<float>* legacyFilterSwitch = nullptr;  // looked up once; read by updateInputStageControls
+    bool showingLegacyFilter = false;  // what the slot shows now; Shape until the switch says otherwise
 
     CustomKnob lfoRateSlider, lfoDepthSlider;
     juce::Label lfoRateLabel, lfoDepthLabel;
@@ -2374,20 +2726,24 @@ private:
     CyclingComboBox clipTypeComboBox;
     juce::Label clipTypeLabel;
 
-    // Input filter mode selector (High Pass / Low Pass / Band Pass). Sits in the
-    // filter knob's label slot; its selected text labels the column.
-    CyclingComboBox filterModeComboBox;
-
     juce::TextButton extremeButton;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> extremeAttachment;
 
     juce::TextButton cleanBoostButton;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> cleanBoostAttachment;
 
-    // NAM profile (prototype). Sits in the clip-type column's label slot and opens
-    // a menu to load or clear a .nam profile, which replaces the clip type. Shows
-    // the profile's name while one is loaded; amber when it needs attention.
+    // NAM profile (prototype). The last pill in the clip-type column; opens a menu
+    // to load, browse or clear a .nam profile, which replaces the clip type.
+    // Always reads PROFILE: lit while one is loaded, amber when it needs attention.
+    // The arrows over its two ends step through the profile library, and the card
+    // names what each step loads.
     juce::TextButton profileButton;
+    ProfileArrowButton profilePrevButton { false, profileButton };
+    ProfileArrowButton profileNextButton { true, profileButton };
+    ProfileCard profileCard;
+    juce::File profileCardFile;       // the profile the card names; its status line follows that load
+    juce::File profileImportFolder;   // where "Load profile..." opens: the folder last imported from
+    juce::File pendingLastProfile;    // chosen here; becomes lastProfile in settings once it loads
     std::unique_ptr<juce::FileChooser> profileChooser;
     juce::String shownProfileState;   // what the button last showed; the 60 Hz tick only repaints on change
 
@@ -2417,7 +2773,7 @@ private:
     juce::ComboBox presetSelector;
 
     // Lock icons for each parameter
-    LockIcon inputGainLock, outputGainLock, distortionAmountLock, highPassFreqLock;
+    LockIcon inputGainLock, outputGainLock, distortionAmountLock, shapeLock, legacyFilterLock;
     LockIcon distMixLock, lfoRateLock, lfoDepthLock, lfoEnableLock;
     LockIcon compPeakReductionLock, compMakeupGainLock;
     LockIcon subGuardLock, clipTypeLock, compRatioLock, compEnableLock;
@@ -2429,12 +2785,13 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> inputGainAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> distortionAmountAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputGainAttachment;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> highPassFreqAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> shapeAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> legacyFilterAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> legacyFilterModeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> distMixAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> toneAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> subGuardAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> clipTypeAttachment;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> filterModeAttachment;
     // UI texture: authored 1:1 against the 960x564 expanded layout (metal at the
     // title strip, red glass across the scope, metal + knob cutouts below), so it
     // is drawn to the full bounds rather than tiled or letterboxed. The source is
@@ -2476,6 +2833,9 @@ private:
         const juce::String& paramID);
 
     void randomizeAllParameters();
+    // Shows Shape or the legacy filter in the slot beside Input Gain, as the
+    // legacyFilter switch says, and names the LFO's matching target.
+    void updateInputStageControls();
     bool isParameterLocked(const juce::String& paramID) const;
     void toggleParameterLock(const juce::String& paramID);
     void updateLockIcons();
@@ -2518,6 +2878,21 @@ private:
     void updateMonoIndicator();
     void showProfileMenu();
     void updateProfileIndicator();
+    // Loads the profile `delta` steps away in the library and shows the card.
+    void stepProfile(int delta);
+    // Copies files into the library and loads the first of them.
+    void importAndLoadProfiles(const juce::Array<juce::File>& files);
+    void loadLibraryProfile(const juce::File& file, int direction);
+    // direction: +1/-1 from the arrows, 0 from the menu. An invalid file shows the
+    // empty-library hint.
+    void showProfileCard(const juce::File& file, int direction);
+    void layoutProfileCard();
+    void advanceProfileCard();
+    // Records a profile chosen here as the one new instances start with, once it
+    // has actually loaded.
+    void rememberLastProfile();
+    // Writes one attribute into settings.xml, keeping the rest of the file.
+    static void writeSettingsAttribute(const juce::String& name, const juce::String& value);
     void loadSettings();
     void saveSettings();
    #if defined (DISTORTION_UI_SNAPSHOT) && DISTORTION_UI_SNAPSHOT

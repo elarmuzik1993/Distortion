@@ -12,6 +12,7 @@
 
 #include <JuceHeader.h>
 #include <juce_dsp/juce_dsp.h>
+#include "ShapeFilter.h"
 #include "LinearRamp.h"
 #include <atomic>
 #include <array>
@@ -21,6 +22,7 @@
 #include "Diagnostics/CurlTransport.h"
 #include "Diagnostics/PingSender.h"
 #include "Nam/NamProfile.h"
+#include "Nam/ProfileLibrary.h"
 
 //==============================================================================
 // DSP Constants - Centralized configuration for audio processing algorithms
@@ -56,6 +58,8 @@ namespace DSPConstants
 
     // Default parameter values
     constexpr float DEFAULT_HIPASS_FREQ = 20.0f;              // Default hi-pass filter frequency (subsonic only)
+    constexpr float HIPASS_TRANSPARENT_MAX_FREQ = 25.0f;      // High-pass at/below this counts as flat
+    constexpr float LOWPASS_TRANSPARENT_MIN_FREQ = 19000.0f;  // Low-pass at/above this counts as flat
 
     // Oscilloscope configuration
     constexpr int SCOPE_BUFFER_SIZE = 2048;                   // Circular buffer size for waveform display
@@ -213,6 +217,8 @@ class PluginProcessor : public juce::AudioProcessor,
     friend class CoefficientPropagationTest;
     friend class ProcessBlockDecompTest;
     friend class NamProfileTests;
+    friend class ProfileLibraryTests;
+    friend class ShapeProcessorTests;
 #endif
 
 public:
@@ -233,6 +239,7 @@ public:
     // Host bypass: none of the chain runs, but the audio still arrives the reported
     // latency late, as the host's delay compensation expects.
     void processBlockBypassed(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    using AudioProcessor::processBlock;  // keep the double overload visible
 
     //==============================================================================
     // Bug reporting (USE-53)
@@ -274,7 +281,7 @@ public:
     // step in migrateState(). State saved before this stamp existed carries no
     // attribute and is treated as version 0 (the bare/legacy format).
     static constexpr const char* stateVersionAttribute = "stateVersion";
-    static constexpr int currentStateVersion = 1;
+    static constexpr int currentStateVersion = 3;
 
     // Reads the schema version from a freshly-restored state element and applies
     // any migrations needed to bring the live parameter tree up to
@@ -324,6 +331,7 @@ public:
         juce::String name;                // loaded profile, empty when none
         juce::String path;                // requested file (kept if loading failed)
         juce::String error;               // last load error, empty if none
+        juce::String fingerprint;         // ProfileLibrary::fingerprint of the file; the session's until a load succeeds
         double expectedSampleRate = 0.0;  // the rate the profile was trained at
         bool loading = false;
     };
@@ -331,11 +339,13 @@ public:
     // Message thread. Loads on a background thread; the timer then installs it:
     // a crossfade from the current profile, or a duck around the rebuild into or
     // out of profile mode.
-    void loadProfileAsync(const juce::File& file);
+    // A fingerprint (from a saved session) lets a missing file be found in the
+    // profile library instead, by content.
+    void loadProfileAsync(const juce::File& file, const juce::String& fingerprint = {});
     // Loads on the calling thread (never the audio thread) and stages the profile;
     // the next timer tick or prepareToPlay installs it. For offline tools and
     // tests. Returns false and records the error on failure.
-    bool loadProfileBlocking(const juce::File& file);
+    bool loadProfileBlocking(const juce::File& file, const juce::String& fingerprint = {});
     void clearProfile();
     ProfileStatus getProfileStatus() const;
     bool isProfileLoaded() const;
@@ -345,6 +355,21 @@ public:
     bool isProfileSwitchIdle() const;
 
     static constexpr const char* profilePathAttribute = "namProfilePath";
+    static constexpr const char* profileFingerprintAttribute = "namProfileFingerprint";
+
+    // The library the editor browses and imports into, and where a session whose
+    // profile file is missing looks for it by content. ProfileLibrary::defaultRoot()
+    // in the plugin; unit-test builds start with none, and tests point it at a
+    // scratch folder.
+    ProfileLibrary getProfileLibrary() const;
+    void setProfileLibraryRoot(const juce::File& root);
+
+    // The profile a new instance starts with: the last one chosen in an editor,
+    // read from settings.xml (lastProfile, unless Settings > Recall Profile is
+    // off) by plugin and standalone builds only. It loads at the first
+    // prepareToPlay, and only if no session was restored and nothing was loaded
+    // or cleared before then, so a saved project always decides for itself.
+    void setStartupProfile(const juce::File& file) { startupProfile = file; }
 
 private:
     // --- Bug reporting (USE-53) ---
@@ -375,6 +400,9 @@ private:
     void updateCleanBoostCoefficients(float depth, double sampleRate);
     void applyCleanBoostEmphasis();
     void applyCleanBoostDeEmphasis();
+    void applyShapePostDrive();
+    // The Shape knob's value, or Flat while the legacy filter has the knob.
+    float effectiveShape() const noexcept;
 
     std::unique_ptr<juce::dsp::Oversampling<float>> oversampling;
     size_t oversamplingFactor = 4;
@@ -383,6 +411,10 @@ private:
     // Input multimode filter (high-pass / low-pass / band-pass). State-variable TPT
     // topology: one structure switches type cleanly and stays stable under LFO sweeps.
     juce::dsp::StateVariableTPTFilter<float> inputFilter;
+    // Shape (Bark <-> Scoop): one instance before the drive at base rate, one after
+    // it in the oversampled domain (see applyShapePostDrive). Legacy filter runs first.
+    ShapeFilter shapePre;
+    ShapeFilter shapePost;
 
     // Manual DC blocker state (simple one-pole, extremely stable)
     // y[n] = x[n] - x[n-1] + R * y[n-1]; R is derived from the sample rate so the
@@ -558,14 +590,16 @@ private:
     std::atomic<float>* outputGainParam = nullptr;
     std::atomic<float>* distortionAmountParam = nullptr;
     std::atomic<float>* highPassFreqParam = nullptr;
+    std::atomic<float>* shapeParam = nullptr;
     std::atomic<float>* filterModeParam = nullptr;
+    std::atomic<float>* legacyFilterParam = nullptr;   // on: the legacy filter runs instead of Shape
     std::atomic<float>* clipTypeParam = nullptr;
     std::atomic<float>* subGuardFreqParam = nullptr;  // Sub Guard crossover frequency (50-200Hz)
     std::atomic<float>* lfoRateParam = nullptr;
     std::atomic<float>* lfoDepthParam = nullptr;
     std::atomic<float>* lfoWaveformParam = nullptr;  // LFO waveform type
     std::atomic<float>* lfoEnabledParam = nullptr;   // LFO on/off toggle
-    std::atomic<float>* lfoDestinationParam = nullptr;  // LFO destination (0-4: Dist, Tone, Hi-Pass, Mix, Gain)
+    std::atomic<float>* lfoDestinationParam = nullptr;  // LFO destination (0-4: Dist, Tone, Shape, Mix, Gain)
     std::atomic<float>* lfoBpmSyncParam = nullptr;       // BPM sync toggle
     std::atomic<float>* lfoBpmDivisionParam = nullptr;   // Note division when BPM sync is ON
     std::atomic<float>* lfoInvertParam = nullptr;        // Invert LFO polarity
@@ -674,7 +708,7 @@ private:
     size_t pb_numChannels = 0;
     double pb_oversampledSR = 0.0;
 
-    float pb_modulatedHighPassFreq    = 0.0f;
+    float pb_legacyFilterFreq         = 0.0f;  // hidden v2.3 input filter cutoff
     int   pb_filterMode               = 0;   // 0=High Pass, 1=Low Pass, 2=Band Pass
     float pb_modulatedDistortionParam = 0.0f;
     float pb_modulatedToneFreq        = 0.0f;
@@ -795,7 +829,11 @@ private:
     float profileRightStep = 1.0f;       // weight change per sample, set in prepareToPlay
     mutable juce::CriticalSection profileStatusLock;
     ProfileStatus profileStatus;
+    juce::File profileLibraryRoot;                      // under profileStatusLock
+    juce::File startupProfile;                          // set before the first prepareToPlay
+    std::atomic<bool> profileIntentKnown { false };     // a session, load or clear came first
     std::atomic<int> stagedRefreshesInFlight { 0 };    // staged profiles out on the loader being re-prepared
+    std::atomic<int> profileFilesRead { 0 };            // loads that went on to read their file (tests count them)
     // Declared after everything its jobs touch, so it is destroyed (and joined) first.
     std::unique_ptr<juce::ThreadPool> profileLoader;   // created by getProfileLoader, under profileStatusLock
 
@@ -810,8 +848,10 @@ private:
     float duckGain = 1.0f;                          // audio thread
     float duckStep = 1.0f;                          // gain change per sample, set in prepareToPlay
 
-    int beginProfileRequest(const juce::File& file);  // records the request, returns its id
-    bool loadProfileNow(const juce::File& file, int requestId);
+    void loadStartupProfileOnce();
+    // Records the request, returns its id.
+    int beginProfileRequest(const juce::File& file, const juce::String& fingerprint = {});
+    bool loadProfileNow(const juce::File& file, const juce::String& fingerprint, int requestId);
     bool isPreparedForHost(const NamProfile& profile) const;
     bool canCrossfadeTo(const NamProfile& next) const noexcept;             // audio thread
     void takePendingProfile() noexcept;                                     // audio thread, block start

@@ -84,19 +84,24 @@ void CustomKnob::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xff282828));
     g.strokePath(makeArc(cx, cy, arcR, START, END), stroke);
 
-    // 4. Value arc — pale red at low values, saturating to deep red as the knob turns up
-    if (norm > 0.005f)
+    // 4. Value arc — pale red at low values, saturating to deep red as the knob turns up.
+    // Bipolar knobs measure from noon, so both directions read as "more".
+    const float centreAngle = START + 0.5f * SWEEP;
+    const float amount  = bipolar ? std::abs(norm - 0.5f) * 2.0f : norm;
+    const float arcFrom = bipolar ? juce::jmin(centreAngle, valueAngle) : START;
+    const float arcTo   = bipolar ? juce::jmax(centreAngle, valueAngle) : valueAngle;
+    if (amount > 0.005f)
     {
-        const float sat = juce::jmap(norm, 0.0f, 1.0f, 0.30f, 0.95f);
-        const float bri = juce::jmap(norm, 0.0f, 1.0f, 0.95f, 0.78f);
+        const float sat = juce::jmap(amount, 0.0f, 1.0f, 0.30f, 0.95f);
+        const float bri = juce::jmap(amount, 0.0f, 1.0f, 0.95f, 0.78f);
         const juce::Colour arcColour = juce::Colour::fromHSV(0.0f, sat, bri, 1.0f);
 
-        g.setColour(arcColour.withAlpha(juce::jmap(norm, 0.0f, 1.0f, 0.20f, 0.35f)));
-        g.strokePath(makeArc(cx, cy, arcR, START, valueAngle),
+        g.setColour(arcColour.withAlpha(juce::jmap(amount, 0.0f, 1.0f, 0.20f, 0.35f)));
+        g.strokePath(makeArc(cx, cy, arcR, arcFrom, arcTo),
                      juce::PathStrokeType(glowW, juce::PathStrokeType::curved,
                                                  juce::PathStrokeType::rounded));
         g.setColour(arcColour);
-        g.strokePath(makeArc(cx, cy, arcR, START, valueAngle), stroke);
+        g.strokePath(makeArc(cx, cy, arcR, arcFrom, arcTo), stroke);
     }
 
     // 5-8. Inner LFO ring (rendered only when an LFO targets this knob)

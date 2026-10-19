@@ -31,26 +31,26 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addChildComponent(graphicEqOverlay);
     graphicEqOverlay.getBandGainDb = [this](int i) -> float
     {
-        if (auto* p = audioProcessor.parameters.getParameter("eqBand" + juce::String(i)))
-            return p->convertFrom0to1(p->getValue());
+        if (auto* param = audioProcessor.parameters.getParameter("eqBand" + juce::String(i)))
+            return param->convertFrom0to1(param->getValue());
         return 0.0f;
     };
     graphicEqOverlay.onBandChanged = [this](int i, float db)
     {
-        if (auto* p = audioProcessor.parameters.getParameter("eqBand" + juce::String(i)))
-            p->setValueNotifyingHost(p->convertTo0to1(db));
+        if (auto* param = audioProcessor.parameters.getParameter("eqBand" + juce::String(i)))
+            param->setValueNotifyingHost(param->convertTo0to1(db));
     };
     // eqEnabled is stored as "1 = active"; the overlay speaks in terms of bypass.
     graphicEqOverlay.getBypassed = [this]() -> bool
     {
-        if (auto* p = audioProcessor.parameters.getParameter("eqEnabled"))
-            return p->getValue() < 0.5f;   // enabled < 0.5 => bypassed
+        if (auto* param = audioProcessor.parameters.getParameter("eqEnabled"))
+            return param->getValue() < 0.5f;   // enabled < 0.5 => bypassed
         return false;
     };
     graphicEqOverlay.onBypassToggle = [this](bool bypass)
     {
-        if (auto* p = audioProcessor.parameters.getParameter("eqEnabled"))
-            p->setValueNotifyingHost(bypass ? 0.0f : 1.0f);
+        if (auto* param = audioProcessor.parameters.getParameter("eqEnabled"))
+            param->setValueNotifyingHost(bypass ? 0.0f : 1.0f);
     };
 
     addAndMakeVisible(gainReductionMeter);
@@ -96,17 +96,31 @@ PluginEditor::PluginEditor(PluginProcessor& p)
         toneAttachment, "tone");
     setupSlider(outputGainSlider, outputGainLabel, "Output Gain",
         outputGainAttachment, "outputGain");
-    setupSlider(highPassFreqSlider, highPassFreqLabel, "Hi-Pass Filter",
-        highPassFreqAttachment, "highPassFreq");
-    // Filter mode dropdown takes the knob's label slot, so hide the text label.
-    highPassFreqLabel.setVisible(false);
-    addAndMakeVisible(filterModeComboBox);
-    filterModeComboBox.setLookAndFeel(&comboBoxLookAndFeel);
-    filterModeComboBox.addItem("High Pass", 1);
-    filterModeComboBox.addItem("Low Pass", 2);
-    filterModeComboBox.addItem("Band Pass", 3);
-    filterModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
-        audioProcessor.parameters, "filterMode", filterModeComboBox);
+    setupSlider(shapeSlider, shapeLabel, "Shape", shapeAttachment, "shape");
+    shapeSlider.setBipolar(true);
+    shapeSlider.setDoubleClickReturnValue(true, 0.0);  // Flat (setupSlider defaults to 50)
+    // setupSlider installed an integer text function; Shape reads "Bark 60" / "Flat" / "Scoop 60".
+    shapeSlider.textFromValueFunction = [](double v) { return ShapeFilter::toText((float) v); };
+    shapeSlider.valueFromTextFunction = [](const juce::String& t) { return (double) ShapeFilter::fromText(t); };
+    shapeSlider.updateText();
+
+    // The v2.3 input filter, laid out as v2.3 had it: the knob with the mode picker in
+    // its label slot. Shape's slot shows it while Settings > Legacy Filter is on;
+    // updateInputStageControls (constructor + timerCallback) swaps the two.
+    setupSlider(legacyFilterSlider, legacyFilterLabel, "Filter", legacyFilterAttachment, "highPassFreq");
+    legacyFilterSlider.setDoubleClickReturnValue(true, DSPConstants::DEFAULT_HIPASS_FREQ);
+    legacyFilterSlider.textFromValueFunction = [](double v) { return juce::String(juce::roundToInt(v)) + " Hz"; };
+    legacyFilterSlider.updateText();
+    legacyFilterSlider.setVisible(false);
+    legacyFilterLabel.setVisible(false);
+    addChildComponent(legacyFilterModeBox);
+    legacyFilterModeBox.setLookAndFeel(&comboBoxLookAndFeel);
+    legacyFilterModeBox.addItem("High Pass", 1);
+    legacyFilterModeBox.addItem("Low Pass", 2);
+    legacyFilterModeBox.addItem("Band Pass", 3);
+    legacyFilterModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.parameters, "filterMode", legacyFilterModeBox);
+    legacyFilterSwitch = audioProcessor.parameters.getRawParameterValue("legacyFilter");
     setupSlider(lfoRateSlider, lfoRateLabel, "LFO Rate",
         lfoRateAttachment, "lfoRate");
     setupSlider(lfoDepthSlider, lfoDepthLabel, "LFO Depth",
@@ -135,7 +149,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     lfoDestinationComboBox.setLookAndFeel(&comboBoxLookAndFeel);
     lfoDestinationComboBox.addItem("Distortion", 1);
     lfoDestinationComboBox.addItem("Tone", 2);
-    lfoDestinationComboBox.addItem("Hi-Pass", 3);
+    lfoDestinationComboBox.addItem("Shape", 3);
     lfoDestinationComboBox.addItem("Dist Mix", 4);
     lfoDestinationComboBox.addItem("Out Gain", 5);
 
@@ -292,7 +306,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     };
 
     addAndMakeVisible(clipTypeComboBox);
-    clipTypeComboBox.setLookAndFeel(&comboBoxLookAndFeel);  // Apply neon red styling
+    clipTypeComboBox.setLookAndFeel(&clipColumnLookAndFeel);
     clipTypeComboBox.addItem("Brutal Fuzz", 1);
     clipTypeComboBox.addItem("Tube Overdrive", 2);
     clipTypeComboBox.addItem("Bit Crusher", 3);
@@ -306,6 +320,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 
     addAndMakeVisible(extremeButton);
     extremeButton.setButtonText("EXTREME");
+    extremeButton.setLookAndFeel(&clipColumnLookAndFeel);
     extremeButton.setClickingTogglesState(true);
     extremeButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF1A1A1A));
     extremeButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xFFFF0044));
@@ -316,6 +331,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 
     addAndMakeVisible(cleanBoostButton);
     cleanBoostButton.setButtonText("BOOST");
+    cleanBoostButton.setLookAndFeel(&clipColumnLookAndFeel);
     cleanBoostButton.setClickingTogglesState(true);
     cleanBoostButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF1A1A1A));
     cleanBoostButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xFFFF0044));
@@ -326,11 +342,17 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 
     addAndMakeVisible(profileButton);
     profileButton.setButtonText("PROFILE");
+    profileButton.setLookAndFeel(&clipColumnLookAndFeel);
+    profileButton.getProperties().set(ClipColumnLookAndFeel::hasEndZones, true);   // the arrows' ends
     profileButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF1A1A1A));
     profileButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xFFFF0044));
     profileButton.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFFFF0044));
     profileButton.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
     profileButton.onClick = [this]() { showProfileMenu(); };
+    addAndMakeVisible(profilePrevButton);
+    addAndMakeVisible(profileNextButton);
+    profilePrevButton.onClick = [this]() { stepProfile(-1); };
+    profileNextButton.onClick = [this]() { stepProfile(1); };
 
     // Setup preset selector
     addAndMakeVisible(presetSelector);
@@ -475,10 +497,17 @@ PluginEditor::PluginEditor(PluginProcessor& p)
                      [this]() { toggleParameterLock("outputGain"); });
         menu.addItem("Distortion Amount", true, isParameterLocked("distortionAmount"),
                      [this]() { toggleParameterLock("distortionAmount"); });
-        menu.addItem("Filter Frequency", true, isParameterLocked("highPassFreq"),
-                     [this]() { toggleParameterLock("highPassFreq"); });
-        menu.addItem("Filter Mode", true, isParameterLocked("filterMode"),
-                     [this]() { toggleParameterLock("filterMode"); });
+        if (showingLegacyFilter)   // the knob slot locks whatever it shows
+        {
+            menu.addItem("Filter Frequency", true, isParameterLocked("highPassFreq"),
+                         [this]() { toggleParameterLock("highPassFreq"); });
+            menu.addItem("Filter Mode", true, isParameterLocked("filterMode"),
+                         [this]() { toggleParameterLock("filterMode"); });
+        }
+        else
+        {
+            menu.addItem("Shape", true, isParameterLocked("shape"), [this]() { toggleParameterLock("shape"); });
+        }
         menu.addItem("Sub Guard", true, isParameterLocked("subGuardFreq"),
                      [this]() { toggleParameterLock("subGuardFreq"); });
         menu.addItem("Clip Type", true, isParameterLocked("clipType"),
@@ -542,6 +571,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     parameterLocks["inputGain"] = false;
     parameterLocks["outputGain"] = false;
     parameterLocks["distortionAmount"] = false;
+    parameterLocks["shape"] = false;
     parameterLocks["highPassFreq"] = false;
     parameterLocks["filterMode"] = false;
     parameterLocks["subGuardFreq"] = false;
@@ -566,7 +596,8 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addAndMakeVisible(inputGainLock);
     addAndMakeVisible(outputGainLock);
     addAndMakeVisible(distortionAmountLock);
-    addAndMakeVisible(highPassFreqLock);
+    addAndMakeVisible(shapeLock);
+    addChildComponent(legacyFilterLock);   // shown with the legacy filter
     addAndMakeVisible(distMixLock);
     addAndMakeVisible(lfoRateLock);
     addAndMakeVisible(lfoDepthLock);
@@ -581,7 +612,9 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     setupKnobRightClick(inputGainSlider, "inputGain");
     setupKnobRightClick(outputGainSlider, "outputGain");
     setupKnobRightClick(distortionAmountSlider, "distortionAmount");
-    setupKnobRightClick(highPassFreqSlider, "highPassFreq");
+    setupKnobRightClick(shapeSlider, "shape");
+    setupKnobRightClick(legacyFilterSlider, "highPassFreq");
+    setupKnobRightClick(legacyFilterModeBox, "filterMode");
     setupKnobRightClick(distMixSlider, "distMix");
     setupKnobRightClick(lfoRateSlider, "lfoRate");
     setupKnobRightClick(lfoDepthSlider, "lfoDepth");
@@ -624,13 +657,22 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addAndMakeVisible(monoButton);
     monoButton.onClick = [this]()
     {
-        if (auto* p = audioProcessor.parameters.getParameter("monoInput"))
-            p->setValueNotifyingHost(monoButton.isActive() ? 0.0f : 1.0f);
+        if (auto* param = audioProcessor.parameters.getParameter("monoInput"))
+            param->setValueNotifyingHost(monoButton.isActive() ? 0.0f : 1.0f);
     };
+
+    // Above everything added so far; show() brings it to the front again.
+    addChildComponent(profileCard);
 
     // Load UI settings — capture first-run state before loading
     const bool settingsFileExisted = getSettingsFile().existsAsFile();
     loadSettings();
+    if (auto xml = juce::parseXML(getSettingsFile()))
+    {
+        const auto folder = xml->getStringAttribute("profileImportFolder");
+        if (juce::File::isAbsolutePath(folder))
+            profileImportFolder = juce::File(folder);
+    }
     // Sync oversampling setting to processor (in case it was saved as non-default)
     audioProcessor.requestOversamplingRebuild(settingsState.oversamplingMode);
     applyOscilloscopeEnabled(settingsState.oscilloscopeEnabled);
@@ -642,6 +684,9 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     // Set window size AFTER all components are added so resized() can position them all
     setSize(672, 395);
     applyWindowScale(settingsState.windowScalePercent);
+
+    // Decide Shape vs the legacy filter now, so the first frame is right (no flicker).
+    updateInputStageControls();
 
     // Start timer for LFO modulation visual feedback (60Hz)
     startTimerHz(60);
@@ -672,9 +717,12 @@ PluginEditor::~PluginEditor()
     compEnableToggle.setLookAndFeel(nullptr);
     lfoEnableToggle.setLookAndFeel(nullptr);
     clipTypeComboBox.setLookAndFeel(nullptr);
-    filterModeComboBox.setLookAndFeel(nullptr);
+    extremeButton.setLookAndFeel(nullptr);
+    cleanBoostButton.setLookAndFeel(nullptr);
+    profileButton.setLookAndFeel(nullptr);
     compRatioComboBox.setLookAndFeel(nullptr);
     lfoWaveformComboBox.setLookAndFeel(nullptr);
+    legacyFilterModeBox.setLookAndFeel(nullptr);
     lfoDestinationComboBox.setLookAndFeel(nullptr);
     lfoBpmDivisionComboBox.setLookAndFeel(nullptr);
     presetSelector.setLookAndFeel(nullptr);
@@ -819,7 +867,7 @@ void PluginEditor::advanceExtremeFade()
         return;
 
     const float target = extremeParam->load() > 0.5f ? 1.0f : 0.0f;
-    if (extremePhase == target)
+    if (juce::exactlyEqual(extremePhase, target))
         return;
 
     const float step = 1.0f / juce::jmax(1.0f, kExtremeFadeSeconds * 60.0f);
@@ -952,7 +1000,7 @@ void PluginEditor::resized()
     const juce::Font knobLabelFont(12.0f * fontScale, juce::Font::bold);
     const juce::Font subLabelFont (10.0f * fontScale, juce::Font::bold);
 
-    for (auto* l : { &subGuardLabel, &inputGainLabel, &highPassFreqLabel, &distMixLabel,
+    for (auto* l : { &subGuardLabel, &inputGainLabel, &shapeLabel, &distMixLabel,
                      &distortionAmountLabel, &toneLabel, &waveshaperLabel, &outputGainLabel,
                      &lfoRateLabel, &lfoDepthLabel,
                      &compPeakReductionLabel, &compMakeupGainLabel })
@@ -1170,10 +1218,14 @@ void PluginEditor::resized()
     inputGainLock.setBounds(currentX + knobSize - lockSize - lockInset, rowY + lockInset, lockSize, lockSize);
     currentX += knobSize + controlSpacing;
 
-    // Filter (multimode HP/LP/BP): knob with the mode dropdown in the label slot.
-    highPassFreqSlider.setBounds(currentX, rowY, knobSize, knobSize);
-    filterModeComboBox.setBounds(currentX, rowY + knobSize + lockInset, knobSize, labelHeight);
-    highPassFreqLock.setBounds(currentX + knobSize - lockSize - lockInset, rowY + lockInset, lockSize, lockSize);
+    // Shape (bipolar Bark <-> Scoop), or the legacy filter while it has the slot.
+    shapeSlider.setBounds(currentX, rowY, knobSize, knobSize);
+    shapeLabel.setBounds(currentX, rowY + knobSize + lockInset, knobSize, labelHeight);
+    shapeLock.setBounds(currentX + knobSize - lockSize - lockInset, rowY + lockInset, lockSize, lockSize);
+    // The legacy filter takes the same slot, its mode picker where the label is.
+    legacyFilterSlider.setBounds(shapeSlider.getBounds());
+    legacyFilterModeBox.setBounds(shapeLabel.getBounds());
+    legacyFilterLock.setBounds(shapeLock.getBounds());
     currentX += knobSize + controlSpacing;
 
     // Dist Mix
@@ -1188,26 +1240,27 @@ void PluginEditor::resized()
     distortionAmountLock.setBounds(currentX + knobSize - lockSize - lockInset, rowY + lockInset, lockSize, lockSize);
     currentX += knobSize + controlSpacing;
 
-    // Clip Type Dropdown
-    const int comboWidth = S(45);
-    const int comboHeight = S(18);
-    const int comboXOffset = (clipTypeColumnWidth - comboWidth) / 2;
-    const int clipButtonH = S(14);
-    const int clipButtonGap = S(2);
-    // Center the ClipType / EXTREME / BOOST stack on the knob centerline so EXTREME
-    // (the middle element) lines up vertically between the Dist. Amount and Tone knobs.
-    const int extremeY = rowY + (knobSize - clipButtonH) / 2 + 2;
-    const int comboY = extremeY - clipButtonGap - comboHeight;
-    const int boostY = extremeY + clipButtonH + clipButtonGap;
-    clipTypeComboBox.setBounds(currentX + comboXOffset, comboY, comboWidth, comboHeight);
+    // Clip-type column: clip type, EXTREME, BOOST and PROFILE as four matching
+    // pills the full column wide, the stack on the knobs either side (3 px below
+    // their centre, set by eye). The label slot below stays empty. The profile
+    // arrows sit over PROFILE's ends, not in the gaps beside it, where the left
+    // one ran into the Distortion Amount label.
+    const int pillH = S(14);
+    const int pillGap = S(3);
+    int pillY = rowY + (knobSize - (pillH * 4 + pillGap * 3)) / 2 + S(3);
+    for (auto* pill : std::initializer_list<juce::Component*> { &clipTypeComboBox, &extremeButton,
+                                                               &cleanBoostButton, &profileButton })
+    {
+        pill->setBounds(currentX, pillY, clipTypeColumnWidth, pillH);
+        pillY += pillH + pillGap;
+    }
     clipTypeLabel.setBounds(currentX, rowY + knobSize + lockInset, clipTypeColumnWidth, labelHeight);
-    clipTypeLock.setBounds(currentX + comboXOffset + comboWidth - S(12) - S(2), comboY, S(12), S(12));
-    extremeButton.setBounds(currentX + comboXOffset, extremeY, comboWidth, clipButtonH);
-    cleanBoostButton.setBounds(currentX + comboXOffset, boostY, comboWidth, clipButtonH);
-    // The column's label slot, centred like the pills above it.
-    profileButton.setBounds(currentX + comboXOffset,
-                            rowY + knobSize + lockInset + (labelHeight - clipButtonH) / 2,
-                            comboWidth, clipButtonH);
+    clipTypeLock.setBounds(clipTypeComboBox.getRight() - S(4) - S(12),
+                           clipTypeComboBox.getY() + (pillH - S(12)) / 2, S(12), S(12));
+    const int arrowW = ClipColumnLookAndFeel::endZoneWidth(pillH);
+    profilePrevButton.setBounds(profileButton.getBounds().withWidth(arrowW));
+    profileNextButton.setBounds(profileButton.getBounds().withLeft(profileButton.getRight() - arrowW));
+    layoutProfileCard();
     currentX += clipTypeColumnWidth + controlSpacing;
 
     // Tone
@@ -1254,7 +1307,8 @@ void PluginEditor::updateLockIcons()
     inputGainLock.setLocked(isParameterLocked("inputGain"));
     outputGainLock.setLocked(isParameterLocked("outputGain"));
     distortionAmountLock.setLocked(isParameterLocked("distortionAmount"));
-    highPassFreqLock.setLocked(isParameterLocked("highPassFreq"));
+    shapeLock.setLocked(isParameterLocked("shape"));
+    legacyFilterLock.setLocked(isParameterLocked("highPassFreq"));
     distMixLock.setLocked(isParameterLocked("distMix"));
     lfoRateLock.setLocked(isParameterLocked("lfoRate"));
     lfoDepthLock.setLocked(isParameterLocked("lfoDepth"));
@@ -1387,7 +1441,8 @@ void PluginEditor::updateModulationHighlight()
         // LFO disabled or no depth - reset all arcs
         distortionAmountSlider.setLFOArc(false, 0.0f, 0.0f);
         toneSlider.setLFOArc(false, 0.0f, 0.0f);
-        highPassFreqSlider.setLFOArc(false, 0.0f, 0.0f);
+        shapeSlider.setLFOArc(false, 0.0f, 0.0f);
+        legacyFilterSlider.setLFOArc(false, 0.0f, 0.0f);
         distMixSlider.setLFOArc(false, 0.0f, 0.0f);
         outputGainSlider.setLFOArc(false, 0.0f, 0.0f);
         return;
@@ -1414,9 +1469,37 @@ void PluginEditor::updateModulationHighlight()
     // Set arc on the targeted knob, clear others
     distortionAmountSlider.setLFOArc(destination == 0, lfoPhase, depthNorm);
     toneSlider.setLFOArc(destination == 1, lfoPhase, depthNorm);
-    highPassFreqSlider.setLFOArc(destination == 2, lfoPhase, depthNorm);
+    // Shape's LFO swings ±SHAPE_LFO_RANGE of a 200-wide range, not the full knob.
+    constexpr float shapeArcScale = DSPConstants::SHAPE_LFO_RANGE
+                                  / (DSPConstants::SHAPE_MAX - DSPConstants::SHAPE_MIN);
+    shapeSlider.setLFOArc(destination == 2, lfoPhase, depthNorm * shapeArcScale);
+    // The legacy cutoff swings ±1.5 of the knob's ~10 octaves (approximate: the skew
+    // is not exactly logarithmic).
+    legacyFilterSlider.setLFOArc(destination == 2, lfoPhase, depthNorm * 0.15f);
     distMixSlider.setLFOArc(destination == 3, lfoPhase, depthNorm);
     outputGainSlider.setLFOArc(destination == 4, lfoPhase, depthNorm);
+}
+
+void PluginEditor::updateInputStageControls()
+{
+    // Settings > Legacy Filter, a session, a preset or automation can flip the switch;
+    // the slot follows it. Shape is what the constructor left showing.
+    const bool legacy = legacyFilterSwitch->load() > 0.5f;
+    if (legacy == showingLegacyFilter)
+        return;
+    showingLegacyFilter = legacy;
+
+    shapeSlider.setVisible(! legacy);
+    shapeLabel.setVisible(! legacy);
+    shapeLock.setVisible(! legacy);
+    legacyFilterSlider.setVisible(legacy);
+    legacyFilterModeBox.setVisible(legacy);
+    legacyFilterLock.setVisible(legacy);
+
+    // LFO destination 2 sweeps whatever has the knob; name it after that. Re-selecting
+    // the same id refreshes the shown text without touching the parameter.
+    lfoDestinationComboBox.changeItemText(3, legacy ? "Filter" : "Shape");
+    lfoDestinationComboBox.setSelectedId(lfoDestinationComboBox.getSelectedId(), juce::dontSendNotification);
 }
 
 void PluginEditor::timerCallback()
@@ -1427,18 +1510,23 @@ void PluginEditor::timerCallback()
     // Update LFO modulation indicator
     updateModulationHighlight();
 
+    updateInputStageControls();
+
     // Advance the EXTREME crack crossfade (self-limiting: repaints only while the
     // fade is actually moving).
     advanceExtremeFade();
 
     updateMonoIndicator();
     updateProfileIndicator();
+    advanceProfileCard();
+    rememberLastProfile();
 }
 
 void PluginEditor::showProfileMenu()
 {
     const auto status = audioProcessor.getProfileStatus();
     const bool loaded = status.name.isNotEmpty();
+    const auto library = audioProcessor.getProfileLibrary();
 
     juce::PopupMenu menu;
     if (loaded)
@@ -1459,25 +1547,187 @@ void PluginEditor::showProfileMenu()
 
     menu.addItem("Load profile...", [this]()
     {
-        const auto startDir = juce::File(audioProcessor.getProfileStatus().path).getParentDirectory();
-        profileChooser = std::make_unique<juce::FileChooser>(
-            "Load a NAM profile",
-            startDir.isDirectory() ? startDir
-                                   : juce::File::getSpecialLocation(juce::File::userHomeDirectory),
-            "*.nam");
+        const auto startDir = profileImportFolder.isDirectory()
+                                ? profileImportFolder
+                                : juce::File::getSpecialLocation(juce::File::userHomeDirectory);
+        profileChooser = std::make_unique<juce::FileChooser>("Load NAM profiles", startDir, "*.nam");
         profileChooser->launchAsync(juce::FileBrowserComponent::openMode
-                                        | juce::FileBrowserComponent::canSelectFiles,
-            [this](const juce::FileChooser& chooser)
-            {
-                const auto file = chooser.getResult();
-                if (file.existsAsFile())
-                    audioProcessor.loadProfileAsync(file);
-            });
+                                        | juce::FileBrowserComponent::canSelectFiles
+                                        | juce::FileBrowserComponent::canSelectMultipleItems,
+            [this](const juce::FileChooser& chooser) { importAndLoadProfiles(chooser.getResults()); });
     });
+
+    // The library, folder by folder as the arrows step through it.
+    juce::PopupMenu libraryMenu;
+    const auto files = library.list();
+    for (const auto& file : files)
+    {
+        const auto label = file.getRelativePathFrom(library.getRoot())
+                               .replaceCharacter('\\', '/')
+                               .upToLastOccurrenceOf(".", false, false);
+        libraryMenu.addItem(label, true, file.getFullPathName() == status.path,
+                            [this, file]() { loadLibraryProfile(file, 0); });
+    }
+    if (files.isEmpty())
+        libraryMenu.addItem("Empty: profiles you load are added here", false, false, nullptr);
+    menu.addSubMenu("Library", libraryMenu);
+    menu.addItem("Show library folder", [library]()
+    {
+        const auto root = library.getRoot();
+        if (root.createDirectory().wasOk())
+            root.startAsProcess();
+    });
+
+    menu.addSeparator();
     menu.addItem("Clear profile", loaded || status.path.isNotEmpty(), false,
                  [this]() { audioProcessor.clearProfile(); });
 
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&profileButton));
+}
+
+void PluginEditor::importAndLoadProfiles(const juce::Array<juce::File>& files)
+{
+    const auto library = audioProcessor.getProfileLibrary();
+    juce::File first;
+    for (const auto& file : files)
+    {
+        if (! file.existsAsFile())
+            continue;
+        profileImportFolder = file.getParentDirectory();
+        juce::String error;
+        const auto copy = library.import(file, error);
+        // A copy that fails still loads from where it is; the session then points there.
+        const auto target = copy.existsAsFile() ? copy : file;
+        if (first == juce::File())
+            first = target;
+    }
+    if (profileImportFolder.isDirectory())
+        writeSettingsAttribute("profileImportFolder", profileImportFolder.getFullPathName());
+    if (first != juce::File())
+        loadLibraryProfile(first, 0);
+}
+
+void PluginEditor::loadLibraryProfile(const juce::File& file, int direction)
+{
+    const auto status = audioProcessor.getProfileStatus();
+    // Already loaded or on its way (a one-profile library, a repeated pick): just
+    // say so, rather than loading it again.
+    const bool held = file.getFullPathName() == status.path
+                   && (status.loading || status.name.isNotEmpty());
+    if (! held)
+        audioProcessor.loadProfileAsync(file);
+    pendingLastProfile = file;
+    showProfileCard(file, direction);
+}
+
+void PluginEditor::rememberLastProfile()
+{
+    if (pendingLastProfile == juce::File())
+        return;
+    const auto status = audioProcessor.getProfileStatus();
+    if (status.loading && status.path == pendingLastProfile.getFullPathName())
+        return;   // still on its way
+    // Loaded: new instances start with it. Failed, or replaced by a session or a
+    // clear meanwhile: nothing to remember.
+    if (status.path == pendingLastProfile.getFullPathName() && status.name.isNotEmpty())
+        writeSettingsAttribute("lastProfile", status.path);
+    pendingLastProfile = juce::File();
+}
+
+void PluginEditor::writeSettingsAttribute(const juce::String& name, const juce::String& value)
+{
+    auto root = getDataRoot();
+    if (! root.isDirectory())
+        root.createDirectory();
+    const auto file = getSettingsFile();
+    auto xml = juce::parseXML(file);
+    if (xml == nullptr || ! xml->hasTagName("Settings"))
+        xml = std::make_unique<juce::XmlElement>("Settings");
+    xml->setAttribute(name, value);
+    xml->writeTo(file);
+}
+
+void PluginEditor::stepProfile(int delta)
+{
+    const auto status = audioProcessor.getProfileStatus();
+    const juce::File current = status.path.isNotEmpty() ? juce::File(status.path) : juce::File();
+    const auto next = audioProcessor.getProfileLibrary().step(current, delta);
+    if (next == juce::File())
+    {
+        showProfileCard({}, delta);
+        return;
+    }
+    loadLibraryProfile(next, delta);
+}
+
+void PluginEditor::showProfileCard(const juce::File& file, int direction)
+{
+    ProfileCard::Content content;
+    if (file == juce::File())
+    {
+        content.name = "Library empty";
+        content.detail = "Load profiles from the PROFILE menu";
+    }
+    else
+    {
+        const auto library = audioProcessor.getProfileLibrary();
+        content.name = file.getFileNameWithoutExtension();
+        const auto position = library.positionOf(file);
+        if (position.index >= 0)
+        {
+            content.detail = juce::String(position.index + 1) + " / " + juce::String(position.count);
+            const auto folder = file.getParentDirectory();
+            if (folder != library.getRoot())
+                content.detail = folder.getRelativePathFrom(library.getRoot()).replaceCharacter('\\', '/')
+                               + "  |  " + content.detail;
+        }
+    }
+    profileCardFile = file;
+    layoutProfileCard();
+    profileCard.show(content, direction, juce::Time::getMillisecondCounterHiRes() * 0.001);
+    advanceProfileCard();
+}
+
+void PluginEditor::layoutProfileCard()
+{
+    const float s = getWidth() / 960.0f;
+    auto S = [s](int v) -> int { return juce::roundToInt(v * s); };
+
+    // Over the scope while it shows; folded away, a bubble above the pill.
+    if (oscilloscope.isVisible() && oscilloscope.getHeight() >= S(100))
+    {
+        const auto scope = oscilloscope.getBounds();
+        const auto card = juce::Rectangle<int>(juce::jmin(S(360), scope.getWidth() - S(40)), S(74))
+                              .withCentre(scope.getCentre());
+        profileCard.setGeometry(card, S(36), false, 0, s);
+    }
+    else
+    {
+        const auto pill = profileButton.getBounds();
+        const int w = S(230), h = S(50);
+        auto card = juce::Rectangle<int>(pill.getCentreX() - w / 2, pill.getY() - S(10) - h, w, h);
+        card = card.constrainedWithin(getLocalBounds().reduced(S(4)));
+        profileCard.setGeometry(card, S(24), true, pill.getCentreX(), s);
+    }
+}
+
+void PluginEditor::advanceProfileCard()
+{
+    const double now = juce::Time::getMillisecondCounterHiRes() * 0.001;
+    if (profileCard.isVisible() && profileCardFile != juce::File())
+    {
+        // The status line follows the load of the profile the card names, and the
+        // card stays up until that load is done.
+        const auto status = audioProcessor.getProfileStatus();
+        if (status.path == profileCardFile.getFullPathName())
+        {
+            if (status.loading)
+                profileCard.keepAlive(now);
+            profileCard.setStatus(status.loading ? "Loading..." : status.error,
+                                  ! status.loading && status.error.isNotEmpty(), now);
+        }
+    }
+    profileCard.tick(now);
 }
 
 void PluginEditor::updateProfileIndicator()
@@ -1486,17 +1736,19 @@ void PluginEditor::updateProfileIndicator()
     const bool loaded = status.name.isNotEmpty();
     const bool needsAttention = status.error.isNotEmpty();
 
-    const juce::String state = status.name + "|" + juce::String(int(status.loading))
-                             + "|" + juce::String(int(needsAttention));
+    const juce::String state = juce::String(int(loaded)) + "|" + juce::String(int(needsAttention));
     if (state == shownProfileState)
         return;
     shownProfileState = state;
 
+    // The pill always reads PROFILE and lights up once a profile has actually
+    // loaded; the card names it.
     const auto accent = needsAttention ? juce::Colour(0xFFFFAA00) : juce::Colour(0xFFFF0044);
-    profileButton.setButtonText(loaded ? status.name : (status.loading ? "LOADING" : "PROFILE"));
     profileButton.setColour(juce::TextButton::buttonOnColourId, accent);
     profileButton.setColour(juce::TextButton::textColourOffId, accent);
     profileButton.setToggleState(loaded, juce::dontSendNotification);
+    profilePrevButton.repaint();   // the arrows take the pill's ink
+    profileNextButton.repaint();
 
     // The profile replaces the clip type, so the clip-type controls step back.
     clipTypeComboBox.setEnabled(! loaded);
@@ -1542,7 +1794,7 @@ void PluginEditor::morphDistortionParameters(float x, float y)
 
     // Morph formulas based on XY position
     // X = distortion intensity/character (left=subtle, right=aggressive)
-    // Y = brightness/filter (bottom=dark, top=bright)
+    // Y = voicing via Shape (bottom=Bark, centre=Flat, top=Scoop)
 
     // Distortion Amount: X drives it heavily, Y adds slight boost
     // Range: 0-100
@@ -1551,8 +1803,8 @@ void PluginEditor::morphDistortionParameters(float x, float y)
     // Input Gain: X drives input harder (30-70 range for headroom)
     setParam("inputGain", 30.0f + x * 40.0f);
 
-    // Hi-Pass Filter: Y controls brightness (20-300Hz)
-    setParam("highPassFreq", 20.0f + y * 280.0f);
+    // Shape: Y controls voicing (bottom = Bark, centre = Flat, top = Scoop)
+    setParam("shape", -60.0f + y * 120.0f);
 
     // Dist Mix: Both axes contribute (50-100%)
     setParam("distMix", 50.0f + x * 25.0f + y * 25.0f);
@@ -1609,11 +1861,17 @@ void PluginEditor::randomizeAllParameters()
     randomizeFloatParam("inputGain", 0.0f, 100.0f);
     randomizeFloatParam("outputGain", 0.0f, 100.0f);
     randomizeFloatParam("distortionAmount", 0.0f, 100.0f);
-    // highPassFreq now drives the multimode input filter (HP/LP/BP). Keep the random
-    // sweep in a musical 20-2000 Hz band rather than the full 20-20000 Hz range so
-    // results stay usable across all three modes.
-    randomizeFloatParam("highPassFreq", 20.0f, 2000.0f);
-    randomizeChoiceParam("filterMode", 3);  // High Pass / Low Pass / Band Pass
+    // Whatever has the knob slot rolls; the switch and the control it hides stay put,
+    // so flipping back still finds the user's settings. Shape avoids the extremes.
+    if (showingLegacyFilter)
+    {
+        randomizeFloatParam("highPassFreq", 20.0f, 2000.0f);   // v2.3's ranges
+        randomizeChoiceParam("filterMode", 3);                // High Pass / Low Pass / Band Pass
+    }
+    else
+    {
+        randomizeFloatParam("shape", -70.0f, 70.0f);
+    }
     // subGuardFreq spans 0-200 Hz where 0 = OFF (no band-split); include the OFF end.
     randomizeFloatParam("subGuardFreq", 0.0f, DSPConstants::SUBGUARD_FREQ_MAX);
     randomizeChoiceParam("clipType", 7);
@@ -1627,7 +1885,7 @@ void PluginEditor::randomizeAllParameters()
     randomizeBoolParam("lfoEnabled");
     randomizeBoolParam("lfoInvert");
     randomizeChoiceParam("lfoWaveform", 5);  // Sine, Triangle, Square, Saw, Random
-    randomizeChoiceParam("lfoDestination", 5);  // Distortion, Tone, Hi-Pass, Dist Mix, Output Gain
+    randomizeChoiceParam("lfoDestination", 5);  // Distortion, Tone, Shape, Dist Mix, Output Gain
 
     // COMPRESSION SECTION
     randomizeFloatParam("compPeakReduction", 0.0f, 100.0f);
@@ -1638,8 +1896,8 @@ void PluginEditor::randomizeAllParameters()
     // CHARACTER
     randomizeBoolParam("extremeEnabled");
     randomizeBoolParam("cleanBoost");
-    // NOTE: globalMix, autoGainEnabled, waveshaperClean, linearPhaseDry, and the LFO
-    // BPM-sync transport params are intentionally left fixed (global/mode/quality/
+    // NOTE: globalMix, autoGainEnabled, waveshaperClean, linearPhaseDry, legacyFilter and
+    // the LFO BPM-sync transport params are intentionally left fixed (global/mode/quality/
     // transport controls the user sets deliberately, not part of a sound roll).
 }
 
@@ -1649,6 +1907,15 @@ juce::File PluginEditor::dataRootOverride;
 void PluginEditor::setDataRootOverride(const juce::File& dir)
 {
     dataRootOverride = dir;
+}
+
+void PluginEditor::showProfileCardForSnapshot(int direction)
+{
+    const auto status = audioProcessor.getProfileStatus();
+    if (status.path.isNotEmpty())
+        showProfileCard(juce::File(status.path), direction);
+    else
+        stepProfile(direction);
 }
 #endif
 
@@ -1694,6 +1961,7 @@ void PluginEditor::savePreset(const juce::String& presetName)
                       PluginProcessor::currentStateVersion, nullptr);
     // Presets don't carry a profile yet; drop any session path a preset loaded earlier left behind.
     state.removeProperty(PluginProcessor::profilePathAttribute, nullptr);
+    state.removeProperty(PluginProcessor::profileFingerprintAttribute, nullptr);
     auto stateXml = state.createXml();
     if (stateXml != nullptr)
         preset.addChildElement(stateXml.release());

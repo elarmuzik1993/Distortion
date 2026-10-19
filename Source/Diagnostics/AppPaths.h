@@ -24,6 +24,10 @@ namespace diag
     }
 
     inline juce::File settingsFile()  { return productDir().getChildFile ("settings.xml"); }
+
+    // The NAM profile library (ProfileLibrary), next to Presets. Not created here:
+    // the first import creates it.
+    inline juce::File profilesDir()   { return productDir().getChildFile ("Profiles"); }
     inline juce::File installIdFile() { return productDir().getChildFile ("installId"); }
 
     // Holds the UTC date ("YYYY-MM-DD") of the last successfully-sent launch ping, so

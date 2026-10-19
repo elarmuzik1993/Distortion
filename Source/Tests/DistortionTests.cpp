@@ -3,7 +3,10 @@
 #include "DistortionTests.h"
 #include "../CyclingComboBox.h"
 #include "../FactoryPresets.h"
+#include "../LegacyInputFilter.h"
+#include "../ProfileCardAnimation.h"
 #include "../RTAllocationGuard.h"
+#include "../ShapeFilter.h"
 #include <atomic>
 #include <iostream>
 #include <thread>
@@ -49,7 +52,7 @@ void DistortionDSPTests::runTest()
     testOutputRange(processor);
 }
 
-void DistortionDSPTests::testClipType(PluginProcessor& processor, int clipType, const juce::String& name)
+void DistortionDSPTests::testClipType(PluginProcessor& processor, int clipType, const juce::String& label)
 {
     // Test with various input levels
     const float testInputs[] = { 0.0f, 0.1f, 0.5f, 0.8f, 1.0f, -0.5f, -1.0f };
@@ -65,11 +68,11 @@ void DistortionDSPTests::testClipType(PluginProcessor& processor, int clipType, 
                 float output = processor.applyStudioDistortion(input, gain, drive, clipType, 1.0f);
 
                 // Output should never be NaN or Inf
-                expect(!std::isnan(output), name + ": Output is NaN for input " + juce::String(input));
-                expect(!std::isinf(output), name + ": Output is Inf for input " + juce::String(input));
+                expect(!std::isnan(output), label + ": Output is NaN for input " + juce::String(input));
+                expect(!std::isinf(output), label + ": Output is Inf for input " + juce::String(input));
 
                 // Output should be bounded (allow some headroom for processing)
-                expect(std::abs(output) <= 2.0f, name + ": Output " + juce::String(output) +
+                expect(std::abs(output) <= 2.0f, label + ": Output " + juce::String(output) +
                        " exceeds bounds for input " + juce::String(input));
             }
         }
@@ -77,7 +80,7 @@ void DistortionDSPTests::testClipType(PluginProcessor& processor, int clipType, 
 
     // Test zero input produces near-zero output (except for noise injection)
     float zeroOutput = processor.applyStudioDistortion(0.0f, 1.0f, 1.0f, clipType, 1.0f);
-    expect(std::abs(zeroOutput) < 0.1f, name + ": Zero input should produce near-zero output");
+    expect(std::abs(zeroOutput) < 0.1f, label + ": Zero input should produce near-zero output");
 }
 
 void DistortionDSPTests::testEdgeCases(PluginProcessor& processor)
@@ -739,7 +742,7 @@ void CleanBoostTests::testRuntimeOversamplingChange()
     const auto after = snapshotEmphasis();
 
     float maxDiff = 0.0f;
-    for (int i = 0; i < 5; ++i)
+    for (size_t i = 0; i < before.size(); ++i)
         maxDiff = std::max(maxDiff, std::abs(before[i] - after[i]));
 
     expect(maxDiff > 1e-3f,
@@ -1262,7 +1265,7 @@ void LFOTests::runTest()
     testOutputRange(processor);
 }
 
-void LFOTests::testWaveformShape(PluginProcessor& processor, int waveformType, const juce::String& name)
+void LFOTests::testWaveformShape(PluginProcessor& processor, int waveformType, const juce::String& label)
 {
     // Test key phase points
     const float testPhases[] = { 0.0f, 0.25f, 0.5f, 0.75f, 1.0f };
@@ -1271,10 +1274,10 @@ void LFOTests::testWaveformShape(PluginProcessor& processor, int waveformType, c
     {
         float output = processor.generateLFOWaveform(phase, waveformType);
 
-        expect(!std::isnan(output), name + ": Output is NaN at phase " + juce::String(phase));
-        expect(!std::isinf(output), name + ": Output is Inf at phase " + juce::String(phase));
+        expect(!std::isnan(output), label + ": Output is NaN at phase " + juce::String(phase));
+        expect(!std::isinf(output), label + ": Output is Inf at phase " + juce::String(phase));
         expect(output >= -1.0f && output <= 1.0f,
-               name + ": Output " + juce::String(output) + " out of range [-1, 1]");
+               label + ": Output " + juce::String(output) + " out of range [-1, 1]");
     }
 
     // Test specific expected values for deterministic waveforms
@@ -1355,8 +1358,8 @@ void LFODestinationTests::runTest()
     beginTest("Destination 1: Tone filter modulation");
     testDestination(1, "tone", 8000.0f);
 
-    beginTest("Destination 2: Hi-pass modulation");
-    testDestination(2, "highPassFreq", 100.0f);
+    beginTest("Destination 2: Shape modulation");
+    testDestination(2, "shape", 0.0f);
 
     beginTest("Destination 3: Dist mix modulation");
     testDestination(3, "distMix", 50.0f);
@@ -2688,7 +2691,7 @@ void ParameterTests::testParameterRanges(PluginProcessor& processor)
 {
     // Test that all expected parameters exist
     const char* expectedParams[] = {
-        "inputGain", "outputGain", "distortionAmount", "highPassFreq",
+        "inputGain", "outputGain", "distortionAmount", "highPassFreq", "shape",
         "subGuardFreq", "clipType", "distMix",
         "lfoRate", "lfoDepth", "lfoWaveform",
         "compEnabled", "compPeakReduction", "compMakeupGain",
@@ -3177,6 +3180,9 @@ void FactoryPresetTests::runTest()
 
     beginTest("Every preset produces finite output");
     testPresetsProduceFiniteOutput();
+
+    beginTest("Factory presets leave the legacy input filter transparent");
+    testPresetsLeaveLegacyFilterOff();
 }
 
 void FactoryPresetTests::testBankSize()
@@ -3231,6 +3237,39 @@ void FactoryPresetTests::testPresetsProduceFiniteOutput()
     }
 }
 
+void FactoryPresetTests::testPresetsLeaveLegacyFilterOff()
+{
+    PluginProcessor processor;
+    auto value = [&](const char* id)
+    {
+        auto* p = processor.parameters.getParameter(id);
+        return p->convertFrom0to1(p->getValue());
+    };
+
+    for (const auto& preset : FactoryPresets::all())
+    {
+        for (const auto& pv : preset.overrides)
+            expect(juce::String(pv.id) != "highPassFreq" && juce::String(pv.id) != "filterMode",
+                   juce::String("Preset '") + preset.name + "' sets a legacy filter param");
+
+        // Start from a dirty legacy filter in Legacy mode so the baseline must clear both.
+        setParameter(processor.parameters, "filterMode", 2.0f);
+        setParameter(processor.parameters, "highPassFreq", 800.0f);
+        setParameter(processor.parameters, "legacyFilter", 1.0f);
+        FactoryPresets::apply(processor.parameters, preset.name);
+        expect(! LegacyInputFilter::isActive(juce::roundToInt(value("filterMode")), value("highPassFreq")),
+               juce::String("Preset '") + preset.name + "' left the legacy filter on");
+        auto* legacySwitch = processor.parameters.getParameter("legacyFilter");
+        expect(legacySwitch != nullptr && legacySwitch->getValue() < 0.5f,
+               juce::String("Preset '") + preset.name + "' left the knob in Legacy mode");
+    }
+
+    expect(FactoryPresets::baseline().end() != std::find_if(
+               FactoryPresets::baseline().begin(), FactoryPresets::baseline().end(),
+               [](const FactoryPresets::ParamValue& pv) { return juce::String(pv.id) == "shape"; }),
+           "Baseline does not reset shape");
+}
+
 //==============================================================================
 // GoldenAudioTests Implementation
 //==============================================================================
@@ -3276,7 +3315,7 @@ void GoldenAudioTests::testSilencePassthrough()
            "Silence passthrough failed - output is not silent");
 }
 
-void GoldenAudioTests::testDistortionOutput(int clipType, const juce::String& name)
+void GoldenAudioTests::testDistortionOutput(int clipType, const juce::String& label)
 {
     PluginProcessor processor;
     processor.setRateAndBufferSizeDetails(44100.0, 512);
@@ -3293,8 +3332,8 @@ void GoldenAudioTests::testDistortionOutput(int clipType, const juce::String& na
     processor.processBlock(buffer, midi);
 
     // Basic validation - output should be valid and not silent
-    expect(!containsInvalidSamples(buffer), name + " produced invalid samples");
-    expect(!isSilent(buffer), name + " produced silence");
+    expect(!containsInvalidSamples(buffer), label + " produced invalid samples");
+    expect(!isSilent(buffer), label + " produced silence");
 
     // If in generate mode, save reference file
     if (GENERATE_MODE)
@@ -3303,7 +3342,7 @@ void GoldenAudioTests::testDistortionOutput(int clipType, const juce::String& na
         if (!dir.exists())
             dir.createDirectory();
 
-        auto file = dir.getChildFile("golden_" + name + "_44100.wav");
+        auto file = dir.getChildFile("golden_" + label + "_44100.wav");
         if (saveWavFile(buffer, file, 44100.0))
             logMessage("Generated: " + file.getFullPathName());
     }
@@ -3447,7 +3486,7 @@ void StatefulDistortionTests::testTubeBiasShift()
 
     // Reset should clear the envelope
     processor.resetDSPState();
-    expect(processor.tubeBiasEnvelope[0] == 0.0f,
+    expect(juce::exactlyEqual(processor.tubeBiasEnvelope[0], 0.0f),
         "Tube bias envelope not cleared by resetDSPState");
 }
 
@@ -3487,7 +3526,7 @@ void StatefulDistortionTests::testTapeHysteresis()
 
     // Reset should clear the envelope
     processor.resetDSPState();
-    expect(processor.tapeSaturationEnvelope[0] == 0.0f,
+    expect(juce::exactlyEqual(processor.tapeSaturationEnvelope[0], 0.0f),
         "Tape hysteresis envelope not cleared by resetDSPState");
 }
 
@@ -3813,6 +3852,7 @@ void RTCleanPreHighPassTest::runTest()
 
         distortionAmount->setValueNotifyingHost(0.5f);
         subGuardFreq->setValueNotifyingHost(0.0f);
+        setParameter(processor.parameters, "legacyFilter", 1.0f);   // so the sweep reaches the filter
         highPassFreq->setValueNotifyingHost(highPassFreqFloat->convertTo0to1(20.0f));
 
         juce::MidiBuffer midi;
@@ -4338,7 +4378,7 @@ void CoefficientPropagationTest::runTest()
         const auto c150 = snapshotLP1(150.0f);
 
         float maxDiff = 0.0f;
-        for (int i = 0; i < 5; ++i)
+        for (size_t i = 0; i < c60.size(); ++i)
             maxDiff = std::max(maxDiff, std::abs(c60[i] - c150[i]));
 
         logMessage(juce::String::formatted(
@@ -4379,6 +4419,7 @@ void CoefficientPropagationTest::runTest()
         setParameter(processor.parameters, "compEnabled", 1.0f);
         setParameter(processor.parameters, "compPeakReduction", 0.0f);
         setParameter(processor.parameters, "compMakeupGain", 50.0f);
+        setParameter(processor.parameters, "legacyFilter", 1.0f);   // the pre-HP only follows its knob in Legacy mode
 
         juce::MidiBuffer midi;
 
@@ -4669,7 +4710,7 @@ void GraphicEqTests::runTest()
         a.prepareToPlay(sr, blockSize);
 
         // Distinct values across the bands.
-        std::array<float, DSPConstants::EQ_NUM_BANDS> vals { };
+        float vals[DSPConstants::EQ_NUM_BANDS] { };
         for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
         {
             vals[i] = -10.0f + (float) i * 1.7f;   // spread across the ±12 range
@@ -4975,6 +5016,7 @@ void InputFilterModeTest::runTest()
         proc.prepareToPlay(sr, 512);
         // True bypass (compressor off) so we also prove the filter runs without distortion.
         configureCleanProcessor(proc, /*defeatBypass*/ false);
+        setParameter(proc.parameters, "legacyFilter", 1.0f);   // the filter only runs in Legacy mode
         setParameter(proc.parameters, "filterMode", static_cast<float>(modeIdx));
         setParameter(proc.parameters, "highPassFreq", cutoff);
 
@@ -5016,6 +5058,654 @@ void InputFilterModeTest::runTest()
         expect((e.mid - e.low) > 10.0f && (e.mid - e.high) > 10.0f,
                "Band Pass did not attenuate both sides (low=" + juce::String(e.low, 1)
                + " mid=" + juce::String(e.mid, 1) + " high=" + juce::String(e.high, 1) + " dB)");
+    }
+}
+
+//==============================================================================
+// ShapeFilterTests — the Shape DSP unit on its own
+//==============================================================================
+
+namespace
+{
+    // Steady-state gain (dB) of a ShapeFilter at one frequency: run a 1 s sine,
+    // compare RMS over the second half (filter settled, smoother finished).
+    float shapeGainDb(double sr, float shape, float amount, double freq)
+    {
+        ShapeFilter f;
+        juce::dsp::ProcessSpec spec { sr, 512, 2 };
+        f.prepare(spec, shape, amount);
+
+        const int n = static_cast<int>(sr);
+        juce::AudioBuffer<float> buf(2, n);
+        for (int i = 0; i < n; ++i)
+        {
+            const float s = 0.25f * static_cast<float>(
+                std::sin(juce::MathConstants<double>::twoPi * freq * i / sr));
+            buf.setSample(0, i, s);
+            buf.setSample(1, i, s);
+        }
+        juce::AudioBuffer<float> in(buf);
+
+        for (int start = 0; start < n; start += 512)
+        {
+            const int len = juce::jmin(512, n - start);
+            juce::dsp::AudioBlock<float> block(buf.getArrayOfWritePointers(), 2,
+                                               (size_t) start, (size_t) len);
+            f.process(block);
+        }
+
+        double eIn = 0.0, eOut = 0.0;
+        for (int i = n / 2; i < n; ++i)
+        {
+            eIn  += in.getSample(0, i)  * in.getSample(0, i);
+            eOut += buf.getSample(0, i) * buf.getSample(0, i);
+        }
+        return static_cast<float>(10.0 * std::log10(eOut / eIn));
+    }
+}
+
+void ShapeFilterTests::runTest()
+{
+    beginTest("Curve maths: taper, end gains, LFO clamp");
+    {
+        expectWithinAbsoluteError(ShapeFilter::taper(0.0f), 0.0f, 1.0e-6f);
+        expectWithinAbsoluteError(ShapeFilter::taper(100.0f), 1.0f, 1.0e-6f);
+        expectWithinAbsoluteError(ShapeFilter::taper(-100.0f), -1.0f, 1.0e-6f);
+        expectWithinAbsoluteError(ShapeFilter::taper(50.0f), std::pow(0.5f, DSPConstants::SHAPE_TAPER), 1.0e-5f);
+        expectWithinAbsoluteError(ShapeFilter::midGainDb(-100.0f, 1.0f), DSPConstants::SHAPE_MID_BOOST_DB, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::midGainDb(100.0f, 1.0f), -DSPConstants::SHAPE_MID_CUT_DB, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::midGainDb(100.0f, 0.5f), -0.5f * DSPConstants::SHAPE_MID_CUT_DB, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::shelfGainDb(-100.0f, 1.0f), -DSPConstants::SHAPE_SHELF_DB, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::shelfGainDb(100.0f, 1.0f), DSPConstants::SHAPE_SHELF_DB, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::modulated(80.0f, 1.0f), 100.0f, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::postDriveAmount(0.0f), 0.0f, 1.0e-6f);
+        expectWithinAbsoluteError(ShapeFilter::postDriveAmount(0.5f * DSPConstants::SHAPE_POST_FULL_DRIVE),
+                                  0.5f * DSPConstants::SHAPE_POST_AMOUNT, 1.0e-6f);
+        expectWithinAbsoluteError(ShapeFilter::postDriveAmount(100.0f), DSPConstants::SHAPE_POST_AMOUNT, 1.0e-6f);
+        expectWithinAbsoluteError(ShapeFilter::modulated(0.0f, -1.0f), -50.0f, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::modulated(-100.0f, -1.0f), -100.0f, 1.0e-4f);
+    }
+
+    beginTest("Value text round-trips");
+    {
+        expectEquals(ShapeFilter::toText(0.0f), juce::String("Flat"));
+        expectEquals(ShapeFilter::toText(0.4f), juce::String("Flat"));
+        expectEquals(ShapeFilter::toText(-60.0f), juce::String("Bark 60"));
+        expectEquals(ShapeFilter::toText(40.2f), juce::String("Scoop 40"));
+        expectWithinAbsoluteError(ShapeFilter::fromText("Bark 60"), -60.0f, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::fromText("scoop 40"), 40.0f, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::fromText("Flat"), 0.0f, 1.0e-4f);
+        expectWithinAbsoluteError(ShapeFilter::fromText("-25"), -25.0f, 1.0e-4f);
+    }
+
+    beginTest("Shape 0 is bit-transparent and inactive");
+    {
+        ShapeFilter f;
+        f.prepare({ 48000.0, 512, 2 }, 0.0f, 1.0f);
+        expect(! f.isActive(), "Shape 0 reported active");
+
+        juce::Random rng(11);
+        juce::AudioBuffer<float> buf(2, 512);
+        for (int ch = 0; ch < 2; ++ch)
+            for (int i = 0; i < 512; ++i)
+                buf.setSample(ch, i, rng.nextFloat() * 2.0f - 1.0f);
+        juce::AudioBuffer<float> in(buf);
+        juce::dsp::AudioBlock<float> block(buf);
+        f.process(block);
+        expectEquals(calculateMaxDifference(in, buf), 0.0f);
+    }
+
+    beginTest("Bark and Scoop hit their targets at 600 Hz and in the treble");
+    {
+        constexpr double sr = 48000.0;
+        expectWithinAbsoluteError(shapeGainDb(sr, -100.0f, 1.0f, 600.0), DSPConstants::SHAPE_MID_BOOST_DB, 0.5f);
+        expectWithinAbsoluteError(shapeGainDb(sr,  100.0f, 1.0f, 600.0), -DSPConstants::SHAPE_MID_CUT_DB, 0.5f);
+        expect(shapeGainDb(sr, -100.0f, 1.0f, 6000.0) < -(DSPConstants::SHAPE_SHELF_DB - 1.5f), "Bark did not soften the treble");
+        expect(shapeGainDb(sr,  100.0f, 1.0f, 6000.0) >  DSPConstants::SHAPE_SHELF_DB - 1.5f, "Scoop did not lift the treble");
+        expectWithinAbsoluteError(shapeGainDb(sr, 100.0f, 0.5f, 600.0), -0.5f * DSPConstants::SHAPE_MID_CUT_DB, 0.5f);
+    }
+
+    beginTest("Sub band stays within 1.5 dB at every knob position");
+    {
+        for (float shape : { -100.0f, -50.0f, 0.0f, 50.0f, 100.0f })
+            for (double f : { 40.0, 60.0, 80.0 })
+            {
+                const float g = shapeGainDb(48000.0, shape, 1.0f, f);
+                expect(std::abs(g) < 1.5f, "Shape " + juce::String(shape) + " moved "
+                       + juce::String(f) + " Hz by " + juce::String(g, 2) + " dB");
+            }
+    }
+
+    beginTest("Response holds at 768 kHz (192 kHz x 4, the post-drive worst case)");
+    {
+        expectWithinAbsoluteError(shapeGainDb(768000.0, -100.0f, 1.0f, 600.0), DSPConstants::SHAPE_MID_BOOST_DB, 0.75f);
+        expectWithinAbsoluteError(shapeGainDb(768000.0,  100.0f, 1.0f, 600.0), -DSPConstants::SHAPE_MID_CUT_DB, 0.75f);
+    }
+
+    beginTest("Finite at every supported rate, both extremes");
+    {
+        for (double sr : { 44100.0, 48000.0, 88200.0, 96000.0, 192000.0, 768000.0 })
+            for (float shape : { -100.0f, 100.0f })
+            {
+                const float g = shapeGainDb(sr, shape, 1.0f, 600.0);
+                expect(std::isfinite(g), "Non-finite at " + juce::String(sr) + " Hz");
+            }
+    }
+
+    beginTest("A full Bark-to-Scoop jump is click-free");
+    {
+        constexpr double sr = 48000.0;
+        constexpr int n = 24000;
+        // Max sample-to-sample step over the window AFTER the switch point only, so the
+        // loud pre-jump Bark section cannot dominate the figure. The reference is a
+        // filter that sat at Scoop the whole time, measured over the same window.
+        auto maxStepAfter = [&](float startShape, bool jump)
+        {
+            ShapeFilter f;
+            f.prepare({ sr, 512, 1 }, startShape, 1.0f);
+            juce::AudioBuffer<float> buf(1, n);
+            for (int i = 0; i < n; ++i)
+                buf.setSample(0, i, 0.5f * static_cast<float>(
+                    std::sin(juce::MathConstants<double>::twoPi * 200.0 * i / sr)));
+            float worst = 0.0f, prev = 0.0f;
+            for (int start = 0; start < n; start += 512)
+            {
+                if (jump && start == n / 2)
+                    f.setTarget(100.0f);
+                const int len = juce::jmin(512, n - start);
+                juce::dsp::AudioBlock<float> block(buf.getArrayOfWritePointers(), 1,
+                                                   (size_t) start, (size_t) len);
+                f.process(block);
+                for (int i = start; i < start + len; ++i)
+                {
+                    if (i >= n / 2)
+                        worst = std::max(worst, std::abs(buf.getSample(0, i) - prev));
+                    prev = buf.getSample(0, i);
+                }
+            }
+            return worst;
+        };
+        // A 200 Hz sine's own max step scales with its amplitude, and Bark passes it louder
+        // than Scoop, so the post-jump window legitimately starts at the Bark step size
+        // and decays to the Scoop one. A click would add a discontinuity on top of that,
+        // so the reference is the larger of the two steady-state steps over the same window.
+        const float steadyScoop = maxStepAfter(100.0f, false);
+        const float steadyBark  = maxStepAfter(-100.0f, false);
+        const float jumped      = maxStepAfter(-100.0f, true);
+        expect(jumped < std::max(steadyScoop, steadyBark) * 1.25f,
+               "Post-jump step " + juce::String(jumped, 4) + " vs steady Scoop "
+               + juce::String(steadyScoop, 4) + " / Bark " + juce::String(steadyBark, 4));
+    }
+
+    beginTest("Settling back to Flat leaves no residual to cut off");
+    {
+        // Worst case: the 20 ms ramp ends on the last sub-block of a block, so the
+        // filter runs only one sub-block at identity before process() starts skipping
+        // and clears the filter memory. Whatever error is still decaying at that point
+        // is dropped in one sample; it must be inaudible.
+        constexpr double sr = 48000.0;
+        constexpr int blockSize = 480;   // 20 ms ramp = exactly two blocks
+        ShapeFilter f;
+        f.prepare({ sr, (juce::uint32) blockSize, 1 }, 60.0f, 1.0f);
+        juce::AudioBuffer<float> buf(1, blockSize), in(1, blockSize);
+        float lastError = 0.0f;
+        int n = 0;
+        for (int b = 0; b < 40; ++b)
+        {
+            if (b == 20)
+                f.setTarget(0.0f);
+            for (int i = 0; i < blockSize; ++i, ++n)
+                buf.setSample(0, i, 0.5f * static_cast<float>(
+                    std::sin(juce::MathConstants<double>::twoPi * 600.0 * n / sr)));
+            in.makeCopyOf(buf);
+            const bool wasActive = f.isActive();
+            juce::dsp::AudioBlock<float> block(buf);
+            f.process(block);
+            if (wasActive)
+                lastError = buf.getSample(0, blockSize - 1) - in.getSample(0, blockSize - 1);
+        }
+        expect(! f.isActive(), "Shape did not settle to Flat");
+        expect(std::abs(lastError) < 1.0e-4f,
+               "Residual cut off when going Flat: " + juce::String(lastError, 7));
+    }
+}
+
+//==============================================================================
+// ShapeProcessorTests — Shape inside the plugin
+//==============================================================================
+
+void ShapeProcessorTests::runTest()
+{
+    constexpr double sr = 44100.0;
+    const int numSamples = 1 << 16;
+
+    auto noise = [&]
+    {
+        juce::Random rng(7);
+        juce::AudioBuffer<float> buf(2, numSamples);
+        for (int ch = 0; ch < 2; ++ch)
+            for (int n = 0; n < numSamples; ++n)
+                buf.setSample(ch, n, 0.25f * (rng.nextFloat() * 2.0f - 1.0f));
+        return buf;
+    };
+
+    // True bypass (distortion and comp off): only the pre-drive half runs.
+    auto bypassBand = [&](float shape, double lo, double hi)
+    {
+        PluginProcessor proc;
+        proc.setRateAndBufferSizeDetails(sr, 512);
+        proc.prepareToPlay(sr, 512);
+        configureCleanProcessor(proc, /*defeatBypass*/ false);
+        setParameter(proc.parameters, "shape", shape);
+        auto buf = noise();
+        runInBlocks(proc, buf);
+        return bandEnergyDb(buf, sr, lo, hi);
+    };
+
+    beginTest("Parameter exists with default 0 and Bark/Flat/Scoop text");
+    {
+        PluginProcessor proc;
+        auto* p = proc.parameters.getParameter("shape");
+        expect(p != nullptr, "shape parameter missing");
+        if (p != nullptr)
+        {
+            expectWithinAbsoluteError(p->convertFrom0to1(p->getDefaultValue()), 0.0f, 1.0e-4f);
+            expectEquals(p->getText(p->convertTo0to1(-60.0f), 32), juce::String("Bark 60"));
+            expectEquals(p->getText(p->convertTo0to1(0.0f), 32), juce::String("Flat"));
+        }
+    }
+
+    beginTest("Pre-drive Shape works in true bypass: Bark lifts and Scoop cuts 600 Hz");
+    {
+        const float flat  = bypassBand(0.0f,    550.0, 650.0);
+        const float bark  = bypassBand(-100.0f, 550.0, 650.0);
+        const float scoop = bypassBand(100.0f,  550.0, 650.0);
+        expectWithinAbsoluteError(bark - flat,  DSPConstants::SHAPE_MID_BOOST_DB * DSPConstants::SHAPE_PRE_AMOUNT, 1.5f);
+        expectWithinAbsoluteError(scoop - flat, -DSPConstants::SHAPE_MID_CUT_DB * DSPConstants::SHAPE_PRE_AMOUNT, 1.5f);
+    }
+
+    beginTest("Sub band below 80 Hz moves less than 1.5 dB through the plugin");
+    {
+        const float flat = bypassBand(0.0f, 30.0, 80.0);
+        for (float shape : { -100.0f, -50.0f, 50.0f, 100.0f })
+            expect(std::abs(bypassBand(shape, 30.0, 80.0) - flat) < 1.5f,
+                   "Sub band moved at Shape " + juce::String(shape));
+    }
+
+    beginTest("Post-drive half shapes a clean 50 Hz sine (808 case)");
+    {
+        auto render = [&](float shape)
+        {
+            PluginProcessor proc;
+            proc.setRateAndBufferSizeDetails(sr, 512);
+            proc.prepareToPlay(sr, 512);
+            setParameter(proc.parameters, "distortionAmount", 70.0f);
+            setParameter(proc.parameters, "clipType", 1.0f);       // Tube: deterministic
+            setParameter(proc.parameters, "waveshaperMix", 0.0f);
+            setParameter(proc.parameters, "subGuardFreq", 0.0f);
+            setParameter(proc.parameters, "autoGainEnabled", 0.0f);
+            setParameter(proc.parameters, "shape", shape);
+            juce::AudioBuffer<float> buf(2, numSamples);
+            for (int n = 0; n < numSamples; ++n)
+            {
+                const float s = 0.7f * std::sin(juce::MathConstants<float>::twoPi * 50.0f * n / (float) sr);
+                buf.setSample(0, n, s);
+                buf.setSample(1, n, s);
+            }
+            runInBlocks(proc, buf);
+            return bandEnergyDb(buf, sr, 400.0, 800.0) - bandEnergyDb(buf, sr, 40.0, 60.0);
+        };
+        const float bark  = render(-100.0f);
+        const float scoop = render(100.0f);
+        expect(bark - scoop > 4.0f, "Bark vs Scoop changed the 400-800 Hz harmonics by only "
+               + juce::String(bark - scoop, 2) + " dB on a clean sine");
+    }
+
+    beginTest("No allocation with Shape engaged and the LFO on it");
+    {
+        PluginProcessor proc;
+        proc.setRateAndBufferSizeDetails(48000.0, 512);
+        proc.prepareToPlay(48000.0, 512);
+        setParameter(proc.parameters, "shape", -100.0f);
+        setParameter(proc.parameters, "distortionAmount", 60.0f);
+        setParameter(proc.parameters, "lfoEnabled", 1.0f);
+        setParameter(proc.parameters, "lfoDestination", 2.0f);
+        setParameter(proc.parameters, "lfoRate", 5.0f);
+        setParameter(proc.parameters, "lfoDepth", 100.0f);
+        juce::AudioBuffer<float> buffer(2, 512);
+        juce::MidiBuffer midi;
+        buffer.clear();
+        proc.processBlock(buffer, midi);
+        rt_guard::resetAllocationCounter();
+        proc.processBlock(buffer, midi);
+        expectEquals(rt_guard::getAllocationCount(), 0, "Shape allocated on the audio thread");
+    }
+
+    beginTest("Finite at every rate with a fast LFO sweep on Shape");
+    {
+        for (double rate : { 44100.0, 48000.0, 88200.0, 96000.0, 192000.0 })
+            for (float shape : { -100.0f, 100.0f })
+            {
+                PluginProcessor proc;
+                proc.setRateAndBufferSizeDetails(rate, 512);
+                proc.prepareToPlay(rate, 512);
+                setParameter(proc.parameters, "shape", shape);
+                setParameter(proc.parameters, "distortionAmount", 80.0f);
+                setParameter(proc.parameters, "lfoEnabled", 1.0f);
+                setParameter(proc.parameters, "lfoDestination", 2.0f);
+                setParameter(proc.parameters, "lfoRate", 10.0f);
+                setParameter(proc.parameters, "lfoDepth", 100.0f);
+                auto buf = noise();
+                runInBlocks(proc, buf);
+                expect(! containsInvalidSamples(buf), "Non-finite at " + juce::String(rate));
+            }
+    }
+
+    beginTest("Full Bark, hot input stays finite and under the ceiling");
+    {
+        PluginProcessor proc;
+        proc.setRateAndBufferSizeDetails(sr, 512);
+        proc.prepareToPlay(sr, 512);
+        setParameter(proc.parameters, "shape", -100.0f);
+        setParameter(proc.parameters, "inputGain", 100.0f);
+        setParameter(proc.parameters, "distortionAmount", 100.0f);
+        setParameter(proc.parameters, "outputGain", 100.0f);
+        auto buf = noise();
+        buf.applyGain(4.0f);
+        runInBlocks(proc, buf);
+        expect(! containsInvalidSamples(buf), "Non-finite at full Bark");
+        const float ceiling = juce::Decibels::decibelsToGain(DSPConstants::OUTPUT_LIMITER_THRESHOLD_DB) + 1.0e-3f;
+        expect(calculatePeak(buf) <= ceiling, "Peak " + juce::String(calculatePeak(buf))
+               + " above the output limiter ceiling " + juce::String(ceiling));
+    }
+
+    beginTest("Mono-in stereo-out with Shape is finite");
+    {
+        PluginProcessor proc;
+        juce::AudioProcessor::BusesLayout layout;
+        layout.inputBuses.add(juce::AudioChannelSet::mono());
+        layout.outputBuses.add(juce::AudioChannelSet::stereo());
+        expect(proc.setBusesLayout(layout), "mono->stereo layout refused");
+        proc.setRateAndBufferSizeDetails(sr, 512);
+        proc.prepareToPlay(sr, 512);
+        setParameter(proc.parameters, "shape", 100.0f);
+        setParameter(proc.parameters, "distortionAmount", 60.0f);
+        auto buf = noise();
+        runInBlocks(proc, buf);
+        expect(! containsInvalidSamples(buf), "Non-finite under mono->stereo");
+    }
+
+    beginTest("Oversampling rebuild keeps Shape finite");
+    {
+        PluginProcessor proc;
+        proc.setRateAndBufferSizeDetails(sr, 512);
+        proc.prepareToPlay(sr, 512);
+        setParameter(proc.parameters, "shape", -80.0f);
+        setParameter(proc.parameters, "distortionAmount", 60.0f);
+        auto buf = noise();
+        runInBlocks(proc, buf);
+        proc.prepareToPlay(96000.0, 256);   // new rate: both instances re-prepare
+        auto buf2 = noise();
+        runInBlocks(proc, buf2, 256);
+        expect(! containsInvalidSamples(buf2), "Non-finite after re-prepare");
+    }
+
+    beginTest("Shape keeps its response after re-preparing at 96 kHz");
+    {
+        // Prepared at 44.1 kHz first, then re-prepared: a shapePre prepared at the
+        // wrong rate would put the 600 Hz lift somewhere else.
+        auto band = [&](float shape)
+        {
+            PluginProcessor proc;
+            proc.setRateAndBufferSizeDetails(sr, 512);
+            proc.prepareToPlay(sr, 512);
+            proc.setRateAndBufferSizeDetails(96000.0, 512);
+            proc.prepareToPlay(96000.0, 512);
+            configureCleanProcessor(proc, /*defeatBypass*/ false);
+            setParameter(proc.parameters, "shape", shape);
+            auto buf = noise();
+            runInBlocks(proc, buf);
+            return bandEnergyDb(buf, 96000.0, 550.0, 650.0, 16);
+        };
+        const float flat = band(0.0f);
+        expectWithinAbsoluteError(band(-100.0f) - flat, DSPConstants::SHAPE_MID_BOOST_DB * DSPConstants::SHAPE_PRE_AMOUNT, 1.5f);
+        expectWithinAbsoluteError(band(100.0f) - flat, -DSPConstants::SHAPE_MID_CUT_DB * DSPConstants::SHAPE_PRE_AMOUNT, 1.5f);
+    }
+
+    beginTest("Runtime oversampling rebuild keeps the post-drive half working");
+    {
+        // The post-drive bank lives at the oversampled rate, so a runtime rebuild
+        // (no prepareToPlay) must re-prepare it. 4x -> 2x, then check Bark vs Scoop
+        // still reshapes the harmonics of a clean 50 Hz sine.
+        auto render = [&](float shape)
+        {
+            PluginProcessor proc;
+            proc.setRateAndBufferSizeDetails(sr, 512);
+            proc.prepareToPlay(sr, 512);
+            setParameter(proc.parameters, "distortionAmount", 70.0f);
+            setParameter(proc.parameters, "clipType", 1.0f);
+            setParameter(proc.parameters, "waveshaperMix", 0.0f);
+            setParameter(proc.parameters, "subGuardFreq", 0.0f);
+            setParameter(proc.parameters, "autoGainEnabled", 0.0f);
+            setParameter(proc.parameters, "shape", shape);
+            proc.requestOversamplingRebuild(1);
+            proc.handleAsyncUpdate();
+            juce::AudioBuffer<float> buf(2, numSamples);
+            for (int n = 0; n < numSamples; ++n)
+            {
+                const float v = 0.7f * std::sin(juce::MathConstants<float>::twoPi * 50.0f * n / (float) sr);
+                buf.setSample(0, n, v);
+                buf.setSample(1, n, v);
+            }
+            runInBlocks(proc, buf);
+            expect(! containsInvalidSamples(buf), "Non-finite after runtime rebuild");
+            return bandEnergyDb(buf, sr, 400.0, 800.0) - bandEnergyDb(buf, sr, 40.0, 60.0);
+        };
+        const float diff = render(-100.0f) - render(100.0f);
+        expect(diff > 4.0f, "Bark vs Scoop changed the harmonics by only "
+               + juce::String(diff, 2) + " dB after a runtime oversampling rebuild");
+    }
+
+    beginTest("True bypass at Shape 0 is bit-clean");
+    {
+        PluginProcessor proc;
+        proc.setRateAndBufferSizeDetails(sr, 512);
+        proc.prepareToPlay(sr, 512);
+        configureCleanProcessor(proc, /*defeatBypass*/ false);
+        setParameter(proc.parameters, "shape", 0.0f);
+        setParameter(proc.parameters, "filterMode", 0.0f);
+        setParameter(proc.parameters, "highPassFreq", 20.0f);
+        const int latency = proc.getLatencySamples();
+        const auto in = noise();
+        auto out = in;
+        runInBlocks(proc, out);
+        float worst = 0.0f;
+        for (int ch = 0; ch < 2; ++ch)
+            for (int i = 4096; i + latency < numSamples; ++i)
+                worst = std::max(worst, std::abs(out.getSample(ch, i + latency) - in.getSample(ch, i)));
+        expectEquals(worst, 0.0f, "Shape 0 in true bypass altered the signal");
+    }
+
+    beginTest("LFO destination 2 moves Shape");
+    {
+        // True bypass, Shape 0, Square LFO at 2 Hz (half-period 11025 samples), depth 100:
+        // Shape alternates between about +50 (Scoop) and -50 (Bark). Short-window band
+        // energy at 600 Hz must therefore swing by more than 3 dB; with the LFO doing
+        // nothing the spread stays near zero.
+        auto windowSpread = [&](bool lfoOn)
+        {
+            PluginProcessor proc;
+            proc.setRateAndBufferSizeDetails(sr, 512);
+            proc.prepareToPlay(sr, 512);
+            configureCleanProcessor(proc, /*defeatBypass*/ false);
+            setParameter(proc.parameters, "shape", 0.0f);
+            setParameter(proc.parameters, "lfoEnabled", lfoOn ? 1.0f : 0.0f);
+            setParameter(proc.parameters, "lfoDestination", 2.0f);
+            setParameter(proc.parameters, "lfoWaveform", 2.0f);   // Square
+            setParameter(proc.parameters, "lfoRate", 2.0f);
+            setParameter(proc.parameters, "lfoDepth", 100.0f);
+            // A steady 600 Hz sine, not noise: its band energy follows the filter gain
+            // exactly, so the static spread is ~0 and any swing is the LFO's.
+            juce::AudioBuffer<float> buf(2, numSamples);
+            for (int n = 0; n < numSamples; ++n)
+            {
+                const float v = 0.25f * std::sin(juce::MathConstants<float>::twoPi * 600.0f * n / (float) sr);
+                buf.setSample(0, n, v);
+                buf.setSample(1, n, v);
+            }
+            runInBlocks(proc, buf);
+            constexpr int win = 4096;
+            float lo = 1.0e9f, hi = -1.0e9f;
+            for (int start = 4096; start + win <= numSamples; start += win)
+            {
+                juce::AudioBuffer<float> w(2, win);
+                for (int ch = 0; ch < 2; ++ch)
+                    w.copyFrom(ch, 0, buf, ch, start, win);
+                const float e = bandEnergyDb(w, sr, 550.0, 650.0, 12);
+                lo = std::min(lo, e);
+                hi = std::max(hi, e);
+            }
+            return hi - lo;
+        };
+        const float moving = windowSpread(true);
+        const float still = windowSpread(false);
+        expect(moving > 3.0f, "LFO on Shape swung the 600 Hz band by only "
+               + juce::String(moving, 2) + " dB");
+        expect(moving > still + 2.0f, "LFO spread " + juce::String(moving, 2)
+               + " dB not clearly above the static spread " + juce::String(still, 2));
+    }
+
+    beginTest("Legacy predicate matches the transparent thresholds");
+    {
+        expect(! LegacyInputFilter::isActive(0, 20.0f));
+        expect(! LegacyInputFilter::isActive(0, DSPConstants::HIPASS_TRANSPARENT_MAX_FREQ));
+        expect(LegacyInputFilter::isActive(0, 80.0f));
+        expect(LegacyInputFilter::isActive(1, 5000.0f));
+        expect(! LegacyInputFilter::isActive(1, 20000.0f));
+        expect(LegacyInputFilter::isActive(2, 1000.0f));
+    }
+
+    beginTest("In Shape mode the legacy cutoff is not LFO-modulated");
+    {
+        // Destination 2 sweeps highPassFreq up to 1.5 octaves (20 Hz -> ~57 Hz) only in
+        // Legacy mode, which would cut the 25-45 Hz band by several dB. In Shape mode it
+        // sweeps Shape (±50), which barely touches that band, and the filter stays at 20 Hz.
+        const float still = bypassBand(0.0f, 25.0, 45.0);
+        PluginProcessor proc;
+        proc.setRateAndBufferSizeDetails(sr, 512);
+        proc.prepareToPlay(sr, 512);
+        configureCleanProcessor(proc, false);
+        setParameter(proc.parameters, "lfoEnabled", 1.0f);
+        setParameter(proc.parameters, "lfoDestination", 2.0f);
+        setParameter(proc.parameters, "lfoWaveform", 2.0f);    // Square: full swing half the time
+        setParameter(proc.parameters, "lfoRate", 0.5f);
+        setParameter(proc.parameters, "lfoDepth", 100.0f);
+        auto buf = noise();
+        runInBlocks(proc, buf);
+        expectWithinAbsoluteError(bandEnergyDb(buf, sr, 25.0, 45.0), still, 0.5f);
+    }
+
+    beginTest("A pre-Shape state loads with Shape 0 and the legacy filter intact");
+    {
+        PluginProcessor src;
+        setParameter(src.parameters, "filterMode", 1.0f);
+        setParameter(src.parameters, "highPassFreq", 500.0f);
+        juce::MemoryBlock saved;
+        src.getStateInformation(saved);
+
+        // Turn it into a v1 state: no shape PARAM, stateVersion 1.
+        std::unique_ptr<juce::XmlElement> xml(juce::AudioProcessor::getXmlFromBinary(
+            saved.getData(), (int) saved.getSize()));
+        expect(xml != nullptr);
+        if (xml == nullptr)
+            return;
+        for (auto* child = xml->getFirstChildElement(); child != nullptr;)
+        {
+            auto* next = child->getNextElement();
+            if (child->getStringAttribute("id") == "shape")
+                xml->removeChildElement(child, true);
+            child = next;
+        }
+        xml->setAttribute(PluginProcessor::stateVersionAttribute, 1);
+        juce::MemoryBlock v1;
+        juce::AudioProcessor::copyXmlToBinary(*xml, v1);
+
+        PluginProcessor dst;
+        setParameter(dst.parameters, "shape", 70.0f);   // must not survive the load
+        dst.setStateInformation(v1.getData(), (int) v1.getSize());
+
+        auto value = [&](const char* id)
+        {
+            auto* p = dst.parameters.getParameter(id);
+            return p->convertFrom0to1(p->getValue());
+        };
+        expectWithinAbsoluteError(value("shape"), 0.0f, 1.0e-3f);
+        expectWithinAbsoluteError(value("filterMode"), 1.0f, 1.0e-3f);
+        expectWithinAbsoluteError(value("highPassFreq"), 500.0f, 0.5f);
+    }
+
+    beginTest("Shape's mid lift matches across the true-bypass threshold");
+    {
+        // Distortion 0.4% is true bypass (pre-drive Shape only); 0.6% is the active
+        // path. With distMix 0 the drive itself is out of the signal, so the only
+        // difference Shape may make between the two is the post-drive half, which
+        // must fade in with the drive rather than switch on at the threshold.
+        auto barkLift = [&](float drive)
+        {
+            auto band = [&](float shape)
+            {
+                PluginProcessor proc;
+                proc.setRateAndBufferSizeDetails(sr, 512);
+                proc.prepareToPlay(sr, 512);
+                configureCleanProcessor(proc, /*defeatBypass*/ false);
+                setParameter(proc.parameters, "subGuardFreq", 0.0f);
+                setParameter(proc.parameters, "distortionAmount", drive);
+                setParameter(proc.parameters, "shape", shape);
+                auto buf = noise();
+                buf.applyGain(0.2f);   // stay clear of the soft clipper and limiter
+                runInBlocks(proc, buf);
+                return bandEnergyDb(buf, sr, 550.0, 650.0);
+            };
+            return band(-100.0f) - band(0.0f);
+        };
+        const float bypassed = barkLift(0.4f);
+        const float active   = barkLift(0.6f);
+        expect(std::abs(active - bypassed) < 1.5f,
+               "Bark lift jumps from " + juce::String(bypassed, 2) + " dB (bypass) to "
+               + juce::String(active, 2) + " dB (active) at the threshold");
+    }
+
+    beginTest("With Sub Guard on, the post-drive Shape leaves the clean low band alone");
+    {
+        // A quiet 40 Hz sine sits entirely in Sub Guard's clean low band. With the
+        // drive mixed out (distMix 0) and nothing after it pushed into nonlinearity,
+        // the chain is linear, so Bark may move 40 Hz only by what the pre-drive
+        // half does to it before the split. If the post-drive half runs on
+        // low + high before the low band is subtracted, it reaches the sub too.
+        auto subGainDb = [&](float shape)
+        {
+            PluginProcessor proc;
+            proc.setRateAndBufferSizeDetails(sr, 512);
+            proc.prepareToPlay(sr, 512);
+            configureCleanProcessor(proc, /*defeatBypass*/ true);
+            setParameter(proc.parameters, "subGuardFreq", 150.0f);
+            setParameter(proc.parameters, "distortionAmount", 70.0f);   // post-drive half at full amount
+            setParameter(proc.parameters, "shape", shape);
+            juce::AudioBuffer<float> buf(2, numSamples);
+            for (int n = 0; n < numSamples; ++n)
+            {
+                const float s = 0.05f * std::sin(juce::MathConstants<float>::twoPi * 40.0f * n / (float) sr);
+                buf.setSample(0, n, s);
+                buf.setSample(1, n, s);
+            }
+            runInBlocks(proc, buf);
+            return bandEnergyDb(buf, sr, 30.0, 50.0);
+        };
+        const float measured = subGainDb(-100.0f) - subGainDb(0.0f);
+        const float preOnly  = shapeGainDb(sr, -100.0f, DSPConstants::SHAPE_PRE_AMOUNT, 40.0);
+        expect(std::abs(measured - preOnly) < 0.03f,
+               "Bark moved 40 Hz by " + juce::String(measured, 3) + " dB through Sub Guard; the "
+               "pre-drive half alone accounts for " + juce::String(preOnly, 3) + " dB");
     }
 }
 
@@ -5696,6 +6386,172 @@ void NamProfileTests::runTest()
         expect(! restored.isProfileLoaded(), "The previous profile is not kept");
         expect(restored.getProfileStatus().error.isNotEmpty(), "The missing file is reported");
         expectEquals(restored.getProfileStatus().path, missing, "The path is kept for the next save");
+    }
+
+    const auto savedProfilePath = [](const juce::MemoryBlock& state)
+    {
+        auto xml = juce::AudioProcessor::getXmlFromBinary(state.getData(), static_cast<int>(state.getSize()));
+        return xml != nullptr ? xml->getStringAttribute(PluginProcessor::profilePathAttribute) : juce::String();
+    };
+
+    beginTest("A session restored before the host prepares the plugin keeps its profile");
+    {
+        // The standalone app and some hosts restore state first and start audio
+        // afterwards, so the load runs before any sample rate is known.
+        const auto model = namTestModel("wavenet.nam");
+        juce::MemoryBlock saved;
+        {
+            PluginProcessor processor;
+            prepareForProfileTest(processor);
+            processor.loadProfileBlocking(model);
+            processor.getStateInformation(saved);
+        }
+
+        PluginProcessor restored;
+        restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+
+        // Saved again before the load finishes, the session still names the profile.
+        juce::MemoryBlock early;
+        restored.getStateInformation(early);
+        expectEquals(savedProfilePath(early), model.getFullPathName(), "A save mid-load keeps the path");
+
+        expect(waitForProfileLoad(restored), "Restore finished loading");
+        prepareForProfileTest(restored);
+        expect(settle(restored), "The profile goes in once the host prepares");
+        expect(restored.profileMode, "The restored profile plays");
+        juce::AudioBuffer<float> out;
+        processSine(restored, 4, &out);
+        expect(! containsInvalidSamples(out), "Output is finite");
+
+        juce::MemoryBlock resaved;
+        restored.getStateInformation(resaved);
+        expectEquals(savedProfilePath(resaved), model.getFullPathName(), "The next save keeps the path");
+
+        // Hosts may restore the same state twice; the loaded profile is kept as is.
+        restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+        expect(! restored.getProfileStatus().loading, "The same profile is not loaded again");
+        expect(restored.isProfileLoaded(), "It stays loaded");
+    }
+
+    beginTest("Clicking through profiles quickly loads only the last one");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+
+        // Hold the loader's one thread so every request queues behind it, as they
+        // do when clicks arrive faster than a model parses.
+        juce::WaitableEvent gate;
+        processor.getProfileLoader().addJob([&gate] { gate.wait(10000); });
+
+        const char* models[] = { "wavenet.nam", "lstm.nam", "wavenet.nam", "lstm.nam", "wavenet.nam" };
+        for (const auto* model : models)
+            processor.loadProfileAsync(namTestModel(model));
+        gate.signal();
+
+        expect(waitForProfileLoad(processor), "The last request finished");
+        expectEquals(processor.profileFilesRead.load(), 1, "Superseded requests never read their file");
+        expectEquals(processor.getProfileStatus().name, juce::String("wavenet"), "The last click's profile is loaded");
+        expect(settle(processor), "It goes in");
+        expect(processor.profileMode, "And plays");
+    }
+
+    beginTest("A new instance starts with the last profile once the host prepares it");
+    {
+        PluginProcessor processor;
+        processor.setStartupProfile(namTestModel("wavenet.nam"));
+        expect(processor.getProfileStatus().path.isEmpty(), "Nothing before the host prepares");
+
+        prepareForProfileTest(processor);
+        expect(waitForProfileLoad(processor), "Startup load finished");
+        expectEquals(processor.getProfileStatus().name, juce::String("wavenet"));
+        expect(settle(processor), "It goes in");
+        expect(processor.profileMode, "And plays");
+
+        prepareForProfileTest(processor, 44100.0, 256);   // the host changes rate
+        expectEquals(processor.profileFilesRead.load(), 1, "Only the first prepare loads it");
+    }
+
+    beginTest("A restored session decides for itself, whatever the last profile was");
+    {
+        juce::MemoryBlock plain, withLstm;
+        {
+            PluginProcessor source;
+            prepareForProfileTest(source);
+            source.getStateInformation(plain);
+            source.loadProfileBlocking(namTestModel("lstm.nam"));
+            source.getStateInformation(withLstm);
+        }
+
+        PluginProcessor noProfile;   // restored, then prepared: the usual order
+        noProfile.setStartupProfile(namTestModel("wavenet.nam"));
+        noProfile.setStateInformation(plain.getData(), static_cast<int>(plain.getSize()));
+        prepareForProfileTest(noProfile);
+        expect(! noProfile.getProfileStatus().loading && ! noProfile.isProfileLoaded(),
+               "A session saved without a profile stays without one");
+        expectEquals(noProfile.profileFilesRead.load(), 0, "The last profile is never even read");
+
+        PluginProcessor ownProfile;
+        ownProfile.setStartupProfile(namTestModel("wavenet.nam"));
+        ownProfile.setStateInformation(withLstm.getData(), static_cast<int>(withLstm.getSize()));
+        prepareForProfileTest(ownProfile);
+        expect(waitForProfileLoad(ownProfile), "Restore finished");
+        expectEquals(ownProfile.getProfileStatus().name, juce::String("lstm"), "The session's own profile");
+
+        // Some hosts prepare before they restore: the last profile starts loading,
+        // and the session then takes it out again.
+        PluginProcessor prepareFirst;
+        prepareFirst.setStartupProfile(namTestModel("wavenet.nam"));
+        prepareForProfileTest(prepareFirst);
+        prepareFirst.setStateInformation(plain.getData(), static_cast<int>(plain.getSize()));
+        expect(waitForProfileLoad(prepareFirst), "Nothing left loading");
+        expect(settle(prepareFirst), "Settles");
+        expect(! prepareFirst.isProfileLoaded() && ! prepareFirst.profileMode,
+               "The session's built-in clip type wins");
+    }
+
+    beginTest("A last profile that has gone, or a clear before prepare, loads nothing");
+    {
+        PluginProcessor gone;
+        gone.setStartupProfile(namTestModel("deleted-since.nam"));
+        prepareForProfileTest(gone);
+        const auto status = gone.getProfileStatus();
+        expect(status.path.isEmpty() && status.error.isEmpty(), "No error about a file nobody asked for");
+
+        PluginProcessor cleared;
+        cleared.setStartupProfile(namTestModel("wavenet.nam"));
+        cleared.clearProfile();
+        prepareForProfileTest(cleared);
+        expect(! cleared.getProfileStatus().loading && ! cleared.isProfileLoaded(), "The clear wins");
+    }
+
+    beginTest("Reopening a session whose profile failed to load tries again");
+    {
+        // A drive that wasn't mounted, a file being synced: the first attempt fails,
+        // and reopening the same session once the file is back must load it.
+        const auto file = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                              .getChildFile("sledge-retry-test.nam");
+        file.replaceWithText("not a model");
+
+        PluginProcessor source;
+        prepareForProfileTest(source);
+        auto xml = source.parameters.copyState().createXml();
+        xml->setAttribute(PluginProcessor::profilePathAttribute, file.getFullPathName());
+        juce::MemoryBlock state;
+        juce::AudioProcessor::copyXmlToBinary(*xml, state);
+
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        processor.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+        expect(waitForProfileLoad(processor), "First attempt finished");
+        expect(! processor.isProfileLoaded(), "A broken file does not load");
+        expect(processor.getProfileStatus().error.isNotEmpty(), "The failure is reported");
+
+        expect(namTestModel("wavenet.nam").copyFileTo(file), "The file comes back");
+        processor.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+        expect(waitForProfileLoad(processor), "Second attempt finished");
+        expect(processor.isProfileLoaded(), "The same session loads it now");
+        expect(processor.getProfileStatus().error.isEmpty(), "The old error is gone");
+        file.deleteFile();
     }
 
     beginTest("A profile at 44.1, 88.2, 96 and 192 kHz sounds as it does at 48 kHz");
@@ -6811,6 +7667,533 @@ void NamProfileTests::runTest()
         for (size_t i = a1.size() - 10 * 512; i < a1.size(); ++i)
             maxDiff = juce::jmax(maxDiff, std::abs(a1[i] - b1[i]));
         expect(maxDiff < 1.0e-4f, "Channel 1 matches the stereo instance: " + juce::String(maxDiff, 8));
+    }
+}
+
+//==============================================================================
+// Profile library
+//==============================================================================
+
+namespace
+{
+    // A folder for one test, removed with everything in it afterwards.
+    struct ScratchFolder
+    {
+        explicit ScratchFolder(const juce::String& name)
+            : dir(juce::File::getSpecialLocation(juce::File::tempDirectory).getNonexistentChildFile(name, {}, false))
+        {
+            dir.createDirectory();
+        }
+        ~ScratchFolder() { dir.deleteRecursively(); }
+
+        juce::File write(const juce::String& relativePath, const juce::String& content) const
+        {
+            auto file = dir.getChildFile(relativePath);
+            file.getParentDirectory().createDirectory();
+            file.replaceWithText(content);
+            return file;
+        }
+
+        juce::File dir;
+    };
+
+    juce::StringArray relativeNames(const juce::Array<juce::File>& files, const juce::File& root)
+    {
+        juce::StringArray names;
+        for (const auto& f : files)
+            names.add(f.getRelativePathFrom(root).replaceCharacter('\\', '/'));
+        return names;
+    }
+}
+
+void ProfileLibraryTests::runTest()
+{
+    beginTest("Lists .nam files in natural order, subfolders included");
+    {
+        ScratchFolder scratch("sledge-library");
+        scratch.write("amp 10.nam", "10");
+        scratch.write("amp 2.nam", "2");
+        scratch.write("Fender/clean.nam", "clean");
+        scratch.write("notes.txt", "not a profile");
+
+        ProfileLibrary library(scratch.dir);
+        expectEquals(relativeNames(library.list(), scratch.dir).joinIntoString("|"),
+                     juce::String("amp 2.nam|amp 10.nam|Fender/clean.nam"));
+        expect(ProfileLibrary(scratch.dir.getChildFile("missing")).list().isEmpty(),
+               "A library that doesn't exist yet is empty");
+    }
+
+    beginTest("Steps wrap at both ends and start from an end outside the library");
+    {
+        ScratchFolder scratch("sledge-library");
+        const auto a = scratch.write("a.nam", "a");
+        const auto b = scratch.write("b.nam", "b");
+        const auto c = scratch.write("sub/c.nam", "c");
+        ProfileLibrary library(scratch.dir);
+
+        expect(library.step(a, 1) == b, "Forward");
+        expect(library.step(b, -1) == a, "Back");
+        expect(library.step(c, 1) == a, "Forward from the last wraps to the first");
+        expect(library.step(a, -1) == c, "Back from the first wraps to the last");
+        expect(library.step({}, 1) == a, "Forward from nothing starts at the first");
+        expect(library.step(juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("x.nam"), -1) == c,
+               "Back from outside starts at the last");
+
+        const auto position = library.positionOf(b);
+        expectEquals(position.index, 1);
+        expectEquals(position.count, 3);
+        expectEquals(library.positionOf({}).index, -1);
+
+        ScratchFolder empty("sledge-library-empty");
+        expect(ProfileLibrary(empty.dir).step(a, 1) == juce::File(), "An empty library has nowhere to go");
+    }
+
+    beginTest("Importing copies in, reuses the same content and numbers different content");
+    {
+        ScratchFolder scratch("sledge-library");
+        ScratchFolder outside("sledge-downloads");
+        ProfileLibrary library(scratch.dir.getChildFile("Profiles"));   // created by the first import
+        juce::String error;
+
+        const auto first = outside.write("jcm.nam", "model A");
+        const auto copied = library.import(first, error);
+        expect(copied == library.getRoot().getChildFile("jcm.nam"), "Copied under its own name: " + error);
+        expectEquals(copied.loadFileAsString(), juce::String("model A"));
+        expect(first.existsAsFile(), "The original stays where it was");
+
+        expect(library.import(first, error) == copied, "The same content again is reused");
+        expect(library.import(copied, error) == copied, "A library file comes back as it is");
+
+        const auto other = outside.write("other/jcm.nam", "model B");
+        const auto numbered = library.import(other, error);
+        expect(numbered == library.getRoot().getChildFile("jcm (2).nam"), "Different content gets a number");
+        expectEquals(numbered.loadFileAsString(), juce::String("model B"));
+        expect(library.import(other, error) == numbered, "And is reused under that number");
+
+        expect(library.import(outside.dir.getChildFile("gone.nam"), error) == juce::File(), "A missing file fails");
+        expect(error.isNotEmpty(), "With a reason");
+    }
+
+    beginTest("Fingerprints identify content, wherever the file is");
+    {
+        ScratchFolder scratch("sledge-library");
+        const auto a = scratch.write("a.nam", "same bytes");
+        const auto b = scratch.write("sub/b.nam", "same bytes");
+        const auto c = scratch.write("c.nam", "different!");   // same size, different content
+        const auto print = ProfileLibrary::fingerprint(a);
+
+        expect(print.isNotEmpty(), "A readable file has one");
+        expectEquals(ProfileLibrary::fingerprint(b), print, "Same content, same fingerprint");
+        expect(ProfileLibrary::fingerprint(c) != print, "Same size alone doesn't match");
+        expect(ProfileLibrary::fingerprint(scratch.dir.getChildFile("none.nam")).isEmpty(), "No file, no fingerprint");
+
+        ProfileLibrary library(scratch.dir);
+        expect(library.findByFingerprint(print, "b.nam") == b, "The preferred name wins among matches");
+        expect(library.findByFingerprint(print) == a, "Otherwise the first in order");
+        expect(library.findByFingerprint(ProfileLibrary::fingerprint(c), "a.nam") == c,
+               "A same-named file with other content is skipped");
+        expect(library.findByFingerprint({}) == juce::File(), "No fingerprint finds nothing");
+    }
+
+    beginTest("A session whose profile file moved loads the library's copy");
+    {
+        ScratchFolder libraryFolder("sledge-library");
+        ScratchFolder downloads("sledge-downloads");
+        const auto original = downloads.dir.getChildFile("wavenet.nam");
+        expect(namTestModel("wavenet.nam").copyFileTo(original), "Test model copied");
+
+        juce::MemoryBlock saved;
+        {
+            PluginProcessor processor;
+            prepareForProfileTest(processor);
+            expect(processor.loadProfileBlocking(original), "Loads from where it was downloaded");
+            expect(processor.getProfileStatus().fingerprint.isNotEmpty(), "The loaded profile has a fingerprint");
+            processor.getStateInformation(saved);
+        }
+        auto savedXml = juce::AudioProcessor::getXmlFromBinary(saved.getData(), static_cast<int>(saved.getSize()));
+        expect(savedXml->getStringAttribute(PluginProcessor::profileFingerprintAttribute).isNotEmpty(),
+               "The session saves the fingerprint");
+
+        juce::String error;
+        const auto copy = ProfileLibrary(libraryFolder.dir).import(original, error);
+        expect(copy.existsAsFile(), "Imported: " + error);
+        original.deleteFile();
+
+        PluginProcessor restored;
+        restored.setProfileLibraryRoot(libraryFolder.dir);
+        prepareForProfileTest(restored);
+        restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+        expect(waitForProfileLoad(restored), "Restore finished");
+        expect(restored.isProfileLoaded(), "The library's copy stands in for the missing file");
+        expectEquals(restored.getProfileStatus().path, copy.getFullPathName(), "The session now points at the copy");
+        expect(! restored.parameters.state.hasProperty(PluginProcessor::profileFingerprintAttribute),
+               "The fingerprint stays out of the parameter tree, so presets never carry it");
+
+        juce::MemoryBlock resaved;
+        restored.getStateInformation(resaved);
+        auto resavedXml = juce::AudioProcessor::getXmlFromBinary(resaved.getData(), static_cast<int>(resaved.getSize()));
+        expectEquals(resavedXml->getStringAttribute(PluginProcessor::profilePathAttribute), copy.getFullPathName());
+
+        restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+        expect(! restored.getProfileStatus().loading, "Restoring the same session again keeps the copy loaded");
+    }
+
+    beginTest("A missing profile with no copy in the library stays missing, and remembered");
+    {
+        ScratchFolder libraryFolder("sledge-library");
+        ScratchFolder downloads("sledge-downloads");
+        const auto original = downloads.dir.getChildFile("wavenet.nam");
+        expect(namTestModel("wavenet.nam").copyFileTo(original), "Test model copied");
+
+        juce::MemoryBlock saved;
+        {
+            PluginProcessor processor;
+            prepareForProfileTest(processor);
+            processor.loadProfileBlocking(original);
+            processor.getStateInformation(saved);
+        }
+        original.deleteFile();
+
+        // A different model under the same name must not stand in for it.
+        expect(namTestModel("lstm.nam").copyFileTo(libraryFolder.dir.getChildFile("wavenet.nam")), "Impostor copied");
+
+        PluginProcessor restored;
+        restored.setProfileLibraryRoot(libraryFolder.dir);
+        prepareForProfileTest(restored);
+        restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+        expect(waitForProfileLoad(restored), "Restore finished");
+        expect(! restored.isProfileLoaded(), "A same-named file with other content is not loaded");
+        expect(restored.getProfileStatus().error.isNotEmpty(), "The missing file is reported");
+
+        juce::MemoryBlock resaved;
+        restored.getStateInformation(resaved);
+        auto savedXml = juce::AudioProcessor::getXmlFromBinary(saved.getData(), static_cast<int>(saved.getSize()));
+        auto resavedXml = juce::AudioProcessor::getXmlFromBinary(resaved.getData(), static_cast<int>(resaved.getSize()));
+        expectEquals(resavedXml->getStringAttribute(PluginProcessor::profilePathAttribute), original.getFullPathName(),
+                     "The path is kept for when the file comes back");
+        expectEquals(resavedXml->getStringAttribute(PluginProcessor::profileFingerprintAttribute),
+                     savedXml->getStringAttribute(PluginProcessor::profileFingerprintAttribute),
+                     "So is the fingerprint");
+    }
+}
+
+//==============================================================================
+// Profile card animation
+//==============================================================================
+
+void ProfileCardAnimationTests::runTest()
+{
+    using A = ProfileCardAnimation;
+    const double t0 = 100.0;
+    const double settled = A::slideSeconds + 0.01;
+
+    beginTest("A click slides the card in from its arrow's side, holds, then fades");
+    {
+        A next;
+        expect(! next.isActive(t0), "Hidden before any click");
+        next.trigger(1, t0);
+        expect(next.isActive(t0), "Shown from the click");
+        expectWithinAbsoluteError(next.getCardAlpha(t0), 0.0f, 1.0e-6f, "Starts transparent");
+        expectWithinAbsoluteError(next.getCardOffset(t0), 1.0f, 1.0e-6f, "Next enters from the right");
+        expect(next.isMoving(t0 + A::slideSeconds * 0.5), "Moving while it slides in");
+
+        expectWithinAbsoluteError(next.getCardAlpha(t0 + settled), 1.0f, 1.0e-6f, "Opaque once in");
+        expectWithinAbsoluteError(next.getCardOffset(t0 + settled), 0.0f, 1.0e-6f, "In place once in");
+        expect(! next.isMoving(t0 + settled), "Settled: nothing to repaint while it holds");
+        expectWithinAbsoluteError(next.getCardAlpha(t0 + A::holdSeconds - 0.01), 1.0f, 1.0e-6f, "Holds");
+
+        const double midFade = t0 + A::holdSeconds + A::fadeSeconds * 0.5;
+        expect(next.getCardAlpha(midFade) > 0.0f && next.getCardAlpha(midFade) < 1.0f, "Fading");
+        expect(next.isMoving(midFade), "Moving while it fades");
+        expect(! next.isActive(t0 + A::holdSeconds + A::fadeSeconds + 0.01), "Gone after the fade");
+
+        A previous;
+        previous.trigger(-1, t0);
+        expectWithinAbsoluteError(previous.getCardOffset(t0), -1.0f, 1.0e-6f, "Previous enters from the left");
+
+        A menu;
+        menu.trigger(0, t0);
+        expectWithinAbsoluteError(menu.getCardOffset(t0), 0.0f, 1.0e-6f, "A menu pick fades in place");
+    }
+
+    beginTest("Clicks while the card shows slide the name and restart the hold");
+    {
+        A card;
+        card.trigger(1, t0);
+        const double t1 = t0 + 1.0;
+        card.trigger(-1, t1);
+        expectWithinAbsoluteError(card.getCardAlpha(t1), 1.0f, 1.0e-6f, "The card stays up");
+        expectWithinAbsoluteError(card.getCardOffset(t1), 0.0f, 1.0e-6f, "And does not slide in again");
+        expectEquals(card.getNameDirection(), -1);
+        expectWithinAbsoluteError(card.getNameProgress(t1), 0.0f, 1.0e-6f, "The new name starts its slide");
+        expect(card.isNameSliding(t1) && card.isMoving(t1), "Moving while the name slides");
+        expectWithinAbsoluteError(card.getNameProgress(t1 + settled), 1.0f, 1.0e-6f, "And settles");
+        expectWithinAbsoluteError(card.getCardAlpha(t0 + A::holdSeconds + A::fadeSeconds), 1.0f, 1.0e-6f,
+                                  "The hold restarts from the latest click");
+        expect(! card.isActive(t1 + A::holdSeconds + A::fadeSeconds + 0.01), "Then fades as usual");
+    }
+
+    beginTest("A click while the card fades brings it back without a jump");
+    {
+        A card;
+        card.trigger(1, t0);
+        const double t1 = t0 + A::holdSeconds + A::fadeSeconds * 0.5;
+        const float before = card.getCardAlpha(t1);
+        card.trigger(1, t1);
+        expectWithinAbsoluteError(card.getCardAlpha(t1), before, 1.0e-4f, "Opacity continues from where it was");
+        expectWithinAbsoluteError(card.getCardOffset(t1), 0.0f, 1.0e-6f, "No second slide-in");
+        expectWithinAbsoluteError(card.getCardAlpha(t1 + settled), 1.0f, 1.0e-6f, "Back to opaque");
+    }
+
+    beginTest("The card waits for a slow load, and keepAlive never revives a fading card");
+    {
+        A card;
+        card.trigger(1, t0);
+        for (double t = t0; t < t0 + 3.0; t += 0.1)
+            card.keepAlive(t);   // the profile is still loading
+        expectWithinAbsoluteError(card.getCardAlpha(t0 + 3.0), 1.0f, 1.0e-6f, "Still up while loading");
+        expect(! card.isActive(t0 + 3.0 + A::holdSeconds + A::fadeSeconds), "Fades once the load is done");
+
+        A fading;
+        fading.trigger(1, t0);
+        const double t1 = t0 + A::holdSeconds + 0.1;
+        const float before = fading.getCardAlpha(t1);
+        fading.keepAlive(t1);
+        expectWithinAbsoluteError(fading.getCardAlpha(t1), before, 1.0e-6f, "Already fading: unchanged");
+    }
+}
+
+void LegacyFilterSwitchTests::runTest()
+{
+    constexpr double sr = 44100.0;
+    const int numSamples = 1 << 16;
+
+    auto noise = [&]
+    {
+        juce::Random rng(7);
+        juce::AudioBuffer<float> buf(2, numSamples);
+        for (int ch = 0; ch < 2; ++ch)
+            for (int n = 0; n < numSamples; ++n)
+                buf.setSample(ch, n, 0.25f * (rng.nextFloat() * 2.0f - 1.0f));
+        return buf;
+    };
+
+    auto valueOf = [](PluginProcessor& proc, const char* id)
+    {
+        auto* p = proc.parameters.getParameter(id);
+        return p != nullptr ? p->convertFrom0to1(p->getValue()) : -1.0f;
+    };
+
+    struct Setup
+    {
+        bool legacy = false;
+        float shape = 0.0f;
+        int filterMode = 0;          // 0 High Pass, 1 Low Pass, 2 Band Pass
+        float cutoff = 20.0f;        // the legacy filter's transparent default
+        bool fullChain = false;      // false: true bypass; true: comp on at zero reduction
+    };
+
+    // Band energy of noise through the input stage, everything else transparent.
+    auto band = [&](const Setup& s, double lo, double hi)
+    {
+        PluginProcessor proc;
+        proc.setRateAndBufferSizeDetails(sr, 512);
+        proc.prepareToPlay(sr, 512);
+        configureCleanProcessor(proc, s.fullChain);
+        setParameter(proc.parameters, "legacyFilter", s.legacy ? 1.0f : 0.0f);
+        setParameter(proc.parameters, "shape", s.shape);
+        setParameter(proc.parameters, "filterMode", static_cast<float>(s.filterMode));
+        setParameter(proc.parameters, "highPassFreq", s.cutoff);
+        auto buf = noise();
+        runInBlocks(proc, buf);
+        return bandEnergyDb(buf, sr, lo, hi);
+    };
+
+    beginTest("Parameter exists and new instances start in Shape mode");
+    {
+        PluginProcessor proc;
+        auto* p = proc.parameters.getParameter("legacyFilter");
+        expect(p != nullptr, "legacyFilter parameter missing");
+        if (p != nullptr)
+            expectEquals(p->getDefaultValue(), 0.0f, "A new instance must start in Shape mode");
+    }
+
+    beginTest("Shape mode ignores the legacy filter's settings");
+    {
+        // A 1 kHz low pass would take well over 10 dB off 4-6 kHz.
+        for (bool fullChain : { false, true })
+        {
+            const float flat = band({ false, 0.0f, 0, 20.0f, fullChain }, 4000.0, 6000.0);
+            const float lowPassSet = band({ false, 0.0f, 1, 1000.0f, fullChain }, 4000.0, 6000.0);
+            expectWithinAbsoluteError(lowPassSet, flat, 0.1f,
+                juce::String(fullChain ? "Full chain" : "True bypass")
+                + ": the legacy low pass cut 4-6 kHz in Shape mode");
+        }
+    }
+
+    beginTest("Legacy mode runs the legacy filter");
+    {
+        for (bool fullChain : { false, true })
+        {
+            const float flat = band({ true, 0.0f, 0, 20.0f, fullChain }, 4000.0, 6000.0);
+            const float lowPassSet = band({ true, 0.0f, 1, 1000.0f, fullChain }, 4000.0, 6000.0);
+            expect(flat - lowPassSet > 10.0f,
+                   juce::String(fullChain ? "Full chain" : "True bypass")
+                   + ": the legacy low pass cut 4-6 kHz by only " + juce::String(flat - lowPassSet, 2) + " dB");
+        }
+    }
+
+    beginTest("Legacy mode bypasses Shape");
+    {
+        // Full Bark lifts 600 Hz by about 12 dB; in Legacy mode the Shape value must do nothing.
+        for (bool fullChain : { false, true })
+        {
+            const float flat = band({ true, 0.0f, 0, 20.0f, fullChain }, 550.0, 650.0);
+            const float bark = band({ true, -100.0f, 0, 20.0f, fullChain }, 550.0, 650.0);
+            expectWithinAbsoluteError(bark, flat, 0.1f,
+                juce::String(fullChain ? "Full chain" : "True bypass")
+                + ": Shape changed 600 Hz in Legacy mode");
+        }
+    }
+
+    beginTest("A Shape value set in Legacy mode stays out after a re-prepare");
+    {
+        // prepareToPlay seeds the Shape filters from the parameter; in Legacy mode
+        // that seed must be Flat too, or the first blocks after it would carry Bark.
+        PluginProcessor proc;
+        proc.setRateAndBufferSizeDetails(sr, 512);
+        configureCleanProcessor(proc, false);
+        setParameter(proc.parameters, "legacyFilter", 1.0f);
+        setParameter(proc.parameters, "shape", -100.0f);
+        proc.prepareToPlay(sr, 512);
+        const int latency = proc.getLatencySamples();
+        juce::AudioBuffer<float> first(2, 8192);
+        for (int n = 0; n < first.getNumSamples(); ++n)
+            for (int ch = 0; ch < 2; ++ch)
+                first.setSample(ch, n, 0.25f * std::sin(juce::MathConstants<float>::twoPi * 600.0f * n / (float) sr));
+        const auto in = first;
+        runInBlocks(proc, first);
+        float worst = 0.0f;
+        for (int ch = 0; ch < 2; ++ch)
+            for (int n = 0; n + latency < first.getNumSamples(); ++n)
+                worst = std::max(worst, std::abs(first.getSample(ch, n + latency) - in.getSample(ch, n)));
+        expectEquals(worst, 0.0f, "Bark leaked into true bypass after a re-prepare in Legacy mode");
+    }
+
+    beginTest("In Legacy mode LFO destination 2 sweeps the filter cutoff, as in v2.3");
+    {
+        // High pass at 200 Hz, Square LFO at 2 Hz, depth 100: the cutoff alternates
+        // 1.5 octaves either side (about 71 Hz and 566 Hz), so a steady 150 Hz tone
+        // swings by well over 3 dB from window to window.
+        auto windowSpread = [&](bool lfoOn)
+        {
+            PluginProcessor proc;
+            proc.setRateAndBufferSizeDetails(sr, 512);
+            proc.prepareToPlay(sr, 512);
+            configureCleanProcessor(proc, /*defeatBypass*/ false);
+            setParameter(proc.parameters, "legacyFilter", 1.0f);
+            setParameter(proc.parameters, "filterMode", 0.0f);
+            setParameter(proc.parameters, "highPassFreq", 200.0f);
+            setParameter(proc.parameters, "lfoEnabled", lfoOn ? 1.0f : 0.0f);
+            setParameter(proc.parameters, "lfoDestination", 2.0f);
+            setParameter(proc.parameters, "lfoWaveform", 2.0f);   // Square
+            setParameter(proc.parameters, "lfoRate", 2.0f);
+            setParameter(proc.parameters, "lfoDepth", 100.0f);
+            juce::AudioBuffer<float> buf(2, numSamples);
+            for (int n = 0; n < numSamples; ++n)
+            {
+                const float v = 0.25f * std::sin(juce::MathConstants<float>::twoPi * 150.0f * n / (float) sr);
+                buf.setSample(0, n, v);
+                buf.setSample(1, n, v);
+            }
+            runInBlocks(proc, buf);
+            constexpr int win = 4096;
+            float lo = 1.0e9f, hi = -1.0e9f;
+            for (int start = 4096; start + win <= numSamples; start += win)
+            {
+                juce::AudioBuffer<float> w(2, win);
+                for (int ch = 0; ch < 2; ++ch)
+                    w.copyFrom(ch, 0, buf, ch, start, win);
+                const float e = bandEnergyDb(w, sr, 130.0, 170.0, 12);
+                lo = std::min(lo, e);
+                hi = std::max(hi, e);
+            }
+            return hi - lo;
+        };
+        const float moving = windowSpread(true);
+        const float still = windowSpread(false);
+        expect(moving > 3.0f, "LFO on the legacy cutoff swung 150 Hz by only "
+               + juce::String(moving, 2) + " dB");
+        expect(moving > still + 2.0f, "LFO spread " + juce::String(moving, 2)
+               + " dB not clearly above the static spread " + juce::String(still, 2));
+    }
+
+    // A state as a build from before the switch wrote it: no legacyFilter PARAM and
+    // the given stateVersion.
+    auto olderState = [&](int filterMode, float cutoff, int version)
+    {
+        PluginProcessor src;
+        setParameter(src.parameters, "filterMode", static_cast<float>(filterMode));
+        setParameter(src.parameters, "highPassFreq", cutoff);
+        juce::MemoryBlock saved;
+        src.getStateInformation(saved);
+        std::unique_ptr<juce::XmlElement> xml(juce::AudioProcessor::getXmlFromBinary(
+            saved.getData(), (int) saved.getSize()));
+        juce::MemoryBlock older;
+        if (xml == nullptr)
+            return older;
+        for (auto* child = xml->getFirstChildElement(); child != nullptr;)
+        {
+            auto* next = child->getNextElement();
+            if (child->getStringAttribute("id") == "legacyFilter")
+                xml->removeChildElement(child, true);
+            child = next;
+        }
+        xml->setAttribute(PluginProcessor::stateVersionAttribute, version);
+        juce::AudioProcessor::copyXmlToBinary(*xml, older);
+        return older;
+    };
+
+    beginTest("An older state that used the legacy filter opens in Legacy mode");
+    {
+        for (int version : { 1, 2 })
+        {
+            const auto older = olderState(1, 500.0f, version);   // Low Pass at 500 Hz
+            PluginProcessor dst;
+            setParameter(dst.parameters, "legacyFilter", 0.0f);
+            dst.setStateInformation(older.getData(), (int) older.getSize());
+            expectEquals(valueOf(dst, "legacyFilter"), 1.0f,
+                         "Version " + juce::String(version) + " state with a live legacy filter");
+            expectWithinAbsoluteError(valueOf(dst, "filterMode"), 1.0f, 1.0e-3f);
+            expectWithinAbsoluteError(valueOf(dst, "highPassFreq"), 500.0f, 0.5f);
+        }
+    }
+
+    beginTest("An older state with the legacy filter at its default opens in Shape mode");
+    {
+        for (int version : { 1, 2 })
+        {
+            const auto older = olderState(0, 20.0f, version);
+            PluginProcessor dst;
+            setParameter(dst.parameters, "legacyFilter", 1.0f);   // must not survive the load
+            dst.setStateInformation(older.getData(), (int) older.getSize());
+            expectEquals(valueOf(dst, "legacyFilter"), 0.0f,
+                         "Version " + juce::String(version) + " state with a transparent legacy filter");
+        }
+    }
+
+    beginTest("A current state keeps the switch as saved");
+    {
+        // Legacy mode with the filter still at its default: the migration rule would
+        // say Shape, so this only holds once the state version marks the switch as saved.
+        PluginProcessor src;
+        setParameter(src.parameters, "legacyFilter", 1.0f);
+        juce::MemoryBlock saved;
+        src.getStateInformation(saved);
+
+        PluginProcessor dst;
+        dst.setStateInformation(saved.getData(), (int) saved.getSize());
+        expectEquals(valueOf(dst, "legacyFilter"), 1.0f, "Legacy mode lost on reload");
     }
 }
 
