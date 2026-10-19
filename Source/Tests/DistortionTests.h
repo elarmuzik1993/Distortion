@@ -457,8 +457,37 @@ private:
 class SubGuardFlatnessTest : public juce::UnitTest
 {
 public:
-    SubGuardFlatnessTest() : UnitTest("Sub Guard Crossover Flatness", TestCategories::DSP) {}
+    SubGuardFlatnessTest() : UnitTest("Sub Guard Spectral Flatness", TestCategories::DSP) {}
     void runTest() override;
+};
+
+/** Sub Guard behaviour the current code gets wrong: transitions that click (stale
+    banks on a state load or OFF -> ON, the hard ON -> OFF switch, an order crossfade
+    reversed mid-fade, boundary chatter, a large-buffer sweep) and a sub that does not
+    leave clean (the transient tamer and the distortion products below the crossover).
+    The large-buffer sweeps (F6) pass today and are asserted always.
+    Every measurement is always logged; the fixed-behaviour assertions only run with
+    DISTORTION_PENDING_TESTS=1, so the default run stays green until each fix lands and
+    moves its test into an always-on class. */
+class SubGuardPendingTests : public juce::UnitTest
+{
+public:
+    SubGuardPendingTests() : UnitTest("Sub Guard Pending", TestCategories::DSP) {}
+    void runTest() override;
+
+private:
+    /** Logs the result, and asserts it only when pending tests are enabled. */
+    void expectPending(bool ok, const juce::String& message);
+
+    void runCleanSubTests();
+    void runStateLoadTests(bool distorted);
+    void runOffThenOnTest(bool distorted);
+    void runOnThenOffTest(bool distorted);
+    void runReverseMidFadeTest(bool distorted);
+    void runBoundaryChatterTests(bool distorted);
+    void runLargeBufferSweepTest(bool distorted);
+
+    bool pendingEnabled = false;
 };
 
 /** Input multimode filter shapes correctly in true bypass (distortion + comp off):
@@ -1181,6 +1210,7 @@ inline void registerAllTests()
     static NormalizationTests normalizationTests;
     static StatefulDistortionTests statefulDistortionTests;
     static SubGuardFlatnessTest subGuardFlatnessTest;
+    static SubGuardPendingTests subGuardPendingTests;
     static InputFilterModeTest inputFilterModeTest;
     static ShapeFilterTests shapeFilterTests;
     static ShapeProcessorTests shapeProcessorTests;
