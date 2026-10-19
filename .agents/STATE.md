@@ -13,7 +13,8 @@
   `Resources/TestAudio/golden_*.wav` (max error -90 dBFS; compression -85, Shape -80, Clean
   Boost -66). Regenerate: `DISTORTION_GOLDEN_GENERATE=1 DistortionTests Golden`.
 - Verified 2026-10-19 on Linux (cloud, Debug): `verify.sh` passes, 4262 assertions, golden
-  cases exact run to run. Golden limits not yet seen on MSVC or macOS CI. pluginval not run.
+  cases exact run to run; CI green on Linux, Windows and macOS with the golden limits. pluginval
+  not run.
 
 ## Next
 1. Owner: one listening pass on the Sub Guard work (real 808 and bass line, Sub Guard on vs
