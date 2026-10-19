@@ -3040,8 +3040,8 @@ void PluginProcessor::feedProfileWhileBypassed(const juce::AudioBuffer<float>& b
         }
     }
 
-    // No low band is split off while bypassed, so its line restarts from silence,
-    // as it does when Sub Guard switches on.
+    // No low band is split off while bypassed, so its line restarts from silence.
+    // (Switching Sub Guard on no longer resets it: the line runs warm with the splitter.)
     if (islandDelay > 0)
         subGuardLowDelayLine.reset();
 }
@@ -3389,6 +3389,8 @@ void PluginProcessor::applyAutoGainAndISP(juce::AudioBuffer<float>& buffer)
     if (pb_autoGainEnabled)
     {
         // Calculate output RMS for auto-gain compensation (after distortion)
+        // Measured before the Sub Guard post-drive high-pass, so it still holds the
+        // drive's products below the crossover that the high-pass later removes.
         float outputSumSquares = 0.0f;
         for (size_t ch = 0; ch < pb_numChannels; ++ch)
         {
@@ -3621,6 +3623,10 @@ void PluginProcessor::applyAutoGainAndISP(juce::AudioBuffer<float>& buffer)
 
         if (pb_subGuardActive)
         {
+            // In profile mode the drive input was blended with g(t) but the island
+            // delays it by D, so during the 15 ms ramp this blend (and the low add-back
+            // below) uses a g D samples ahead of the one that built its input. The
+            // crossfade is uneven but continuous, with no click; left as is.
             const float* g = subGuardSplitter.getWeights();
             for (size_t channel = 0; channel < pb_numChannels; ++channel)
             {
@@ -3647,7 +3653,8 @@ void PluginProcessor::applyAutoGainAndISP(juce::AudioBuffer<float>& buffer)
     // (tone filter is mirrored above for phase coherence at recombine). An LR48 sums
     // flat with both bands in phase, so the recombine is low + high; at DC HP->0 so the
     // sum reduces to the clean low band, keeping absolute bass polarity with the input.
-    // Scaled by g, so it fades with the on/off weight.
+    // Scaled by g, so it fades with the on/off weight. In profile mode this g is D samples
+    // ahead of the one that built the drive input (see the post-drive blend above).
     if (pb_subGuardActive)
     {
         const float* g = subGuardSplitter.getWeights();

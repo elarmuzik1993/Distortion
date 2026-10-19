@@ -64,9 +64,9 @@ x86_64).
 
 **Distortion engine** — 7 clip types (Brutal Fuzz, Tube Overdrive, Bit Crusher,
 Tape Saturation, Transformer Saturation, Diode Clipper, Decimator), polyphase IIR
-oversampling at Off/2×/4×, a variable-slope Sub Guard crossover (50–200 Hz) that
-keeps your low end out of the distortion, parallel Dist Mix, and true bypass
-below 0.5% drive.
+oversampling at Off/2×/4×, a steep 8th-order Sub Guard crossover split around
+the drive (up to 200 Hz) that keeps your low end out of the distortion, parallel
+Dist Mix, and true bypass below 0.5% drive.
 
 **Free-draw graphic EQ** — draw a magnitude response directly on the scope and it
 becomes a 12-band peaking EQ (~30 Hz–16 kHz, ±12 dB) at the output stage. Fully

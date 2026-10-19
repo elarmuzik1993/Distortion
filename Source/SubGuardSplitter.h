@@ -33,8 +33,9 @@ namespace DSPConstants
     the split is heard.
 
     Every section runs in double, state and coefficients, from one coefficient writer
-    (writeSection) used by prepare and at runtime alike: at 4x oversampling a 60 Hz cutoff
-    is fc/fs below 1e-3, where float sections drift (section 3 of
+    (writeSection) used by prepare and at runtime alike. Sections pass float between them
+    (the band buffers are float); only the state and coefficients stay double: at 4x
+    oversampling a 60 Hz cutoff is fc/fs below 1e-3, where float sections drift (section 3 of
     docs/SUB_GUARD_TRANSITION_REVIEW.md).
 
     The splitter only splits. The processor drives the high band, recombines, and owns

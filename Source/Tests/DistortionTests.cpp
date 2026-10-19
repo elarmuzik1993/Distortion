@@ -5258,6 +5258,7 @@ void SubGuardBehaviourTests::runTest()
         runOffThenOnTest(distorted);
         runOnThenOffTest(distorted);
         runToggleTest(distorted);
+        runWarmSwitchOnTest(distorted);
         runReverseMidFadeTest(distorted);
         runBoundaryChatterTests(distorted);
         runLargeBufferSweepTest(distorted);
@@ -5506,6 +5507,105 @@ void SubGuardBehaviourTests::runToggleTest(bool distorted)
         logMessage("  " + label + ": " + stepText(toggled, baseline, kSubGuardOnOffRatio));
         expect(toggled <= kSubGuardOnOffRatio * baseline,
                label + ": " + stepText(toggled, baseline, kSubGuardOnOffRatio));
+    }
+}
+
+void SubGuardBehaviourTests::runWarmSwitchOnTest(bool distorted)
+{
+    // Step 7 keeps the splitter warm while Sub Guard is off, so switching on joins a
+    // crossover already settled on the input. The step tests above cannot see a cold one:
+    // a reset LR48 rings at 45-80 Hz, a thump that hardly moves the peak sample step. So
+    // this compares the sub band with a reference that never switched off. Both rigs draw
+    // the same seeded noise and input; the test goes on -> off (g reaches 0) -> on, and
+    // the gap is measured just after the 15 ms ramp.
+    //
+    // The warm design does not reach the reference either. While off, the post-drive half
+    // filters the full-range drive output, not the high band, and its input changes over
+    // the ramp, so it rings on the same poles a cold low-pass would. A cold start is
+    // also weighted by g, which is small while its transient is large. The margin is
+    // therefore about 10-13 dB, not orders of magnitude; the limits sit in between.
+    // Measured: 60 Hz crossover, 30 Hz sub, warm -53.4 dB, splitter reset when g leaves 0
+    // -40.7 dB; 40 Hz / 25 Hz, warm -36.9 dB, reset -26.2 dB.
+    //
+    // distMix 100 is logged, not asserted. There the post-drive half, warm on the
+    // distorted full-range sub while off, sits further from the reference than a zeroed
+    // one would: the reset measured within 4 dB of warm, and sometimes better.
+    struct Case { float crossover; double subHz; double limitDb; };
+    const Case cases[] = { { 60.0f, 30.0, -47.0 }, { 40.0f, 25.0, -31.5 } };
+
+    for (const auto& c : cases)
+    {
+        const juce::String label = "Sub Guard " + juce::String((int) c.crossover) + " -> 0 -> "
+                                 + juce::String((int) c.crossover) + " Hz, " + juce::String((int) c.subHz)
+                                 + " Hz + 1050 Hz" + variantText(distorted);
+        beginTest("Warm switch-on: " + label);
+
+        // 1050 Hz is a whole number of cycles in two sub cycles at both sub frequencies, so
+        // the measurement below rejects it exactly.
+        constexpr int blockSize = 256;
+        const std::vector<SubGuardTone> tones { { c.subHz, 0.5f }, { 1050.0, 0.5f / 3.0f } };
+        SubGuardToneRig test(blockSize, tones, distorted, c.crossover);
+        SubGuardToneRig reference(blockSize, tones, distorted, c.crossover);
+        test.runBlocks(c.crossover, 64);
+        reference.runBlocks(c.crossover, 64);
+
+        // About 46 ms off: three times the ramp, so g sits at 0 before switching back.
+        test.runBlocks(0.0f, 8);
+        reference.runBlocks(c.crossover, 8);
+
+        // Record both from the block that switches back on.
+        constexpr int recordedBlocks = 24;   // about 140 ms
+        std::vector<float> testOut, refOut;
+        testOut.reserve(recordedBlocks * blockSize);
+        refOut.reserve(recordedBlocks * blockSize);
+        for (int b = 0; b < recordedBlocks; ++b)
+        {
+            test.runBlock(c.crossover);
+            reference.runBlock(c.crossover);
+            const auto* t = test.lastBlock().getReadPointer(0);
+            const auto* r = reference.lastBlock().getReadPointer(0);
+            testOut.insert(testOut.end(), t, t + blockSize);
+            refOut.insert(refOut.end(), r, r + blockSize);
+        }
+        expect(test.allFinite && reference.allFinite, "Non-finite output: " + label);
+
+        // The DC blocker's state differs after the off stretch (off skips the crossover's
+        // phase shift), and its 45 ms decay would swamp the window. (1 - R z^-1) on both
+        // outputs cancels its pole exactly and scales the sub the same on both.
+        const float R = std::exp(-2.0f * juce::MathConstants<float>::pi * DSPConstants::DC_BLOCKER_CUTOFF_HZ
+                                 / static_cast<float>(SubGuardToneRig::sampleRate));
+        for (auto* out : { &testOut, &refOut })
+            for (size_t i = out->size() - 1; i > 0; --i)
+                (*out)[i] -= R * (*out)[i - 1];
+
+        // Two sub cycles from 20 ms after the switch reaches the output (the ramp is over),
+        // Hann-windowed: the gap at the sub frequency relative to the reference's sub.
+        const int start = test.processor.getLatencySamples()
+                        + juce::roundToInt(0.020 * SubGuardToneRig::sampleRate);
+        const int length = juce::roundToInt(2.0 * SubGuardToneRig::sampleRate / c.subHz);
+        jassert(start + length <= static_cast<int>(testOut.size()));
+        std::vector<float> diff(static_cast<size_t>(length)), ref(static_cast<size_t>(length));
+        for (int i = 0; i < length; ++i)
+        {
+            const auto n = static_cast<size_t>(start + i);
+            const float w = 0.5f - 0.5f * std::cos(juce::MathConstants<float>::twoPi * static_cast<float>(i) / static_cast<float>(length));
+            diff[static_cast<size_t>(i)] = w * (testOut[n] - refOut[n]);
+            ref[static_cast<size_t>(i)] = w * refOut[n];
+        }
+        const double refAmp = goertzelAmplitude(ref.data(), length, c.subHz, SubGuardToneRig::sampleRate);
+        const double diffAmp = goertzelAmplitude(diff.data(), length, c.subHz, SubGuardToneRig::sampleRate);
+        const double gapDb = amplitudeDb(diffAmp / juce::jmax(refAmp, 1.0e-12));
+
+        const juce::String numbers = label + ": sub-band gap to a never-off reference from 20 ms after switch-on, "
+            + juce::String(gapDb, 1) + " dB re the sub";
+        if (distorted)
+        {
+            logMessage("  logged only: " + numbers);
+            continue;
+        }
+        const juce::String verdict = numbers + " (limit " + juce::String(c.limitDb, 1) + " dB)";
+        logMessage("  " + verdict);
+        expect(gapDb < c.limitDb, verdict);
     }
 }
 

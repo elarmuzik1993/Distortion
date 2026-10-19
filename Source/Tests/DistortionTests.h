@@ -491,6 +491,7 @@ private:
     void runOffThenOnTest(bool distorted);
     void runOnThenOffTest(bool distorted);
     void runToggleTest(bool distorted);
+    void runWarmSwitchOnTest(bool distorted);
     void runReverseMidFadeTest(bool distorted);
     void runBoundaryChatterTests(bool distorted);
     void runLargeBufferSweepTest(bool distorted);
