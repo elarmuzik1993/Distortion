@@ -3924,9 +3924,9 @@ void SubGuardCrossoverFlatnessTest::runTest()
     // the distortion stage as an identity (distMix = 0, so the high band stays linear)
     // and compare the on-crossover tone level to the same chain with Sub Guard off.
     //
-    // Before the fix: LR12 summed same-polarity -> deep null at fc; LR18 used Q=0.5
-    // (coincident poles) -> ~6dB dip. Both now sum flat (LR12 inverts the high band,
-    // LR18 is a true 3rd-order Butterworth with Q=1.0).
+    // Once: LR12 summed same-polarity -> deep null at fc; LR18 used Q=0.5 (coincident
+    // poles) -> ~6dB dip. Since step 6 one LR48 split around the drive covers every
+    // frequency; with the drive an identity it sums flat.
     const double sr = 44100.0;
     const int blockSize = 512;
     const float amp = 0.1f;  // low enough that the soft clipper / limiter stay linear
@@ -3992,37 +3992,34 @@ void SubGuardCrossoverFlatnessTest::runTest()
         return count > 0 ? std::sqrt(sumSquares / static_cast<float>(count)) : 0.0f;
     };
 
-    struct Case { float fc; const char* order; };
-    const Case cases[] = { { 60.0f, "LR24" }, { 100.0f, "LR18" }, { 150.0f, "LR12" } };
-
-    for (const auto& c : cases)
+    for (const float fc : { 60.0f, 100.0f, 150.0f, 200.0f })
     {
-        beginTest(juce::String("Crossover flat at ") + juce::String(c.fc, 0) + " Hz (" + c.order + ")");
+        const auto c = juce::String(fc, 0) + " Hz";
+        beginTest("Crossover flat at " + c);
 
-        const float offRms    = measureOutputRms(0.0f, c.fc);   // Sub Guard off (baseline)
-        const float activeRms = measureOutputRms(c.fc, c.fc);   // Sub Guard on, tone at fc
+        const float offRms    = measureOutputRms(0.0f, fc);   // Sub Guard off (baseline)
+        const float activeRms = measureOutputRms(fc, fc);     // Sub Guard on, tone at fc
 
         expect(offRms > 1.0e-4f, "Baseline (Sub Guard off) output should be non-trivial");
 
         const float ratioDb = juce::Decibels::gainToDecibels(activeRms / juce::jmax(offRms, 1.0e-9f));
 
-        // A flat-summing crossover keeps the on-crossover tone within ~3dB of the
-        // bypassed level. The old LR12 notch was ~ -inf; the old LR18 dip was ~ -6dB.
-        expect(ratioDb > -3.0f,
-               juce::String("Crossover sum dipped at fc (") + c.order + "): "
-               + juce::String(ratioDb, 2) + " dB vs Sub Guard off");
+        // A flat-summing crossover keeps the on-crossover tone at the bypassed level.
+        // The old LR12 notch was ~ -inf; the old LR18 dip was ~ -6dB.
+        logMessage("  crossover at " + c + ": " + juce::String(ratioDb, 3) + " dB vs Sub Guard off");
+        expect(std::abs(ratioDb) < 0.1f,
+               "Crossover sum not flat at fc (" + c + "): " + juce::String(ratioDb, 3) + " dB vs Sub Guard off");
     }
 }
 
-void SubGuardOrderCrossfadeTest::runTest()
+void SubGuardSweepTest::runTest()
 {
-    // Sweeping the crossover frequency moves through the slope-order zones (LR24 ->
-    // LR18 at 92 Hz, LR18 -> LR12 at 142 Hz). A hard order switch starts the incoming
-    // bank from stale state and jumps the magnitude/phase, producing a click. The order
-    // crossfade should keep the output smooth. We drive a clean low sine (distortion as
-    // identity so the output slew is dominated by the tone itself) and assert the peak
-    // sample-to-sample step during the sweep stays small.
-    beginTest("Click-free crossover frequency sweep across order boundaries");
+    // Sweeping the crossover frequency once moved through the slope-order zones (LR24 ->
+    // LR18 at 92 Hz, LR18 -> LR12 at 142 Hz), where a hard order switch clicked. Since
+    // step 6 one LR48 covers every frequency, and the sweep must still stay smooth. We
+    // drive a clean low sine (distortion as identity so the output slew is dominated by
+    // the tone itself) and assert the peak sample-to-sample step during the sweep.
+    beginTest("Click-free crossover frequency sweep, 60 -> 200 -> 60 Hz");
 
     const double sr = 44100.0;
     const int blockSize = 256;
@@ -4077,7 +4074,7 @@ void SubGuardOrderCrossfadeTest::runTest()
     float baselineStep = 0.0f;
     for (int b = 0; b < 8; ++b) baselineStep = std::max(baselineStep, runBlock(60.0f));
 
-    // Sweep up across both order boundaries, then back down, a small step per block.
+    // Sweep up across the old order boundaries, then back down, a small step per block.
     float sweepStep = 0.0f;
     const int sweepBlocks = 80;
     for (int b = 0; b <= sweepBlocks; ++b)
@@ -4091,13 +4088,116 @@ void SubGuardOrderCrossfadeTest::runTest()
         sweepStep = std::max(sweepStep, runBlock(fc));
     }
 
-    juce::ignoreUnused(baselineStep);
-
-    // A click from a hard order switch is on the order of the band amplitude (~0.05-0.1).
-    // The crossfade should keep the sweep's peak step close to the fixed-crossover slew.
-    expect(sweepStep < 0.02f,
+    // A click from a hard order switch was on the order of the band amplitude (~0.05-0.1).
+    // The sweep's peak step must stay close to the fixed-crossover slew.
+    expect(sweepStep <= 1.5f * baselineStep,
            "Crossover frequency sweep produced a discontinuity (peak step "
            + juce::String(sweepStep, 5) + ", baseline " + juce::String(baselineStep, 5) + ")");
+}
+
+void SubGuardSplitterTest::runTest()
+{
+    // Runs a signal through the splitter alone in 512-sample blocks: process(), then the
+    // post-drive half on the high band, with no stage between. Returns low, high.
+    auto split = [](SubGuardSplitter& splitter, const std::vector<float>& in,
+                    std::vector<float>& low, std::vector<float>& high)
+    {
+        constexpr int block = 512;
+        low.assign(in.size(), 0.0f);
+        high.assign(in.size(), 0.0f);
+        juce::AudioBuffer<float> buf(1, block);
+        for (size_t done = 0; done < in.size(); done += block)
+        {
+            const int n = static_cast<int>(std::min<size_t>(block, in.size() - done));
+            buf.copyFrom(0, 0, in.data() + done, n);
+            juce::dsp::AudioBlock<float> view(buf);
+            if (! splitter.process(view.getSubBlock(0, static_cast<size_t>(n)), 1, static_cast<size_t>(n)))
+                return false;
+            auto highView = juce::dsp::AudioBlock<float>(splitter.getHighBand()).getSubBlock(0, static_cast<size_t>(n))
+                                                                                  .getSubsetChannelBlock(0, 1);
+            splitter.processPostDrive(highView);
+            std::copy_n(splitter.getLowBand().getReadPointer(0), n, low.begin() + static_cast<long>(done));
+            std::copy_n(splitter.getHighBand().getReadPointer(0), n, high.begin() + static_cast<long>(done));
+        }
+        return true;
+    };
+
+    auto makeSplitter = [](SubGuardSplitter& splitter, double rate, float fc)
+    {
+        juce::dsp::ProcessSpec spec { rate, 512, 1 };
+        splitter.prepare(spec, fc, 512);
+        splitter.startTracking(fc, rate / 512.0);
+        splitter.setTargetFrequency(fc);
+    };
+
+    // Flatness: the impulse response of low + high is an allpass's, so its spectrum has
+    // unit magnitude everywhere. 4x oversampled 44.1 kHz, as the plugin runs by default.
+    {
+        constexpr double rate = 44100.0 * 4.0;
+        constexpr int fftOrder = 17;   // 131072 samples, 0.74 s: the allpass tail has decayed
+        constexpr int fftSize = 1 << fftOrder;
+        juce::dsp::FFT fft(fftOrder);
+
+        for (const float fc : { 60.0f, 100.0f, 150.0f, 200.0f })
+        {
+            const auto label = juce::String(fc, 0) + " Hz";
+            beginTest("LR48 sums flat, 20 Hz - 20 kHz, crossover at " + label);
+
+            SubGuardSplitter splitter;
+            makeSplitter(splitter, rate, fc);
+            std::vector<float> impulse(fftSize, 0.0f), low, high;
+            impulse[0] = 1.0f;
+            expect(split(splitter, impulse, low, high), "Split ran");
+
+            std::vector<float> spectrum(2 * fftSize, 0.0f);
+            for (int i = 0; i < fftSize; ++i)
+                spectrum[static_cast<size_t>(i)] = low[static_cast<size_t>(i)] + high[static_cast<size_t>(i)];
+            fft.performFrequencyOnlyForwardTransform(spectrum.data());
+
+            float worstDb = 0.0f;
+            for (int bin = static_cast<int>(20.0 * fftSize / rate); bin <= static_cast<int>(20000.0 * fftSize / rate); ++bin)
+            {
+                const float db = juce::Decibels::gainToDecibels(spectrum[static_cast<size_t>(bin)], -200.0f);
+                if (std::abs(db) > std::abs(worstDb))
+                    worstDb = db;
+            }
+            logMessage("  " + label + ": worst deviation " + juce::String(worstDb, 5) + " dB");
+            expect(std::abs(worstDb) < 0.01f, "LR48 sum not flat at " + label + ": " + juce::String(worstDb, 5) + " dB");
+        }
+    }
+
+    // Numerics: 192 kHz x 4, a step of 0.5. The low band settles to the input level and
+    // the high band to zero, with nothing non-finite or growing, down to a 1 Hz crossover.
+    // The 1-25 Hz cases are parked for 10 s, as automation resting there would be.
+    {
+        constexpr double rate = 192000.0 * 4.0;
+        for (const float fc : { 1.0f, 5.0f, 25.0f, 60.0f, 200.0f })
+        {
+            const auto label = juce::String(fc, 0) + " Hz at 192 kHz x 4";
+            beginTest("Settles and stays finite, crossover at " + label);
+
+            SubGuardSplitter splitter;
+            makeSplitter(splitter, rate, fc);
+            const double seconds = fc <= 25.0f ? 10.0 : 1.0;
+            std::vector<float> step(static_cast<size_t>(seconds * rate), 0.5f), low, high;
+            expect(split(splitter, step, low, high), "Split ran");
+
+            bool finite = true;
+            float peak = 0.0f;
+            for (size_t i = 0; i < low.size(); ++i)
+            {
+                finite = finite && std::isfinite(low[i]) && std::isfinite(high[i]);
+                peak = std::max({ peak, std::abs(low[i]), std::abs(high[i]) });
+            }
+            const float lowEnd = low.back(), highEnd = high.back();
+            logMessage("  " + label + ": low " + juce::String(lowEnd, 6) + ", high " + juce::String(highEnd, 6)
+                       + ", peak " + juce::String(peak, 4));
+            expect(finite, "Non-finite output: " + label);
+            expect(peak < 1.0f, "Band grew past the input: " + label + " (peak " + juce::String(peak, 4) + ")");
+            expectWithinAbsoluteError(lowEnd, 0.5f, 1.0e-4f, "Low band settles to the input: " + label);
+            expectWithinAbsoluteError(highEnd, 0.0f, 1.0e-4f, "High band settles to zero: " + label);
+        }
+    }
 }
 
 void RTCleanOversamplingTest::runTest()
@@ -4345,7 +4445,7 @@ void CoefficientPropagationTest::runTest()
     {
         // Direct verification: write changes through .state must mutate the
         // Coefficients object the per-channel Filter is bound to. Inspect raw
-        // coefficients on the first LR24 low-pass (@ 60 Hz) and confirm they
+        // coefficients on the first LR48 low-pass section (@ 60 Hz) and confirm they
         // differ from the same filter rewritten for a different frequency.
         // Bypass the parameter smoother (via friend access) so the coefficient
         // update fires on the first block at the new target frequency.
@@ -4370,8 +4470,8 @@ void CoefficientPropagationTest::runTest()
             // Single processBlock to fire the coefficient update path.
             auto warm = generateSineWave(1000.0, 48000.0, 512, 0.1f);
             processor.processBlock(warm, midi);
-            auto* coeffs = processor.subGuardSplitter.lr24Low1.state->getRawCoefficients();
-            return std::array<float, 5>{ coeffs[0], coeffs[1], coeffs[2], coeffs[3], coeffs[4] };
+            const auto& k = processor.subGuardSplitter.lowCoeffs[0];
+            return std::array<float, 5>{ (float) k.b0, (float) k.b1, (float) k.b2, (float) k.a1, (float) k.a2 };
         };
 
         const auto c60  = snapshotLP1(60.0f);
@@ -5200,17 +5300,15 @@ void SubGuardPendingTests::runCleanSubTests()
         return 20.0 * std::log10(r2 / std::sqrt(1.0 + r2 * r2));
     };
 
-    struct Case { float crossover; double subHz; bool asserted; bool cleanBoost = false; bool levelPending = false; };
+    struct Case { float crossover; double subHz; bool asserted; bool cleanBoost = false; };
     // 60 Hz with a 45 Hz sub is section 2a's own row; 45 Hz sits too close to that
     // crossover to be clean by any filter (C3), so it is logged for comparison only.
     // Clean Boost (C4) lifts and shelves the high band only, so the sub stays put. At
-    // 60 Hz the 30 Hz sub still leaks into the high band at about -24 dB, and the 6 dB
-    // lift on that leak leaves the sum about 0.4 dB loud (it was over 5 dB loud while the
-    // lift hit the whole input). Step 6's post-drive high-pass cuts the leak, so that
-    // level stays pending until then.
+    // 60 Hz the 30 Hz sub leaks into the high band before the drive, and the 6 dB lift on
+    // that leak left the sum 0.4 dB loud until step 6's post-drive high-pass cut it.
     const Case cases[] = { { 150.0f, 45.0, true }, { 100.0f, 45.0, true },
                            { 60.0f, 30.0, true },  { 60.0f, 45.0, false },
-                           { 150.0f, 45.0, true, true }, { 60.0f, 30.0, true, true, true } };
+                           { 150.0f, 45.0, true, true }, { 60.0f, 30.0, true, true } };
 
     for (const auto& c : cases)
     {
@@ -5272,13 +5370,11 @@ void SubGuardPendingTests::runCleanSubTests()
             // Step 4 (C1) runs the transient tamer on the high band only, so the sub
             // leaves at its input level; asserted always. It measured -3.2 to -4.9 dB
             // while the tamer ducked the full-range input.
-            const bool levelOk = std::abs(levelDb - expectedDb) <= 0.3;
-            if (c.levelPending && ! withMids)
-                expectPending(levelOk, "sub level within 0.3 dB: " + numbers);
-            else
-                expect(levelOk, "sub level within 0.3 dB: " + numbers);
+            expect(std::abs(levelDb - expectedDb) <= 0.3, "sub level within 0.3 dB: " + numbers);
             if (withMids)
-                expectPending(imDbfs < -80.0, "product below the crossover under -80 dBFS: " + numbers);
+                // Step 6 (C2): the crossover's second half runs after the drive and cuts
+                // what it creates below the crossover. -37 to -48 dBFS before; asserted always.
+                expect(imDbfs < -80.0, "product below the crossover under -80 dBFS: " + numbers);
         }
     }
 }
@@ -5301,7 +5397,8 @@ void SubGuardStateLoadTest::runStateLoadTests(bool distorted)
     // two outputs should then match, and the gap after the load is the stale bank's own
     // burst. LR24 at 60 Hz, which the load does reset, is the control.
     struct Case { float fc; const char* order; };
-    const Case cases[] = { { 60.0f, "LR24" }, { 150.0f, "LR12" }, { 100.0f, "LR18" } };
+    // The orders are the banks these frequencies used before step 6; one LR48 since.
+    const Case cases[] = { { 60.0f, "was LR24" }, { 150.0f, "was LR12" }, { 100.0f, "was LR18" } };
 
     for (const auto& c : cases)
     {
@@ -5395,8 +5492,8 @@ void SubGuardPendingTests::runOnThenOffTest(bool distorted)
 
 void SubGuardPendingTests::runReverseMidFadeTest(bool distorted)
 {
-    // F3: the smoothed crossover crosses 92 Hz (LR24 -> LR18 crossfade starts) and comes
-    // back on the next block, inside the 10 ms fade. The retarget then resets the bank
+    // F3: the smoothed crossover crosses 92 Hz (where an LR24 -> LR18 crossfade used to
+    // start, before step 6) and comes back on the next block, inside what was the 10 ms fade. The retarget then resets the bank
     // carrying live audio and runs it twice over the block. 64-sample blocks put several
     // blocks inside one fade. The target goes 90 -> 100 Hz until the smoothed value crosses
     // 92 Hz, then to 80 Hz: aiming below the start pulls the smoothed value back under
@@ -5427,8 +5524,9 @@ void SubGuardPendingTests::runReverseMidFadeTest(bool distorted)
     // Without a crossing there is no reversal, and the test would pass vacuously.
     expect(upBlocks < 4 * steps, "The smoothed crossover never crossed 92 Hz: " + label);
     expect(rig.allFinite, "Non-finite output or filter state after the reversal: " + label);
-    expectPending(after <= kSubGuardStepRatio * baseline,
-                  label + " (crossed after " + juce::String(upBlocks) + " blocks): " + stepText(after, baseline));
+    // Passes since step 6 (one LR48 at every frequency, no order crossfade); asserted always.
+    expect(after <= kSubGuardStepRatio * baseline,
+           label + " (crossed after " + juce::String(upBlocks) + " blocks): " + stepText(after, baseline));
 
     // Control: the same crossing with no reversal, so one complete crossfade. What it
     // shows is the incoming bank starting cold (F4), not the reversal.
@@ -5443,9 +5541,9 @@ void SubGuardPendingTests::runReverseMidFadeTest(bool distorted)
 
 void SubGuardPendingTests::runBoundaryChatterTests(bool distorted)
 {
-    // F3/F5: automation wobbling across an order boundary every block or two. The smoothed
-    // crossover then hovers on the boundary, so the order flips back and forth with no
-    // hysteresis and each flip restarts a crossfade.
+    // F3/F5: automation wobbling across a former order boundary every block or two. Before
+    // step 6 the smoothed crossover then hovered on the boundary, so the order flipped back
+    // and forth with no hysteresis and each flip restarted a crossfade.
     for (float boundary : { 92.0f, 142.0f })
     {
         for (int period : { 1, 2 })
@@ -5469,7 +5567,8 @@ void SubGuardPendingTests::runBoundaryChatterTests(bool distorted)
                 chatter = std::max(chatter, rig.runBlock(((b / period) % 2 == 0) ? hi : lo));
 
             expect(rig.allFinite, "Non-finite output: " + label);
-            expectPending(chatter <= kSubGuardStepRatio * baseline, label + ": " + stepText(chatter, baseline));
+            // Passes since step 6 (no order zones); asserted always.
+            expect(chatter <= kSubGuardStepRatio * baseline, label + ": " + stepText(chatter, baseline));
         }
     }
 }

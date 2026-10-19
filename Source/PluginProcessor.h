@@ -416,7 +416,7 @@ private:
     float manualDCBlockerPrevOutput[2] = { 0.0f, 0.0f };
     float dcBlockerR = 0.9995f;  // ~3.5Hz at 44.1kHz; recomputed per sample rate
 
-    // Sub Guard crossover: the slope banks, their order crossfade, the per-block
+    // Sub Guard crossover: the LR48 sections (split around the drive), the per-block
     // frequency smoother and the low/high band buffers (oversampled domain).
     SubGuardSplitter subGuardSplitter;
 

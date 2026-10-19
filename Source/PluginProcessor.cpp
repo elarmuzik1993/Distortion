@@ -793,8 +793,8 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // Free-draw graphic EQ — output-stage peaking bank at BASE rate.
     prepareEqBands(baseSpec);
 
-    // Sub Guard variable-slope crossover (oversampled domain): the slope banks and
-    // the band buffers, then the per-block frequency smoother and order state.
+    // Sub Guard crossover (oversampled domain): the LR48 sections and the band
+    // buffers, then the per-block frequency smoother.
     const float sgFreq = subGuardFreqParam ? subGuardFreqParam->load() : DSPConstants::SUBGUARD_FREQ_DEFAULT;
     subGuardSplitter.prepare(spec, sgFreq, worstCaseOversampledBlockSize);
     // Block rate = baseSampleRate / blockSize (the smoother advances once per block).
@@ -1175,7 +1175,7 @@ void PluginProcessor::rebuildOversampling(double sampleRate, int samplesPerBlock
     emphasisFilter.reset();
     deEmphasisFilter.reset();
 
-    // Re-prepare the Sub Guard banks and reallocate the band buffers at the new
+    // Re-prepare the Sub Guard crossover and reallocate the band buffers at the new
     // oversampled rate and block size.
     const size_t expectedOversampledSize = static_cast<size_t>(currentBlockSize) * oversamplingFactor;
     const size_t latSamples = oversampling
@@ -3266,7 +3266,7 @@ bool PluginProcessor::applySubGuardSplit()
     // === SUB GUARD OFF: Full-range distortion (no band-split) ===
     if (!pb_subGuardActive)
     {
-        subGuardSplitter.setInactive();   // next ON snaps to the target order (no spurious crossfade)
+        subGuardSplitter.setInactive();   // the next ON block reports justActivated()
         // Per-sample LFO phase increment (oversampled rate: divide by oversamplingFactor)
         const float lfoOversampledPhaseInc = pb_lfoPhaseIncrement / static_cast<float>(oversamplingFactor);
 
@@ -3290,10 +3290,9 @@ bool PluginProcessor::applySubGuardSplit()
         return true;
     }
 
-    // === SUB GUARD ACTIVE: Variable-slope clean low + Distorted high ===
+    // === SUB GUARD ACTIVE: clean low + Distorted high (LR48, split around the drive) ===
     subGuardSplitter.setTargetFrequency(pb_subGuardFreq);
-    const bool splitOk = subGuardSplitter.process(pb_oversampledBlock, pb_numChannels, pb_numSamples,
-                                                  pb_oversampledSR);
+    const bool splitOk = subGuardSplitter.process(pb_oversampledBlock, pb_numChannels, pb_numSamples);
 
     // OFF -> ON: no stale low band from the last time Sub Guard ran.
     if (subGuardSplitter.justActivated())
@@ -3682,6 +3681,18 @@ void PluginProcessor::applyAutoGainAndISP(juce::AudioBuffer<float>& buffer)
         }
     }
 
+    // ========== SUB GUARD: second half of the crossover on the high band ==========
+    // The high band's second high-pass half, after all its nonlinear stages (drive,
+    // waveshaper, LA-2A, soft clipper), so the drive's products below the crossover are
+    // cut and low + high still sums to an LR48 crossover. The LA-2A therefore sees sub
+    // products this then removes; putting it earlier would let the later stages create
+    // new ones. The high-pass can lift peaks back over the soft clipper's ceiling; the
+    // output limiter still bounds the output. In profile mode this runs on the island's
+    // output, the domain the low band (delayed by the same D) is added back in.
+    if (pb_subGuardActive)
+        subGuardSplitter.processPostDrive(pb_oversampledBlock.getSubBlock(0, pb_numSamples)
+                                                             .getSubsetChannelBlock(0, pb_numChannels));
+
     // ========== SUB GUARD: Phase-match low branch to the high branch's tone filter ==========
     // Apply an identical tone LP (with its own state) to the clean low band so both
     // bands share the same magnitude/phase response at the recombine sum. Gated on the
@@ -3694,10 +3705,9 @@ void PluginProcessor::applyAutoGainAndISP(juce::AudioBuffer<float>& buffer)
 
     // ========== SUB GUARD: Add clean low band back after all nonlinear processing ==========
     // The clean sub bypasses: auto-gain, waveshaper, compressor, and soft clipper
-    // (tone filter is mirrored above for phase coherence at recombine). The high band
-    // already carries the LR12 flat-sum polarity (baked in by SubGuardSplitter), so the
-    // recombine is always low + high; at DC HP->0 so the sum reduces to the clean low
-    // band, keeping absolute bass polarity in phase with the input.
+    // (tone filter is mirrored above for phase coherence at recombine). An LR48 sums
+    // flat with both bands in phase, so the recombine is low + high; at DC HP->0 so the
+    // sum reduces to the clean low band, keeping absolute bass polarity with the input.
     if (pb_subGuardActive)
     {
         for (size_t channel = 0; channel < pb_numChannels; ++channel)
@@ -3885,8 +3895,7 @@ void PluginProcessor::resetDSPState()
     inputFilter.reset();
     shapePre.reset();
     shapePost.reset();
-    // Every Sub Guard bank (not just the active order), any order crossfade, and the
-    // coefficient cache; the next active block re-seeds its order (OFF->ON snap path).
+    // Every Sub Guard section (both halves of both bands) and the coefficient cache.
     subGuardSplitter.reset();
     if (toneFilter.state)
         toneFilter.reset();
@@ -4084,7 +4093,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
             0.1f,  // 0.1 Hz step
             0.5f   // Logarithmic skew for better low-end control
         ),
-        DSPConstants::SUBGUARD_FREQ_DEFAULT));  // Default 60 Hz (LR24 sub-preserving)
+        DSPConstants::SUBGUARD_FREQ_DEFAULT));  // Default 60 Hz (sub-preserving)
 
     params.push_back(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID{ "clipType", 1 },

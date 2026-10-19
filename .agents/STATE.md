@@ -19,7 +19,11 @@
    The product below the crossover rose 4-11 dB (step 6 removes it). Owner listens, then merge.
    Step 5 on `fix/subguard-boost-high-band` (stacked on step 4): Clean Boost on the high band;
    sub with Boost +3.5..+5.7 dB -> within 0.4 dB. Owner asked to go on without listening
-   (2026-10-19); listen before release instead. Then steps 6, 7.
+   (2026-10-19); listen before release instead.
+   Step 6 on `fix/subguard-lr48-split` (stacked on step 5): one LR48 split around the drive,
+   double precision; zones and crossfade gone. Products below the crossover ~-37 -> below
+   -110 dBFS. Presets at 100-150 Hz not re-voiced (owner, by ear); "150Hz AGGRO" label
+   stale. Then step 7 (on/off weight `g`).
 3. Owner, Release build: clip column (PROFILE ends step, middle opens menu; keep the small
    clip-type font?), Settings > Legacy Filter (v2.3 Low/Band Pass session opens in Legacy, same
    sound), profile browser (multi-load, wrap, card, bubble, moved file, Recall Profile), Shape.
@@ -45,5 +49,4 @@
 - Set `bugReports="0"` in settings.xml before a local pluginval of a Release build.
 - `pkill -f` on the standalone's path kills the calling shell; kill by PID.
 - Host bypass freezes the island and delay lines; IIR ring after a bypass gap.
-- Sub Guard coefficients: float in `prepareToPlay`, double at runtime; differ at 60 Hz, 4x.
 - Pending F1 check at `distMix` 100 passes narrowly (1.95x vs 2.0x).

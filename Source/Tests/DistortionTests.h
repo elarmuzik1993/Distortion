@@ -274,9 +274,9 @@ public:
     void runTest() override;
 };
 
-// Verifies the Sub Guard band-split sums flat (no notch/dip) at the crossover for
-// every filter order: LR12 (2nd-order LR, needs the high-band polarity flip),
-// LR18 (3rd-order Butterworth, Q=1.0), and LR24 (4th-order LR).
+// Verifies the Sub Guard band-split sums flat (no notch/dip) at the crossover through
+// processBlock, at the old zone frequencies (60, 100, 150 Hz). Before step 6 these were
+// the LR24, LR18 and LR12 banks; now one LR48 split around the drive.
 class SubGuardCrossoverFlatnessTest : public juce::UnitTest
 {
 public:
@@ -284,12 +284,24 @@ public:
     void runTest() override;
 };
 
-// Verifies that sweeping the Sub Guard crossover frequency across the slope-order
-// boundaries (92 Hz, 142 Hz) is click-free thanks to the order crossfade.
-class SubGuardOrderCrossfadeTest : public juce::UnitTest
+// Verifies that sweeping the Sub Guard crossover frequency 60 -> 200 -> 60 Hz is
+// click-free. It once guarded the order crossfade at the old zone boundaries (92 Hz,
+// 142 Hz); since step 6 there is one LR48 at every frequency.
+class SubGuardSweepTest : public juce::UnitTest
 {
 public:
-    SubGuardOrderCrossfadeTest() : UnitTest("Sub Guard Order Crossfade", TestCategories::DSP) {}
+    SubGuardSweepTest() : UnitTest("Sub Guard Sweep", TestCategories::DSP) {}
+    void runTest() override;
+};
+
+// SubGuardSplitter on its own (step 6): low + high, with the post-drive half applied and
+// nothing between, is an LR48 sum, flat to 0.01 dB from 20 Hz to 20 kHz at 60-200 Hz; and
+// the double-precision sections stay finite and settle at 192 kHz x 4, down to a 1 Hz
+// crossover (true bypass skips Sub Guard at drive 0, so processBlock cannot show this).
+class SubGuardSplitterTest : public juce::UnitTest
+{
+public:
+    SubGuardSplitterTest() : UnitTest("Sub Guard Splitter", TestCategories::DSP) {}
     void runTest() override;
 };
 
@@ -461,12 +473,11 @@ public:
     void runTest() override;
 };
 
-/** Sub Guard behaviour the current code gets wrong: transitions that click (stale
-    banks on OFF -> ON, the hard ON -> OFF switch, an order crossfade
-    reversed mid-fade, boundary chatter, a large-buffer sweep) and a sub that does not
-    leave clean (the distortion products below the crossover). The large-buffer sweeps
-    (F6) pass today, and the clean sub's level passes since the transient tamer moved to
-    the high band (step 4, C1); both are asserted always.
+/** Sub Guard behaviour, pending until fixed: the on/off transitions that click (stale
+    state on OFF -> ON, the hard ON -> OFF switch), fixed by step 7's on/off weight.
+    Everything else here passes and is asserted always: the clean sub (steps 4-6: level,
+    and the products below the crossover), the reversal mid-fade and boundary chatter
+    (step 6 removed the order zones), and the large-buffer sweeps (F6).
     Every measurement is always logged; the fixed-behaviour assertions only run with
     DISTORTION_PENDING_TESTS=1, so the default run stays green until each fix lands and
     moves its test into an always-on class. */
@@ -491,8 +502,9 @@ private:
 };
 
 /** F8: a state load (preset or session) resets every Sub Guard bank, so the first blocks
-    after it match a processor whose banks were all reset, at each order (LR24 60 Hz,
-    LR18 100 Hz, LR12 150 Hz). Moved out of SubGuardPendingTests once fixed. */
+    after it match a processor whose banks were all reset, at the old zone frequencies
+    (60, 100 and 150 Hz, once the LR24, LR18 and LR12 banks; one LR48 since step 6).
+    Moved out of SubGuardPendingTests once fixed. */
 class SubGuardStateLoadTest : public juce::UnitTest
 {
 public:
@@ -1208,7 +1220,8 @@ inline void registerAllTests()
     static RTCleanPreHighPassTest rtCleanPreHighPassTest;
     static RTCleanSubGuardTest rtCleanSubGuardTest;
     static SubGuardCrossoverFlatnessTest subGuardCrossoverFlatnessTest;
-    static SubGuardOrderCrossfadeTest subGuardOrderCrossfadeTest;
+    static SubGuardSweepTest subGuardSweepTest;
+    static SubGuardSplitterTest subGuardSplitterTest;
     static RTCleanOversamplingTest rtCleanOversamplingTest;
     static RTCleanToneSweepTest rtCleanToneSweepTest;
     static RTCleanSampleRateDriftTest rtCleanSampleRateDriftTest;
