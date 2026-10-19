@@ -1,7 +1,7 @@
 # Sub Guard: transition artifacts and a clean sub
 
-Status: static read of the code. Nothing here has been built, run, or reproduced.
-Every finding is a hypothesis with a concrete mechanism and a proposed test. The
+Status: sections 1-4 are a static read of the code; nothing there has been reproduced.
+Every finding in section 2 is a hypothesis with a concrete mechanism and a proposed test. The
 first job is to turn each one into a failing test, or to disprove it. A review pass
 re-checked the claims against `main` at `d924b6d`; that pass added F8 and corrected the
 trigger analysis for F2, F3 and F5. Section 2a is different: it is measured, not read.
@@ -367,21 +367,23 @@ and the effect of Clean Boost.
 Move the Sub Guard state and its per-block processing into its own class with a small
 interface (prepare, set target frequency, process block, reset). That contains the eight
 state variables and the `sgWasActive` handshake with `resetDSPState`. Do this after the
-regression tests are in and before the larger fixes; see section 5, step 5.
+regression tests are in and before the larger fixes; see section 5, step 3.
 
 ## 5. Implementation order
 
 Two goals: the sub below the crossover leaves exactly as it came in (section 2a), and
 nothing clicks when Sub Guard changes (section 2). The order follows dependencies, not
-the severity ranking.
+the severity ranking. A review of this plan (2026-10-19) added the compatibility decision,
+moved the extraction ahead of the sound changes, and tightened steps 4, 6 and 7; the
+reasons are given where they apply.
 
 ### The decision that shapes the rest: one crossover, split around the drive
 
 C2 needs a high-pass *after* the drive as well as before it. Adding one on top of today's
 filters would break the flat sum. A Linkwitz-Riley crossover is two identical filters in
 series, so the pair can be split instead: one half before the drive, one half after.
-With the drive at zero the sum is still exactly an LR crossover (flat), and products
-below the crossover are cut by the second half.
+With nothing nonlinear between them the sum is still exactly an LR crossover (flat), and
+products below the crossover are cut by the second half.
 
 That pairing works cleanly for one even order. **Decided (owner, 2026-10-19): LR48 (8th
 order) at every frequency.** The high path becomes a 4th-order Butterworth high-pass before the
@@ -394,8 +396,8 @@ stays flat, but the owner should judge a kick's punch by ear.
 
 It also removes the slope switching (LR24/LR18/LR12 by zone), and with it F3, F4, F5, F7
 and the crossfade code, plus F8's two extra banks. The price is the "AGGRO" character:
-today 150 Hz uses a gentle slope that lets more low-mids into the drive on purpose. If
-The owner accepted losing it. If it is wanted back, it returns as its own control (a
+today 150 Hz uses a gentle slope that lets more low-mids into the drive on purpose. The
+owner accepted losing it. If it is wanted back, it returns as its own control (a
 soft/sharp switch), never as automatic zones: the zones are what cause the transition
 bugs. The knob's snap points (60, 100, 150 Hz) stay.
 
@@ -404,53 +406,109 @@ clean split), then warm banks plus the F3/F5 fixes from the earlier plan. It is 
 and still doesn't fix C2 at LR18.
 
 **On/off as a weight, not a glide** (F1, F2): one smoothed weight `g` (0 = off, 1 = on)
-applied wherever the low band is used. The drive input becomes `(1 − g)·x + g·high`, and
-the low band is subtracted, tone-filtered and added back scaled by `g`. At `g = 0` this is
-the OFF path, at `g = 1` the ON path, continuous between, with one drive pass per block.
-Today the low band is used in four places: the auto-gain reference and the subtraction in
-`processBlock`, and `toneFilterLow` and the add-back in `applyAutoGainAndISP`.
+applied everywhere the split acts:
+
+- drive input: `(1 − g)·x + g·high`. The transient tamer (step 4) runs on this blended
+  signal, so its input does not jump at the toggle;
+- the post-drive high-pass (step 6): `(1 − g)·y + g·HP(y)`. Without this, at `g = 0` the
+  high-pass would still cut the lows of the full-range distortion, so "off" would not be
+  today's off path; switching it instead of blending it would bring the off click back;
+- the low band's subtraction, `toneFilterLow` and add-back, scaled by `g`;
+- the auto-gain reference (full-range vs high band), blended by `g`.
+
+At `g = 0` this is the OFF path, at `g = 1` the ON path, continuous between, with one
+drive pass per block. Today the low band is used in four places: the auto-gain reference
+and the subtraction in `processBlock`, and `toneFilterLow` and the add-back in
+`applyAutoGainAndISP`.
+
+**The splitter stays warm.** It runs every active block, Sub Guard on or off, and its
+frequency smoother tracks the parameter all the time. Resetting it when `g` leaves 0
+would reintroduce F4: an LR48 at 60 Hz has about 14 ms of group delay and rings for tens
+of ms, longer than the ramp, so a cold high-pass would leak a low thump into the drive
+while `g` rises. Cost: about 16 biquads per channel at the oversampled rate (measure
+with `SoakHarness`). While off, the frequency it tracks is clamped to a safe minimum
+(see numerics below); `g` alone decides whether the split is heard.
+
+**Numerics.** Every Sub Guard filter today is `IIR::Filter<float>` in transposed direct
+form at the oversampled rate. At 192 kHz × 4 a 60 Hz cutoff is fc/fs ≈ 8e-5, and LR48
+adds a high-Q section (Q ≈ 1.31) that is more sensitive to coefficient and state
+rounding than today's LR24. Section 3 records a 5 Hz DC blocker going unstable at
+176 kHz. Step 6 therefore uses `double` state and coefficients, or a TPT/SVF topology,
+from the start, and is tested at the highest rate and oversampling, including automation
+parked at 1-25 Hz.
+
+**Compatibility (owner decision, needed before step 4 merges).** Sub Guard is on by
+default (60 Hz), so steps 4, 5 and 6 change nearly every existing session, and Golden
+Audio references change. Factory presets also sit on the slopes being deleted: in
+`FactoryPresets.h`, two use 150 Hz (LR12) and five use 100-120 Hz (LR18). The repo has a
+precedent for keeping old sessions identical (`legacyFilter`, state version 3). Options:
+
+- *Accept the change* (recommended): no version gate, re-voice the seven presets by ear
+  in step 6, regenerate Golden Audio, and say in CHANGELOG that Sub Guard now keeps the
+  sub clean, so v2.3 sessions sound different with drive on.
+- *Gate it*: state version 4 with a hidden `legacySubGuard` parameter that keeps today's
+  path for older sessions. This keeps the zones, their crossfade and F3-F5 alive behind
+  a flag forever, which is what the LR48 decision was meant to remove.
 
 ### Steps
 
 Each step is one PR that passes `bash scripts/verify.sh`, with `DistortionRender` renders
-before and after. Steps 2-4 change the sound on purpose; the owner listens before merging.
+before and after. Steps 4-7 change the sound on purpose; the owner listens before merging.
 
 1. **Tests that fail today.** The clean-sub test (section 6) fails now: sub level −3.2 dB,
    8 Hz product at −41 dBFS. The transition tests from section 6 should fail for F8, F1,
-   F2 and F3; any that passes is downgraded, not fixed.
+   F2 and F3; any that passes is downgraded, not fixed. Commit failing tests as expected
+   failures (or behind a name filter the default run skips) so `verify.sh` stays green;
+   each later step turns its tests on.
 2. **F8 alone.** Reset all three banks in `resetDSPState`. It ships now because it is
    tiny and helps until step 6 replaces the banks.
-3. **Transient tamer on the high band only (C1).** With Sub Guard on, run
-   `applyPreCompression` on the high band inside `applySubGuardSplit`, after the split and
-   before the drive. With Sub Guard off, behaviour is unchanged. Measured effect: sub
-   level −3.2 → −0.2 dB. Side effect, likely welcome: a loud sub no longer ducks the mids
-   going into the drive.
-4. **Clean Boost on the high band only (C4).** Lift, emphasis and de-emphasis all on the
+3. **Extract `SubGuardSplitter`** (prepare, set target frequency, process block, reset,
+   access to the low band and `g`). Structure only, proven by bit-identical renders at
+   off, 60, 100 and 150 Hz. It comes first so steps 4-7 change one class instead of
+   `applySubGuardSplit`, and so the crossover-flatness test can run on it directly.
+4. **Transient tamer on the high band only (C1).** With Sub Guard on, run
+   `applyPreCompression` on the high band, after the split and before the drive. With Sub
+   Guard off, behaviour is unchanged. Expected effect: sub level from −3.2 dB toward
+   −0.2 dB. That figure comes from disabling the tamer entirely, not from running it on
+   the high band, which still carries half the signal at the crossover, so this PR
+   measures the real number. Side effect, likely welcome: a loud sub no longer ducks the
+   mids going into the drive.
+5. **Clean Boost on the high band only (C4).** Lift, emphasis and de-emphasis all on the
    high band with Sub Guard on, so the sub's level stays put and the de-emphasis
    leftover disappears.
-5. **Extract `SubGuardSplitter`** (prepare, set target frequency, process block, reset,
-   access to the low band and `g`). Structure only, proven by bit-identical renders at
-   off, 60, 100 and 150 Hz. It comes before steps 6 and 7 so their new state lives in
-   one class.
-6. **The new crossover (C2).** LR48 split around the drive (decided): the second half goes after
-   all the high band's nonlinear stages (drive, waveshaper, compressor, soft clipper),
-   right before the add-back. Delete the order zones and the order crossfade. Latency is
-   unchanged (it's an IIR crossover). Run the clean-sub, crossover-flatness and
-   Golden Audio tests.
-7. **On/off weight `g` (F1, F2).** Ramp over 10-20 ms. When `g` leaves 0, reset the
-   crossover and `toneFilterLow` and snap the frequency smoother to the target. Take the
-   OFF path only once `g` reaches 0. Drive the auto-gain reference from the same `g`.
-   `resetDSPState` sets `g` straight to its target.
+6. **The new crossover (C2).** LR48 split around the drive (decided), in `double` or TPT
+   (numerics above). The second half goes after all the high band's nonlinear stages
+   (drive, waveshaper, compressor, soft clipper), right before the add-back. Delete the
+   order zones and the order crossfade. Latency is unchanged (it's an IIR crossover).
+   Checklist:
+   - *Soft clipper:* the high-pass after it can push peaks back over its −0.3 dBFS
+     ceiling. The output limiter still bounds the output; note it in `AGENTS.md`'s
+     signal chain.
+   - *Compressor:* the LA-2A sees sub products that the second half later removes. Accepted
+     (putting the second half earlier lets the later stages create new ones); say so in a
+     comment.
+   - *NAM profile mode:* the high band goes through the `ResamplingIsland` (delay D). The
+     second half runs on the island's output, in the same domain as the add-back, and
+     `subGuardLowDelayLine` keeps the low band matched to D. Test a profile with Sub Guard
+     on at 44.1 and 96 kHz.
+   - *Presets:* re-voice the seven factory presets at 100-150 Hz by ear (per the
+     compatibility decision) and regenerate Golden Audio.
+   - Tests: clean-sub, crossover flatness (on the splitter: true bypass skips Sub Guard
+     at drive 0, so `processBlock` cannot show it), numerics, Golden Audio.
+7. **On/off weight `g` (F1, F2).** Ramp over 10-20 ms, applied at every point listed under
+   "On/off as a weight". No reset when `g` leaves 0: the splitter is warm. Reset
+   `toneFilterLow` only when `g` leaves 0 after it has been fully off (it is not run while
+   off), or run it warm as well. `resetDSPState` sets `g` straight to its target and
+   resets the splitter (a state load is a discontinuity anyway).
 8. **Remaining, each only if measured:** coefficient updates per sub-block (F6); the
    20 Hz input high-pass (C5), whose removal would make the bass below 40 Hz slightly
-   louder in every session, so the owner decides; a stability test that sweeps
-   automation through 1-25 Hz.
+   louder in every session, so the owner decides.
 
 What no step can fix: content just below the crossover is shared (C3). Make that clear
 to users, for example in the manual or a hint on the knob: "protects what sits well below
 the setting, so set it above your 808's note."
 
-Listening pass after steps 3, 4, 6 and 7, with a real 808 and bass line: hold Sub Guard on
+Listening pass after steps 4, 5, 6 and 7, with a real 808 and bass line: hold Sub Guard on
 and compare the sub with the plugin bypassed; change presets while playing; drag Sub
 Guard to off and back.
 
@@ -478,6 +536,10 @@ It cannot catch F1, F2 or F3. Add:
 | Reverse mid-fade | move the frequency across 92 Hz and back within one crossfade | no discontinuity, filter state finite afterwards |
 | Large buffer sweep | same sweep with 2048-sample blocks | peak step near baseline |
 | With distortion | repeat the above with real distortion (`distMix = 100`) | no bursts beyond expected level |
+| Crossover flatness (step 6) | impulse and swept sine through `SubGuardSplitter` alone, low + high with the post-drive half applied and no stage between | magnitude flat within 0.01 dB, 20 Hz-20 kHz, at 60, 100, 150 and 200 Hz |
+| Numerics (step 6) | 192 kHz, 4x oversampling; Sub Guard 1, 5, 25, 60 and 200 Hz; also automation parked at 1-25 Hz for 10 s | all samples finite, low band settles to the input level, no growth |
+| On/off with `g` (step 7) | sub + mid tones, toggle Sub Guard every 30 ms, at 64 and 2048-sample blocks | peak step near baseline; no low thump in the high band when switching on |
+| NAM profile (step 6) | a test profile with Sub Guard on, 44.1 and 96 kHz | low and high bands aligned (sum flat with the profile's own response removed) |
 
 Use the relative form (`step <= k * baselineStep`) and print both numbers in the failure
 message. Where possible, also compare the high-band and low-band RMS before and after a
@@ -489,12 +551,75 @@ group. On Linux it needs the apt packages from `.github/workflows/build.yml`.
 
 ## 7. Not checked
 
-- No compile, no test run, no audio rendered. `Source/Tools/RenderHarness.cpp` can render
-  a static Sub Guard setting but cannot automate the parameter, so it cannot exercise
-  transitions without a small extension.
+- No transition was rendered or reproduced; only the static settings in section 2a were.
+  `Source/Tools/RenderHarness.cpp` can render a static Sub Guard setting but cannot
+  automate the parameter, so it cannot exercise transitions without a small extension.
 - Whether the JUCE `IIR::Filter` in use reacts to a coefficient change with a click at
   these magnitudes (F6) is unmeasured.
 - The interaction between Sub Guard transitions and the NAM profile path
   (`profileMode`, `islandDelay`, `subGuardLowDelayLine`) is not analysed beyond noting
   that the low band is delayed by the same amount as the high band.
 - Auto-gain envelope behaviour across a Sub Guard toggle is unmeasured.
+
+## 8. Implementation hand-off
+
+For the session that starts the work. Each step in section 5 is its own `fix/` or
+`refactor/` branch and PR off `main`, after this doc merges. Do them in order; do not
+start step 4 until the owner has answered the compatibility question in section 5.
+
+**Before step 1**
+
+- Read sections 1, 2a, 5 and 6. Section 4 is background; section 5 supersedes it where
+  they differ.
+- On Linux, install the apt packages from `.github/workflows/build.yml` (the `Install
+  Dependencies` step of the Linux job), then `bash scripts/verify.sh` must pass before
+  any change. A fresh cloud container lacks them.
+- `DistortionRender` (`Source/Tools/RenderHarness.cpp`) renders static settings:
+  `--in <wav> --subguard <Hz|off> --drive <0-100> --mix <0-100> --rate <Hz>`. It has no
+  clip-type or automation flags; section 2a's inputs were generated WAVs passed with `--in`.
+  Keep the before/after renders for each PR in a scratch folder, not the repo.
+
+**Step 1: where the tests go**
+
+- Tests live in `Source/Tests/DistortionTests.{h,cpp}`: declare a `juce::UnitTest`
+  subclass in the header, implement `runTest` in the .cpp, and add a `static` instance to
+  `registerAllTests()` at the end of the header (Debug builds only; `verify.sh` builds
+  Debug). Helpers: `TestUtilities::setParameter`, `generateSineWave`, `calculateRMS`,
+  `containsInvalidSamples` (`Source/Tests/TestUtilities.h`).
+- Copy the processor set-up from `SubGuardOrderCrossfadeTest::runTest` (it pins tone,
+  comp, auto-gain and Clean Boost) but set `distMix` to 100 where the test needs real
+  distortion.
+- Existing Sub Guard tests: `RTCleanSubGuardTest`, `SubGuardCrossoverFlatnessTest`,
+  `SubGuardFlatnessTest` and `SubGuardOrderCrossfadeTest`. The two flatness tests share
+  the display name "Sub Guard Crossover Flatness"; rename one when touching them so a
+  name filter can tell them apart. Step 6 deletes or rewrites the order-crossfade test.
+- `verify.sh` must stay green, so a test that fails today cannot assert the fixed
+  behaviour yet. Put the new tests in one class (for example `SubGuardPendingTests`,
+  "Sub Guard Pending") that always prints its measurements but only `expect`s when
+  `DISTORTION_PENDING_TESTS=1` is set, and run it that way in the PR to show each one
+  failing. Each later step moves the tests it fixes into an always-on class.
+- For the clean-sub test, measure the 45 Hz level and the 8 Hz product with a single-bin
+  DFT (Goertzel) over the last 2 s, after the warm-up; there is no FFT helper yet. Match
+  section 2a's set-up: 44.1 kHz, 512-sample blocks, default clip type, mix 100. The
+  numbers should land near the table in section 2a; if they don't, stop and find out
+  why before going on.
+
+**Step 2 (F8)**: `resetDSPState` in `Source/PluginProcessor.cpp`; call
+`resetSubGuardOrderFilters` for all three orders next to the existing LR24 resets. Turn
+on the state-load test.
+
+**Step 3 (extract)**: new `Source/SubGuardSplitter.{h,cpp}` (add them to the source lists in
+`CMakeLists.txt`). Move the eight state members listed in section 1 and
+`applySubGuardSplit`'s filtering into it; the distortion call stays in the processor.
+Prove it bit-identical: render off, 60, 100 and 150 Hz before and after and compare the
+WAVs byte for byte, and keep the Golden Audio tests passing unchanged.
+
+**Rules that apply to every step**
+
+- No allocation or locks in `processBlock`; size new buffers in `prepareToPlay` and
+  `rebuildOversampling` from the wider of input and output channel counts (`AGENTS.md`).
+- Update the signal chain in `AGENTS.md` whenever a stage moves (steps 4, 5 and 6 move
+  stages). `AGENTS.md` also points to `docs/Architecture Contract.md`, which is not in
+  the repo; don't go looking for it.
+- Add a CHANGELOG `Unreleased` line for each step that changes the sound.
+- Owner listens before merging steps 4-7 (section 5's listening pass).
