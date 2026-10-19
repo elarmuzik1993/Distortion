@@ -473,38 +473,34 @@ public:
     void runTest() override;
 };
 
-/** Sub Guard behaviour, pending until fixed: the on/off transitions that click (stale
-    state on OFF -> ON, the hard ON -> OFF switch), fixed by step 7's on/off weight.
-    Everything else here passes and is asserted always: the clean sub (steps 4-6: level,
-    and the products below the crossover), the reversal mid-fade and boundary chatter
-    (step 6 removed the order zones), and the large-buffer sweeps (F6).
-    Every measurement is always logged; the fixed-behaviour assertions only run with
-    DISTORTION_PENDING_TESTS=1, so the default run stays green until each fix lands and
-    moves its test into an always-on class. */
-class SubGuardPendingTests : public juce::UnitTest
+/** Sub Guard behaviour that clicked or leaked before the plan in
+    docs/SUB_GUARD_TRANSITION_REVIEW.md (section 5), each asserted since the step that
+    fixed it: the clean sub (steps 4-6: its level and the products below the crossover),
+    the reversal mid-fade and boundary chatter (step 6 removed the order zones), the on/off
+    switches and rapid toggling (step 7's on/off weight), and the large-buffer sweeps (F6,
+    which never failed). Every measurement is logged. These were the "Sub Guard Pending"
+    tests, asserted only with DISTORTION_PENDING_TESTS=1 until each fix landed. */
+class SubGuardBehaviourTests : public juce::UnitTest
 {
 public:
-    SubGuardPendingTests() : UnitTest("Sub Guard Pending", TestCategories::DSP) {}
+    SubGuardBehaviourTests() : UnitTest("Sub Guard Behaviour", TestCategories::DSP) {}
     void runTest() override;
 
 private:
-    /** Logs the result, and asserts it only when pending tests are enabled. */
-    void expectPending(bool ok, const juce::String& message);
-
     void runCleanSubTests();
     void runOffThenOnTest(bool distorted);
     void runOnThenOffTest(bool distorted);
+    void runToggleTest(bool distorted);
+    void runWarmSwitchOnTest(bool distorted);
     void runReverseMidFadeTest(bool distorted);
     void runBoundaryChatterTests(bool distorted);
     void runLargeBufferSweepTest(bool distorted);
-
-    bool pendingEnabled = false;
 };
 
 /** F8: a state load (preset or session) resets every Sub Guard bank, so the first blocks
     after it match a processor whose banks were all reset, at the old zone frequencies
     (60, 100 and 150 Hz, once the LR24, LR18 and LR12 banks; one LR48 since step 6).
-    Moved out of SubGuardPendingTests once fixed. */
+    Moved out of the then pending Sub Guard tests once fixed (step 2). */
 class SubGuardStateLoadTest : public juce::UnitTest
 {
 public:
@@ -1236,7 +1232,7 @@ inline void registerAllTests()
     static NormalizationTests normalizationTests;
     static StatefulDistortionTests statefulDistortionTests;
     static SubGuardFlatnessTest subGuardFlatnessTest;
-    static SubGuardPendingTests subGuardPendingTests;
+    static SubGuardBehaviourTests subGuardBehaviourTests;
     static SubGuardStateLoadTest subGuardStateLoadTest;
     static InputFilterModeTest inputFilterModeTest;
     static ShapeFilterTests shapeFilterTests;

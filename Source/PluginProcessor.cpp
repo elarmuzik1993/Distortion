@@ -1789,76 +1789,18 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const size_t numSamples = pb_oversampledBlock.getNumSamples();
     const size_t numChannels = pb_oversampledBlock.getNumChannels();
 
-    // Transient tamer. With Sub Guard on it runs on the high band instead (inside
-    // applySubGuardSplit), so a loud sub neither ducks itself nor the mids going
-    // into the drive, and the clean low band leaves at its input level.
-    const bool subGuardWillBeActive = (pb_subGuardFreq > 1.0f);
-    if (!subGuardWillBeActive)
-        applyPreCompression(pb_oversampledBlock);
-
-    // ========== AUTO-GAIN COMPENSATION: Measure input RMS ==========
-    // When Sub Guard is active the clean low band is removed before the output RMS
-    // is measured (see applyAutoGainAndISP), so a full-range input reference here
-    // would carry sub energy the output no longer has — inflating the input/output
-    // ratio and dumping excess makeup gain onto the distorted high band (harshness).
-    // In that case the high-band input reference is measured inside applySubGuardSplit
-    // (post-crossover, pre-distortion) so both envelopes share the same band.
-    if (autoGainEnabled && !subGuardWillBeActive)
-    {
-        // Calculate input RMS for auto-gain compensation (before distortion)
-        float inputSumSquares = 0.0f;
-        for (size_t ch = 0; ch < numChannels; ++ch)
-        {
-            const float* data = pb_oversampledBlock.getChannelPointer(ch);
-            for (size_t i = 0; i < numSamples; ++i)
-                inputSumSquares += data[i] * data[i];
-        }
-        const float inputRms = std::sqrt(inputSumSquares / (numSamples * numChannels));
-
-        // Update input envelope (one-pole filter with asymmetric attack/release)
-        if (inputRms > autoGainInputEnvelope)
-            autoGainInputEnvelope = autoGainAttackCoeff * autoGainInputEnvelope + (1.0f - autoGainAttackCoeff) * inputRms;
-        else
-            autoGainInputEnvelope = autoGainReleaseCoeff * autoGainInputEnvelope + (1.0f - autoGainReleaseCoeff) * inputRms;
-    }
-
-    // Clean Boost pre-emphasis: lift + high-shelf into the distortion (reduces IMD).
-    // With Sub Guard on, both halves run on the high band inside applySubGuardSplit,
-    // so the clean low band is neither lifted nor left with a de-emphasis residue.
-    if (!subGuardWillBeActive)
-        applyCleanBoostEmphasis(pb_oversampledBlock);
-
+    // Sub Guard split, then the drive input's chain (tamer, auto-gain reference, Clean
+    // Boost, drive): full range with Sub Guard off, the high band with it on.
     if (!applySubGuardSplit())
     {
         endBlockEarly(buffer);
         return;  // band-split safety check failed — bail entire processBlock
     }
 
-    // Clean Boost de-emphasis: complementary high-shelf cut restoring spectral balance.
-    if (!pb_subGuardActive)
-        applyCleanBoostDeEmphasis(pb_oversampledBlock);
-
-    // ========== SUB GUARD: Remove clean low band before post-distortion processing ==========
-    // When Sub Guard is active, subtract the clean low band from oversampledBlock
-    // so that waveshaper, tone filter, and compressor only process the high band.
-    // The clean low band is added back after all nonlinear processing is complete.
-    if (pb_subGuardActive)
-    {
-        for (size_t channel = 0; channel < numChannels; ++channel)
-        {
-            auto* outputData = pb_oversampledBlock.getChannelPointer(channel);
-            const auto* lowData = subGuardSplitter.getLowBand().getReadPointer(static_cast<int>(channel));
-
-            for (size_t sample = 0; sample < numSamples; ++sample)
-            {
-                outputData[sample] -= lowData[sample];
-            }
-        }
-    }
-
     // Post-drive Shape: shapes the harmonics the drive created (the audible half on
-    // near-sine 808s). After the Sub Guard subtraction, so the clean low band stays
-    // untouched; before auto-gain, compression and the soft clipper.
+    // near-sine 808s). The block holds no clean low band (it is added back after the
+    // soft clipper), so the low band stays untouched; before auto-gain, compression and
+    // the soft clipper.
     applyShapePostDrive();
 
     applyAutoGainAndISP(buffer);
@@ -3098,8 +3040,8 @@ void PluginProcessor::feedProfileWhileBypassed(const juce::AudioBuffer<float>& b
         }
     }
 
-    // No low band is split off while bypassed, so its line restarts from silence,
-    // as it does when Sub Guard switches on.
+    // No low band is split off while bypassed, so its line restarts from silence.
+    // (Switching Sub Guard on no longer resets it: the line runs warm with the splitter.)
     if (islandDelay > 0)
         subGuardLowDelayLine.reset();
 }
@@ -3261,21 +3203,86 @@ void PluginProcessor::applyProfileChunk(float* const* channels, int numChannels,
 
 bool PluginProcessor::applySubGuardSplit()
 {
-    pb_subGuardActive = (pb_subGuardFreq > 1.0f);
+    // The splitter runs on every active block, Sub Guard on or off, so switching on never
+    // starts a cold crossover (an LR48 at 60 Hz rings for tens of ms, longer than the
+    // ramp). Its per-sample weight g (0 off, 1 on) decides how much of the split is heard:
+    // the drive input is (1 - g) x + g high, the post-drive half and the low band's
+    // add-back are scaled by g (applyAutoGainAndISP). g = 0 is the full-range path, g = 1
+    // clean low + distorted high, continuous between, with one drive pass per block.
+    subGuardSplitter.setTargetFrequency(pb_subGuardFreq);
+    pb_subGuardSplitRan = subGuardSplitter.process(pb_oversampledBlock, pb_numChannels, pb_numSamples);
+    pb_subGuardActive   = pb_subGuardSplitRan && subGuardSplitter.isEngaged();
 
-    // === SUB GUARD OFF: Full-range distortion (no band-split) ===
-    if (!pb_subGuardActive)
+    if (!pb_subGuardSplitRan)
     {
-        subGuardSplitter.setInactive();   // the next ON block reports justActivated()
-        // Per-sample LFO phase increment (oversampled rate: divide by oversamplingFactor)
-        const float lfoOversampledPhaseInc = pb_lfoPhaseIncrement / static_cast<float>(oversamplingFactor);
+        debugHadBufferOverflow.store(true, std::memory_order_relaxed);
+        if (subGuardSplitter.isEngaged())
+            return false;   // the split is audible but could not run: bail the block
+    }
+    else if (profileMode && islandDelay > 0)
+    {
+        // A profile's island delays the drive output by its D; the clean low band waits
+        // the same D (warm, like the splitter), so the add-back lines up.
+        auto& lowBandBuffer = subGuardSplitter.getLowBand();
+        delayInPlace(subGuardLowDelayLine, lowBandBuffer.getArrayOfWritePointers(),
+                     static_cast<int>(pb_numChannels), static_cast<int>(pb_numSamples));
+    }
 
-        std::array<float*, 2> channels {};
-        for (size_t channel = 0; channel < juce::jmin(pb_numChannels, channels.size()); ++channel)
-            channels[channel] = pb_oversampledBlock.getChannelPointer(channel);
-        if (applyProfileStage(channels.data()))
-            return true;
+    // Drive input: (1 - g) x + g high. Exactly x while off (left untouched) and exactly
+    // the high band while fully on.
+    if (pb_subGuardActive)
+    {
+        const float* g = subGuardSplitter.getWeights();
+        const auto& highBandBuffer = subGuardSplitter.getHighBand();
+        for (size_t channel = 0; channel < pb_numChannels; ++channel)
+        {
+            auto* x = pb_oversampledBlock.getChannelPointer(channel);
+            const auto* high = highBandBuffer.getReadPointer(static_cast<int>(channel));
+            for (size_t sample = 0; sample < pb_numSamples; ++sample)
+                x[sample] = (1.0f - g[sample]) * x[sample] + g[sample] * high[sample];
+        }
+    }
 
+    // The drive input's own chain: tamer, auto-gain reference, Clean Boost emphasis,
+    // drive, de-emphasis. With Sub Guard on it is the high band, so none of it touches the
+    // clean low band, which leaves at its input level.
+    applyPreCompression(pb_oversampledBlock);
+
+    // ========== AUTO-GAIN: Measure the drive input's RMS ==========
+    // The same signal the output RMS is measured on in applyAutoGainAndISP (before the
+    // low band is added back): full range with Sub Guard off, the high band with it on,
+    // blended by g between. Keeping both envelopes on the same band stops auto-gain from
+    // over-boosting the distorted highs — the cause of harshness with Sub Guard engaged.
+    if (pb_autoGainEnabled)
+    {
+        float inputSumSquares = 0.0f;
+        for (size_t ch = 0; ch < pb_numChannels; ++ch)
+        {
+            const float* data = pb_oversampledBlock.getChannelPointer(ch);
+            for (size_t i = 0; i < pb_numSamples; ++i)
+                inputSumSquares += data[i] * data[i];
+        }
+        const float inputRms = std::sqrt(inputSumSquares / (pb_numSamples * pb_numChannels));
+
+        // One-pole follower with asymmetric attack/release.
+        if (inputRms > autoGainInputEnvelope)
+            autoGainInputEnvelope = autoGainAttackCoeff * autoGainInputEnvelope + (1.0f - autoGainAttackCoeff) * inputRms;
+        else
+            autoGainInputEnvelope = autoGainReleaseCoeff * autoGainInputEnvelope + (1.0f - autoGainReleaseCoeff) * inputRms;
+    }
+
+    // Clean Boost pre-emphasis: lift + high-shelf into the distortion (reduces IMD).
+    applyCleanBoostEmphasis(pb_oversampledBlock);
+
+    // Per-sample LFO phase increment (oversampled rate: divide by oversamplingFactor)
+    const float lfoOversampledPhaseInc = pb_lfoPhaseIncrement / static_cast<float>(oversamplingFactor);
+
+    std::array<float*, 2> channels {};
+    for (size_t channel = 0; channel < juce::jmin(pb_numChannels, channels.size()); ++channel)
+        channels[channel] = pb_oversampledBlock.getChannelPointer(channel);
+
+    if (! applyProfileStage(channels.data()))
+    {
         for (size_t sample = 0; sample < pb_numSamples; ++sample)
         {
             const auto c = advanceSampleControls(lfoOversampledPhaseInc);
@@ -3287,99 +3294,10 @@ bool PluginProcessor::applySubGuardSplit()
                     static_cast<int>(channel), c.gain, c.drive, c.mix, c.distortionParam);
             }
         }
-        return true;
     }
 
-    // === SUB GUARD ACTIVE: clean low + Distorted high (LR48, split around the drive) ===
-    subGuardSplitter.setTargetFrequency(pb_subGuardFreq);
-    const bool splitOk = subGuardSplitter.process(pb_oversampledBlock, pb_numChannels, pb_numSamples);
-
-    // OFF -> ON: no stale low band from the last time Sub Guard ran.
-    if (subGuardSplitter.justActivated())
-        subGuardLowDelayLine.reset();
-
-    if (!splitOk)
-    {
-        debugHadBufferOverflow.store(true, std::memory_order_relaxed);
-        return false;
-    }
-
-    auto& lowBandBuffer  = subGuardSplitter.getLowBand();
-    auto& highBandBuffer = subGuardSplitter.getHighBand();
-
-    // A profile's island delays the high band by its D; the clean low band waits the
-    // same D, so the recombine, the subtract and the re-add below all line up.
-    if (profileMode && islandDelay > 0)
-        delayInPlace(subGuardLowDelayLine, lowBandBuffer.getArrayOfWritePointers(),
-                     static_cast<int>(pb_numChannels), static_cast<int>(pb_numSamples));
-
-    // The high band's own pre-drive chain, in the full-range path's order: tamer,
-    // auto-gain reference, Clean Boost emphasis, drive, de-emphasis. The clean low band
-    // must leave at its input level, so none of it touches the low band.
-    auto highBlock = juce::dsp::AudioBlock<float>(highBandBuffer)
-                         .getSubBlock(0, pb_numSamples)
-                         .getSubsetChannelBlock(0, pb_numChannels);
-    applyPreCompression(highBlock);
-
-    // ========== AUTO-GAIN: Measure high-band input RMS (post-crossover, pre-distortion) ==========
-    // Matches the band the output RMS is measured on (high band only, after the clean low
-    // is stripped). Keeping both envelopes on the same band stops auto-gain from over-boosting
-    // the distorted highs — the cause of harshness with Sub Guard engaged. Mirrors the
-    // asymmetric one-pole follower used for the full-range path in processBlock.
-    if (pb_autoGainEnabled)
-    {
-        float inputSumSquares = 0.0f;
-        for (size_t ch = 0; ch < pb_numChannels; ++ch)
-        {
-            const float* data = highBandBuffer.getReadPointer(static_cast<int>(ch));
-            for (size_t i = 0; i < pb_numSamples; ++i)
-                inputSumSquares += data[i] * data[i];
-        }
-        const float inputRms = std::sqrt(inputSumSquares / (pb_numSamples * pb_numChannels));
-
-        if (inputRms > autoGainInputEnvelope)
-            autoGainInputEnvelope = autoGainAttackCoeff * autoGainInputEnvelope + (1.0f - autoGainAttackCoeff) * inputRms;
-        else
-            autoGainInputEnvelope = autoGainReleaseCoeff * autoGainInputEnvelope + (1.0f - autoGainReleaseCoeff) * inputRms;
-    }
-
-    applyCleanBoostEmphasis(highBlock);
-
-    // Apply studio distortion ONLY to the (possibly blended) high band
-    const float lfoOversampledPhaseIncSG = pb_lfoPhaseIncrement / static_cast<float>(oversamplingFactor);
-
-    std::array<float*, 2> highChannels {};
-    for (size_t channel = 0; channel < juce::jmin(pb_numChannels, highChannels.size()); ++channel)
-        highChannels[channel] = highBandBuffer.getWritePointer(static_cast<int>(channel));
-
-    if (! applyProfileStage(highChannels.data()))
-    {
-        for (size_t sample = 0; sample < pb_numSamples; ++sample)
-        {
-            const auto c = advanceSampleControls(lfoOversampledPhaseIncSG);
-
-            for (size_t channel = 0; channel < pb_numChannels; ++channel)
-            {
-                auto* highBandData = highBandBuffer.getWritePointer(static_cast<int>(channel));
-                highBandData[sample] = applyDistortionStage(highBandData[sample],
-                    static_cast<int>(channel), c.gain, c.drive, c.mix, c.distortionParam);
-            }
-        }
-    }
-
-    applyCleanBoostDeEmphasis(highBlock);
-
-    // Recombine: Clean low + Distorted high
-    for (size_t channel = 0; channel < pb_numChannels; ++channel)
-    {
-        auto* outputData = pb_oversampledBlock.getChannelPointer(channel);
-        const auto* lowData  = lowBandBuffer.getReadPointer(static_cast<int>(channel));
-        const auto* highData = highBandBuffer.getReadPointer(static_cast<int>(channel));
-
-        for (size_t sample = 0; sample < pb_numSamples; ++sample)
-            outputData[sample] = lowData[sample] + highData[sample];
-    }
-
+    // Clean Boost de-emphasis: complementary high-shelf cut restoring spectral balance.
+    applyCleanBoostDeEmphasis(pb_oversampledBlock);
     return true;
 }
 
@@ -3471,6 +3389,8 @@ void PluginProcessor::applyAutoGainAndISP(juce::AudioBuffer<float>& buffer)
     if (pb_autoGainEnabled)
     {
         // Calculate output RMS for auto-gain compensation (after distortion)
+        // Measured before the Sub Guard post-drive high-pass, so it still holds the
+        // drive's products below the crossover that the high-pass later removes.
         float outputSumSquares = 0.0f;
         for (size_t ch = 0; ch < pb_numChannels; ++ch)
         {
@@ -3689,15 +3609,40 @@ void PluginProcessor::applyAutoGainAndISP(juce::AudioBuffer<float>& buffer)
     // new ones. The high-pass can lift peaks back over the soft clipper's ceiling; the
     // output limiter still bounds the output. In profile mode this runs on the island's
     // output, the domain the low band (delayed by the same D) is added back in.
-    if (pb_subGuardActive)
-        subGuardSplitter.processPostDrive(pb_oversampledBlock.getSubBlock(0, pb_numSamples)
-                                                             .getSubsetChannelBlock(0, pb_numChannels));
+    // It runs warm on a copy every block the split ran, and is blended in by g:
+    // (1 - g) y + g HP(y), so off is exactly the full-range path.
+    if (pb_subGuardSplitRan)
+    {
+        auto& hpBuffer = subGuardSplitter.getHighBand();   // free since the drive input was built
+        for (size_t channel = 0; channel < pb_numChannels; ++channel)
+            hpBuffer.copyFrom(static_cast<int>(channel), 0, pb_oversampledBlock.getChannelPointer(channel),
+                              static_cast<int>(pb_numSamples));
+        subGuardSplitter.processPostDrive(juce::dsp::AudioBlock<float>(hpBuffer)
+                                              .getSubBlock(0, pb_numSamples)
+                                              .getSubsetChannelBlock(0, pb_numChannels));
+
+        if (pb_subGuardActive)
+        {
+            // In profile mode the drive input was blended with g(t) but the island
+            // delays it by D, so during the 15 ms ramp this blend (and the low add-back
+            // below) uses a g D samples ahead of the one that built its input. The
+            // crossfade is uneven but continuous, with no click; left as is.
+            const float* g = subGuardSplitter.getWeights();
+            for (size_t channel = 0; channel < pb_numChannels; ++channel)
+            {
+                auto* y = pb_oversampledBlock.getChannelPointer(channel);
+                const auto* hp = hpBuffer.getReadPointer(static_cast<int>(channel));
+                for (size_t sample = 0; sample < pb_numSamples; ++sample)
+                    y[sample] = (1.0f - g[sample]) * y[sample] + g[sample] * hp[sample];
+            }
+        }
+    }
 
     // ========== SUB GUARD: Phase-match low branch to the high branch's tone filter ==========
     // Apply an identical tone LP (with its own state) to the clean low band so both
     // bands share the same magnitude/phase response at the recombine sum. Gated on the
-    // same bypass condition as the high-branch tone filter.
-    if (pb_subGuardActive && toneFreq < 19500.0f && toneFilterLow.state != nullptr)
+    // same bypass condition as the high-branch tone filter. Warm, like the splitter.
+    if (pb_subGuardSplitRan && toneFreq < 19500.0f && toneFilterLow.state != nullptr)
     {
         auto lowBlockTone = juce::dsp::AudioBlock<float>(subGuardSplitter.getLowBand()).getSubBlock(0, pb_numSamples);
         toneFilterLow.process(juce::dsp::ProcessContextReplacing<float>(lowBlockTone));
@@ -3708,15 +3653,18 @@ void PluginProcessor::applyAutoGainAndISP(juce::AudioBuffer<float>& buffer)
     // (tone filter is mirrored above for phase coherence at recombine). An LR48 sums
     // flat with both bands in phase, so the recombine is low + high; at DC HP->0 so the
     // sum reduces to the clean low band, keeping absolute bass polarity with the input.
+    // Scaled by g, so it fades with the on/off weight. In profile mode this g is D samples
+    // ahead of the one that built the drive input (see the post-drive blend above).
     if (pb_subGuardActive)
     {
+        const float* g = subGuardSplitter.getWeights();
         for (size_t channel = 0; channel < pb_numChannels; ++channel)
         {
             auto* outputData = pb_oversampledBlock.getChannelPointer(channel);
             const auto* lowData = subGuardSplitter.getLowBand().getReadPointer(static_cast<int>(channel));
 
             for (size_t sample = 0; sample < pb_numSamples; ++sample)
-                outputData[sample] += lowData[sample];
+                outputData[sample] += g[sample] * lowData[sample];
         }
     }
 
@@ -3895,8 +3843,12 @@ void PluginProcessor::resetDSPState()
     inputFilter.reset();
     shapePre.reset();
     shapePost.reset();
-    // Every Sub Guard section (both halves of both bands) and the coefficient cache.
+    // Every Sub Guard section (both halves of both bands) and the coefficient cache, and
+    // the on/off weight straight to its target: a load is a discontinuity anyway.
     subGuardSplitter.reset();
+    if (subGuardFreqParam != nullptr)
+        subGuardSplitter.setTargetFrequency(subGuardFreqParam->load());
+    subGuardSplitter.snapWeight();
     if (toneFilter.state)
         toneFilter.reset();
     if (toneFilterLow.state)

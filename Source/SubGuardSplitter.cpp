@@ -13,15 +13,23 @@ SubGuardSplitter::SubGuardSplitter()
     // Valid until prepare/startTracking set the real rates (see PluginProcessor's constructor).
     smoothedFreq.reset(44100.0, DSPConstants::SUBGUARD_FREQ_SMOOTH_TIME_S);
     smoothedFreq.setCurrentAndTargetValue(DSPConstants::SUBGUARD_FREQ_DEFAULT);
+    weight.reset(44100.0, DSPConstants::SUBGUARD_SWITCH_TIME_S);
+    weight.setCurrentAndTargetValue(1.0f);
 }
 
 void SubGuardSplitter::prepare(const juce::dsp::ProcessSpec& spec, float freqParam, int bandBufferSamples)
 {
     sampleRate = spec.sampleRate;
 
-    // Use safe frequency for filter initialization when OFF (prevents divide-by-zero)
-    const float filterInitFreq = (freqParam <= 1.0f) ? DSPConstants::SUBGUARD_FREQ_DEFAULT : freqParam;
+    // While off the filters hold the last on frequency (prevents divide-by-zero).
+    const float filterInitFreq = (freqParam <= 1.0f) ? heldFreq : freqParam;
     updateCoefficients(filterInitFreq);
+
+    // A new rate: the weight lands on its target (an oversampling rebuild is ducked).
+    const float g = weight.getTargetValue();
+    weight.reset(spec.sampleRate, DSPConstants::SUBGUARD_SWITCH_TIME_S);
+    weight.setCurrentAndTargetValue(g);
+    weights.assign(static_cast<size_t>(bandBufferSamples), g);
 
     const auto numChannels = static_cast<size_t>(spec.numChannels);
     for (auto* states : { &lowStateA, &lowStateB, &highPreState, &highPostState })
@@ -37,9 +45,12 @@ void SubGuardSplitter::startTracking(float freqParam, double blockRate)
     // consumed once PER BLOCK (see process), so it must be reset at the block rate, not
     // the (oversampled) sample rate. Resetting at the sample rate made the 50ms ramp take
     // ~8820 blocks (~100s) to settle, so the crossover barely tracked the knob.
+    const bool on = freqParam > 1.0f;
+    if (on)
+        heldFreq = freqParam;
     smoothedFreq.reset(blockRate, DSPConstants::SUBGUARD_FREQ_SMOOTH_TIME_S);
-    smoothedFreq.setCurrentAndTargetValue(freqParam);
-    wasActive = (freqParam > 1.0f);
+    smoothedFreq.setCurrentAndTargetValue(heldFreq);
+    weight.setCurrentAndTargetValue(on ? 1.0f : 0.0f);
 }
 
 void SubGuardSplitter::reset() noexcept
@@ -48,20 +59,22 @@ void SubGuardSplitter::reset() noexcept
         for (auto& half : *states)
             half = Half{};
 
-    wasActive = false;
-
     // Force a coefficient update on the next active block.
     lastFreq = -1.0f;
 }
 
-void SubGuardSplitter::setInactive() noexcept
+void SubGuardSplitter::snapWeight() noexcept
 {
-    wasActive = false;
+    weight.setCurrentAndTargetValue(weight.getTargetValue());
 }
 
-void SubGuardSplitter::setTargetFrequency(float hz) noexcept
+void SubGuardSplitter::setTargetFrequency(float freqParam) noexcept
 {
-    smoothedFreq.setTargetValue(hz);
+    const bool on = freqParam > 1.0f;
+    if (on)
+        heldFreq = freqParam;
+    smoothedFreq.setTargetValue(heldFreq);
+    weight.setTargetValue(on ? 1.0f : 0.0f);
 }
 
 bool SubGuardSplitter::process(const juce::dsp::AudioBlock<float>& input,
@@ -72,14 +85,20 @@ bool SubGuardSplitter::process(const juce::dsp::AudioBlock<float>& input,
     if (std::abs(currentFreq - lastFreq) > 0.5f)
         updateCoefficients(currentFreq);
 
-    activatedThisBlock = !wasActive;
-    wasActive = true;
-
     // SAFETY CHECK: Ensure we have enough buffer space
     const int requiredBufferSize = static_cast<int>(numSamples);
     if (requiredBufferSize > lowBand.getNumSamples() || requiredBufferSize > highBand.getNumSamples()
+        || numSamples > weights.size()
         || numChannels > lowStateA.size() || numChannels > static_cast<size_t>(lowBand.getNumChannels()))
+    {
+        weight.skip(requiredBufferSize);
+        engaged = weight.getCurrentValue() > 0.0f;
         return false;
+    }
+
+    for (size_t i = 0; i < numSamples; ++i)
+        weights[i] = weight.getNextValue();
+    engaged = numSamples > 0 && (weights[0] > 0.0f || weights[numSamples - 1] > 0.0f);
 
     for (size_t channel = 0; channel < numChannels; ++channel)
     {

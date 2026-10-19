@@ -576,6 +576,24 @@ so before/after renders compare byte for byte.
    `toneFilterLow` only when `g` leaves 0 after it has been fully off (it is not run while
    off), or run it warm as well. `resetDSPState` sets `g` straight to its target and
    resets the splitter (a state load is a discontinuity anyway).
+   *Done (`fix/subguard-onoff-weight`).* `g` lives in the splitter (`setTargetFrequency`
+   sets its target from the parameter; `getWeights`, `isEngaged`, `snapWeight`; 15 ms,
+   `SUBGUARD_SWITCH_TIME_S`). `applySubGuardSplit` is now one path: split (always), drive
+   input `(1−g)·x + g·high` in place, then tamer, auto-gain reference, Clean Boost, drive
+   and de-emphasis on it, whatever `g`. The post-drive half runs warm on a copy and is
+   blended by `g`; `toneFilterLow` and the low band's island delay run warm; the add-back
+   is `g·low`. While off the crossover holds the last on frequency instead of a minimum, so
+   switching back on at the same frequency does not glide. `setInactive`, `justActivated`
+   and the low delay line's reset on activation are gone. Results, peak step vs baseline:
+   off → on 70-94x → 0.84-1.00x (distMix 0), 7.1x → 0.86x (distMix 100); on → off 6.2x →
+   0.98x and 1.03x; a new toggle test (every 30 ms, 64 and 2048-sample blocks) 0.85-1.00x.
+   All of them are asserted always, so nothing is pending any more: the class is now
+   `SubGuardBehaviourTests` ("Sub Guard Behaviour") and `DISTORTION_PENDING_TESTS` is gone.
+   Seeded renders with Sub Guard off are byte-identical; with it on they move by at most
+   1.3e-5 (rounding: the drive input is now the high band itself rather than
+   `(low + high) − low`). `DistortionRender` now prepares once more after its flags are
+   set, as a host restores a session before playing; otherwise it heard a 15 ms ramp from
+   the default 60 Hz to its `--subguard` value.
 8. **Remaining, each only if measured:** coefficient updates per sub-block (F6); the
    20 Hz input high-pass (C5), whose removal would make the bass below 40 Hz slightly
    louder in every session, so the owner decides.
