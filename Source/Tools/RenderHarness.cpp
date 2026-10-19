@@ -280,6 +280,9 @@ int renderToFile(const Args& args)
     }
 
     PluginProcessor proc;
+    // The drive's noise is clock-seeded in the plugin; a fixed seed makes renders
+    // repeatable, so before/after renders of a change compare byte for byte.
+    proc.seedNoiseForTesting(args.str("seed", "1").getLargeIntValue());
     proc.setRateAndBufferSizeDetails(sr, kBlockSize);
     proc.prepareToPlay(sr, kBlockSize);
 
@@ -368,6 +371,7 @@ int main(int argc, char* argv[])
             "  --seconds <n>                         length of synthetic input (default 3)\n"
             "  --rate <Hz>                           sample rate of synthetic input (default 44100; 48000 with --profile)\n"
             "  --out <file.wav>                      output path (default render.wav)\n"
+            "  --seed <n>                            seed for the drive's noise (default 1; renders repeat)\n"
             "  --profile <file.nam>                  run a NAM profile instead of the clip type\n\n"
             "  Automated flatness/shaping checks live in DistortionTests (run via CI).\n";
         return 0;

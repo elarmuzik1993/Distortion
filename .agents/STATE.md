@@ -12,8 +12,8 @@
   all three CI builds green on the step 2 and step 3 heads. pluginval not run recently.
 
 ## Next
-1. Test seeding hook for `distortionRandom`/`waveshaperRandom` (tests and `DistortionRender`),
-   so drive-on renders are repeatable. Doc section 8, "Before steps 4-7".
+1. Merge the seeding hook PR (`test/seed-drive-noise`): `seedNoiseForTesting`,
+   `DistortionRender --seed` (default 1, renders repeat byte for byte), seeded test rigs.
 2. Sub Guard step 4 (transient tamer on the high band), then 5, 6, 7. Owner listens before each.
 3. Owner, Release build: clip column (PROFILE ends step, middle opens menu; keep the small
    clip-type font?), Settings > Legacy Filter (v2.3 Low/Band Pass session opens in Legacy, same
