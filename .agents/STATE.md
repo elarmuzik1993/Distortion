@@ -8,8 +8,8 @@
   measured: with any drive the sub is not untouched (transient tamer −3.2 dB on a 45 Hz sine,
   drive products below the crossover). Section 2 (F1-F8) is from reading the code, unreproduced.
   Section 5 is the plan; section 8 is the implementation hand-off for step 1.
-- Verified 2026-10-19 on Linux (cloud, Debug): see Known issues for the latest verify result.
-  No source changed since 2026-10-18. pluginval not run since the profile browser.
+- Verified 2026-10-19 on Linux (cloud, Debug) at `f3d7131`: `bash scripts/verify.sh` passes,
+  4024 assertions. No source changed since 2026-10-18. pluginval not run since the profile browser.
 
 ## Next
 1. Sub Guard step 1 (doc section 8): failing tests for clean sub, state load, off/on, on/off,
