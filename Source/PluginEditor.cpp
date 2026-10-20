@@ -1560,15 +1560,13 @@ void PluginEditor::showProfileMenu()
     // The library, folder by folder as the arrows step through it.
     juce::PopupMenu libraryMenu;
     const auto files = library.list();
-    for (int i = 0; i < files.size(); ++i)
+    for (const auto& file : files)
     {
-        const auto file = files[i];
         const auto label = file.getRelativePathFrom(library.getRoot())
                                .replaceCharacter('\\', '/')
                                .upToLastOccurrenceOf(".", false, false);
-        const ProfileLibrary::Position position { i, files.size() };
         libraryMenu.addItem(label, true, file.getFullPathName() == status.path,
-                            [this, file, position]() { loadLibraryProfile(file, 0, position); });
+                            [this, file]() { loadLibraryProfile(file, 0); });
     }
     if (files.isEmpty())
         libraryMenu.addItem("Empty: profiles you load are added here", false, false, nullptr);

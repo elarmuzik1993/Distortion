@@ -10,11 +10,9 @@
   --seed`).
 - Golden audio: 16 seeded cases with every parameter pinned, compared with
   `Resources/TestAudio/golden_*.wav` (see AGENTS.md, Build & Test). CI green on all three OSes.
-- NAM loader review (2026-10-20), branch `fix/nam-loader`: an offline prepare waits for an
-  in-flight profile load; imports are vetted (`NamProfile::check`) and every problem is shown in
-  a dialog; an arrow step reads the library once. Not merged yet.
-- Verified 2026-10-20 on Linux (cloud, Debug) on `fix/nam-loader`: `verify.sh` passes, 4288
-  assertions; `DistortionUiSnapshot --profile --profile-card` renders. pluginval not run.
+- `fix/nam-loader` (no PR yet): offline prepare waits for a profile load; imports vetted
+  (`NamProfile::check`), problems shown in a dialog; arrow step reads the library once.
+  Verified 2026-10-20 (Linux cloud, Debug): `verify.sh` 4288 assertions; snapshot renders.
 
 ## Next
 1. Owner: listening pass on Sub Guard (real 808 and bass line; on vs bypassed; preset changes
@@ -24,11 +22,9 @@
 2. Sub Guard follow-ups: leaving true bypass resumes the splitter stale (reset it, `toneFilterLow`
    and `g` there, as `shapePost` is); warm switch-on only proven at distMix 0; NAM-mode `g` leads
    by D during the ramp. Plan step 8 only if measured (F6, C5, a C3 hint on the knob).
-3. Owner decisions on NAM before it leaves prototype: EXTREME in profile mode only skips the
-   transient tamer (push the model ~+12 dB, or grey it out?); NAM's `input_level_dbu` calibration
-   is ignored (use it so the drive knob feels the same across captures?). Both change the sound.
-   Also: drag-and-drop of `.nam` files; a state restored into an already-prepared offline
-   instance still waits for the timer.
+3. Owner, NAM before it leaves prototype: EXTREME with a profile only skips the tamer (push
+   ~+12 dB or grey out?); `input_level_dbu` calibration ignored. Both change the sound. Also
+   drag-and-drop; offline state restored after prepare still waits for the timer.
 4. Release prep for the marketing direction below: NAM out of prototype (or labelled beta); three
    demo clips (808 on a phone speaker, bass DI through a NAM capture with Sub Guard on/off, the
    drawn EQ); a short comparison page (crossover vs blend). First verify rivals' claims: NAM 9000
@@ -38,8 +34,9 @@
    buffers below `rebuildOversampling`'s size. Then pluginval (strictness 10), bump CMake
    `VERSION 2.3.0`, tag. Owner: ASIO standalone pass.
 7. Follow-ups: Legacy switch may click; XY Y-axis silent in Legacy. Delete merged Sub Guard
-   branches (owner to confirm); decide `claude/ui-screenshot-readme-6vbm01`, `docs/profile-morph*`, `fix/profile-browser-review`,
-   `fix/transition-clicks`, `test/crossing-probe`.
+   branches (owner to confirm); decide `claude/ui-screenshot-readme-6vbm01`,
+   `docs/profile-morph*`, `fix/profile-browser-review`, `fix/transition-clicks`,
+   `test/crossing-probe`.
 
 ## Decisions
 - `legacyFilter` is a session param; state v3 turns it on for v2.3 states that used the filter.
