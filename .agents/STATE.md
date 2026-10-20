@@ -10,7 +10,7 @@
   --seed`).
 - Golden audio: 16 seeded cases with every parameter pinned, compared with
   `Resources/TestAudio/golden_*.wav` (see AGENTS.md, Build & Test). CI green on all three OSes.
-- `fix/nam-loader` (no PR yet): offline prepare waits for a profile load; imports vetted
+- `fix/nam-loader`, PR #83: offline prepare waits for a profile load; imports vetted
   (`NamProfile::check`), problems shown in a dialog; arrow step reads the library once.
   Verified 2026-10-20 (Linux cloud, Debug): `verify.sh` 4292 assertions; snapshot renders.
 
