@@ -27,22 +27,37 @@ namespace
         static std::once_flag once;
         std::call_once(once, [] { nam::activations::Activation::enable_fast_tanh(); });
     }
+
+    bool checkFileName(const juce::File& file, juce::String& errorOut)
+    {
+        if (! file.existsAsFile())
+        {
+            errorOut = "Profile file not found: " + file.getFullPathName();
+            return false;
+        }
+        if (! file.hasFileExtension("nam"))
+        {
+            errorOut = "Not a .nam profile: " + file.getFileName();
+            return false;
+        }
+        return true;
+    }
+
+    bool checkMono(const nam::DSP& model, const juce::File& file, juce::String& errorOut)
+    {
+        if (model.NumInputChannels() == 1 && model.NumOutputChannels() == 1)
+            return true;
+        errorOut = "Only mono (one-in, one-out) profiles are supported: " + file.getFileName();
+        return false;
+    }
 }
 
 std::unique_ptr<NamProfile> NamProfile::load(const juce::File& file, int numChannels,
                                              double hostRate, int maxHostBlock,
                                              juce::String& errorOut)
 {
-    if (! file.existsAsFile())
-    {
-        errorOut = "Profile file not found: " + file.getFullPathName();
+    if (! checkFileName(file, errorOut))
         return {};
-    }
-    if (! file.hasFileExtension("nam"))
-    {
-        errorOut = "Not a .nam profile: " + file.getFileName();
-        return {};
-    }
 
     try
     {
@@ -61,11 +76,8 @@ std::unique_ptr<NamProfile> NamProfile::load(const juce::File& file, int numChan
         }
 
         const auto& first = *profile->models.front();
-        if (first.NumInputChannels() != 1 || first.NumOutputChannels() != 1)
-        {
-            errorOut = "Only mono (one-in, one-out) profiles are supported: " + file.getFileName();
+        if (! checkMono(first, file, errorOut))
             return {};
-        }
 
         const double trainedRate = profile->models.front()->GetExpectedSampleRate();
         profile->expectedSampleRate = trainedRate > 0.0 ? trainedRate : 48000.0;
@@ -86,6 +98,31 @@ std::unique_ptr<NamProfile> NamProfile::load(const juce::File& file, int numChan
     {
         errorOut = "Could not load " + file.getFileName() + ": " + juce::String(e.what());
         return {};
+    }
+}
+
+bool NamProfile::check(const juce::File& file, juce::String& errorOut)
+{
+    if (! checkFileName(file, errorOut))
+        return false;
+
+    try
+    {
+        enableFastTanhOnce();
+        nam::DspLoadOptions options;
+        options.prewarm = false;   // the expensive part of a load, and not needed to vet it
+        const auto model = nam::get_dsp(toFsPath(file), options);
+        if (model == nullptr)
+        {
+            errorOut = "Could not load " + file.getFileName();
+            return false;
+        }
+        return checkMono(*model, file, errorOut);
+    }
+    catch (const std::exception& e)
+    {
+        errorOut = "Could not load " + file.getFileName() + ": " + juce::String(e.what());
+        return false;
     }
 }
 

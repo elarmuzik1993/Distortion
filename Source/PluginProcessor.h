@@ -163,6 +163,7 @@ namespace DSPConstants
     constexpr int    DUCK_POLL_MS = 10;                      // timer interval while a duck is pending
     constexpr int    DUCK_TIMEOUT_MS = 200;                  // rebuild anyway when audio isn't flowing
     constexpr int    PROFILE_TIMER_MS = 50;                  // the processor timer's normal interval
+    constexpr int    PROFILE_OFFLINE_WAIT_MS = 10000;        // longest an offline prepare waits for a load
 }
 
 // Forward declarations for test classes
@@ -803,6 +804,11 @@ private:
     float duckStep = 1.0f;                          // gain change per sample, set in prepareToPlay
 
     void loadStartupProfileOnce();
+    // An offline render can start right after a session is restored, faster than
+    // real time, so prepareToPlay waits for a load still in flight (up to
+    // PROFILE_OFFLINE_WAIT_MS) rather than render its opening on the clip type.
+    // Returns false if it gave up. Never on the audio thread.
+    bool waitForProfileLoads(int timeoutMs);
     // Records the request, returns its id.
     int beginProfileRequest(const juce::File& file, const juce::String& fingerprint = {});
     bool loadProfileNow(const juce::File& file, const juce::String& fingerprint, int requestId);
