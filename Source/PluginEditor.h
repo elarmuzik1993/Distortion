@@ -6,6 +6,7 @@
 #include "FontHelper.h"
 #include "PluginProcessor.h"
 #include "ProfileCardAnimation.h"
+#include "XYPadFeedback.h"
 
 //==============================================================================
 class Oscilloscope : public juce::Component, public juce::Timer
@@ -1879,8 +1880,10 @@ private:
     }
 };
 
-// Invisible XY Morph Pad overlay for oscilloscope
-// Uses timer-based smoothing to prevent zipper noise during fast mouse movements
+// XY Morph pad overlay for the oscilloscope. Transparent at rest apart from its
+// label; while dragged (and briefly after) it draws a puck at the morph position
+// with a crosshair, a short trail and a readout, so the gesture is visible.
+// Uses timer-based smoothing to prevent zipper noise during fast mouse movements.
 class XYMorphPad : public juce::Component, public juce::Timer
 {
 public:
@@ -1888,6 +1891,7 @@ public:
     {
         setInterceptsMouseClicks(true, false);
         setOpaque(false);
+        setMouseCursor(juce::MouseCursor::CrosshairCursor);
         startTimerHz(30);  // 30Hz update rate for smooth parameter changes
     }
 
@@ -1899,26 +1903,19 @@ public:
     void mouseDown(const juce::MouseEvent& e) override
     {
         if (e.mods.isLeftButtonDown())
-        {
-            isDragging = true;
-            updateTargetPosition(e);
-            // Snap to target immediately on initial click (no lag)
-            currentX = targetX;
-            currentY = targetY;
-            if (onPositionChanged)
-                onPositionChanged(currentX, currentY);
-        }
+            pressAt(e.position);
     }
 
     void mouseDrag(const juce::MouseEvent& e) override
     {
         if (isDragging)
-            updateTargetPosition(e);  // Only updates target, timer does smoothing
+            updateTargetPosition(e.position);  // Only updates target, timer does smoothing
     }
 
     void mouseUp(const juce::MouseEvent&) override
     {
         isDragging = false;
+        feedback.release(now());
     }
 
     void timerCallback() override
@@ -1932,24 +1929,128 @@ public:
 
             onPositionChanged(currentX, currentY);
         }
+
+        // Keep the trail ticking while the puck shows (so it collapses after the
+        // drag stops); repaint only while there is something moving or fading.
+        const bool visible = feedback.isVisible(now());
+        if (visible)
+            feedback.push(currentX, currentY);
+        if (visible || wasVisible)
+            repaint();
+        wasVisible = visible;
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        auto b = getLocalBounds().toFloat();
+        if (b.getWidth() < 2.0f || b.getHeight() < 2.0f)
+            return;
+
+        const juce::Colour neon(0xffFF0044);
+        const float a = feedback.getAlpha(now());
+
+        // Label, top-left like the Graphic EQ's; brighter while in use.
+        g.setFont(9.0f);
+        g.setColour(neon.withAlpha(0.45f + 0.4f * a));
+        const auto labelArea = juce::Rectangle<float>(b.getX() + 8.0f, b.getY() + 4.0f,
+                                                      b.getWidth() * 0.6f, 14.0f);
+        juce::String label("XY MORPH");
+        if (a > 0.0f && getReadout)
+            label << "   " << getReadout();
+        g.drawText(label, labelArea, juce::Justification::centredLeft);
+
+        if (a <= 0.0f)
+            return;
+
+        auto toPixel = [&b](XYPadFeedback::Point p)
+        {
+            return juce::Point<float>(b.getX() + p.x * b.getWidth(),
+                                      b.getY() + (1.0f - p.y) * b.getHeight());
+        };
+
+        // Axis hints: X is drive, Y is the Shape voicing.
+        g.setColour(juce::Colours::white.withAlpha(0.35f * a));
+        g.drawText("DRIVE >", b.reduced(8.0f, 4.0f).removeFromBottom(14.0f),
+                   juce::Justification::centredRight);
+        g.drawText("SCOOP", b.reduced(8.0f, 4.0f).withTrimmedTop(16.0f).removeFromTop(14.0f),
+                   juce::Justification::centredLeft);
+        g.drawText("BARK", b.reduced(8.0f, 4.0f).removeFromBottom(14.0f),
+                   juce::Justification::centredLeft);
+
+        const auto puck = toPixel(feedback.getTrailPoint(0));
+
+        // Crosshair through the puck.
+        g.setColour(neon.withAlpha(0.22f * a));
+        g.drawHorizontalLine(juce::roundToInt(puck.y), b.getX(), b.getRight());
+        g.drawVerticalLine(juce::roundToInt(puck.x), b.getY(), b.getBottom());
+
+        // Trail, fading with age.
+        const int n = feedback.getTrailSize();
+        for (int i = 1; i < n; ++i)
+        {
+            const auto p0 = toPixel(feedback.getTrailPoint(i - 1));
+            const auto p1 = toPixel(feedback.getTrailPoint(i));
+            const float age = (float) i / (float) n;
+            g.setColour(neon.withAlpha(0.7f * (1.0f - age) * a));
+            g.drawLine({ p0, p1 }, 3.0f * (1.0f - age) + 0.8f);
+        }
+
+        // Glow, ring and core.
+        constexpr float glowR = 26.0f, ringR = 11.0f, coreR = 4.5f;
+        g.setGradientFill(juce::ColourGradient(neon.withAlpha(0.45f * a), puck,
+                                               neon.withAlpha(0.0f), puck.translated(glowR, 0.0f),
+                                               true));
+        g.fillEllipse(juce::Rectangle<float>(glowR * 2.0f, glowR * 2.0f).withCentre(puck));
+        g.setColour(neon.withAlpha(0.9f * a));
+        g.drawEllipse(juce::Rectangle<float>(ringR * 2.0f, ringR * 2.0f).withCentre(puck), 1.5f);
+        g.setColour(juce::Colour(0xffFFD0DC).withAlpha(a));
+        g.fillEllipse(juce::Rectangle<float>(coreR * 2.0f, coreR * 2.0f).withCentre(puck));
     }
 
     // Callback when position changes
     std::function<void(float x, float y)> onPositionChanged;
 
+    // Text shown next to the label while the pad is in use (e.g. "DRIVE 64%").
+    std::function<juce::String()> getReadout;
+
+   #if DISTORTION_UI_SNAPSHOT
+    // Presses the pad at (x, y) in 0..1 pad coordinates and leaves it held.
+    void holdForSnapshot(float x, float y)
+    {
+        pressAt({ x * (float) getWidth(), (1.0f - y) * (float) getHeight() });
+    }
+   #endif
+
 private:
     bool isDragging = false;
+    bool wasVisible = false;
     float targetX = 0.0f, targetY = 0.0f;    // Where mouse is pointing
     float currentX = 0.0f, currentY = 0.0f;  // Smoothed output position
+    XYPadFeedback feedback;
 
-    void updateTargetPosition(const juce::MouseEvent& e)
+    static double now() { return juce::Time::getMillisecondCounterHiRes() * 0.001; }
+
+    void pressAt(juce::Point<float> position)
+    {
+        isDragging = true;
+        updateTargetPosition(position);
+        // Snap to target immediately on initial click (no lag)
+        currentX = targetX;
+        currentY = targetY;
+        feedback.press(currentX, currentY);
+        if (onPositionChanged)
+            onPositionChanged(currentX, currentY);
+        repaint();
+    }
+
+    void updateTargetPosition(juce::Point<float> position)
     {
         auto bounds = getLocalBounds().toFloat();
         if (bounds.getWidth() < 1 || bounds.getHeight() < 1)
             return;
 
-        targetX = juce::jlimit(0.0f, 1.0f, e.position.x / bounds.getWidth());
-        targetY = juce::jlimit(0.0f, 1.0f, 1.0f - e.position.y / bounds.getHeight()); // Invert Y
+        targetX = juce::jlimit(0.0f, 1.0f, position.x / bounds.getWidth());
+        targetY = juce::jlimit(0.0f, 1.0f, 1.0f - position.y / bounds.getHeight()); // Invert Y
     }
 };
 
@@ -2649,6 +2750,12 @@ public:
     void showProfileCardForSnapshot(int direction);
     // Opens the Settings panel as the gear button does.
     void showSettingsForSnapshot() { showSettingsOverlay(); }
+    // XY Morph overlay on, pad held at (x, y) in 0..1.
+    void showXyTouchForSnapshot(float x, float y)
+    {
+        applyScopeOverlayMode(1);
+        xyMorphPad.holdForSnapshot(x, y);
+    }
    #endif
 
     // Product data root and the settings file inside it. Static and free of
@@ -2669,7 +2776,7 @@ private:
 
     PluginProcessor& audioProcessor;
     Oscilloscope oscilloscope;
-    XYMorphPad xyMorphPad;  // Invisible XY pad overlay on oscilloscope
+    XYMorphPad xyMorphPad;  // XY Morph pad overlay on oscilloscope
     GraphicEqOverlay graphicEqOverlay;  // Free-draw EQ overlay on oscilloscope (shares the slot)
     GainReductionMeter gainReductionMeter;
     PhaseCorrelationMeter phaseCorrelationMeter;

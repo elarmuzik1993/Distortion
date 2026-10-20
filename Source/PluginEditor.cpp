@@ -18,11 +18,20 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 
     addAndMakeVisible(oscilloscope);
 
-    // XY Morph Pad overlay (invisible, on top of oscilloscope)
+    // XY Morph Pad overlay (on top of oscilloscope; draws its puck while in use)
     addAndMakeVisible(xyMorphPad);
     xyMorphPad.onPositionChanged = [this](float x, float y)
     {
         morphDistortionParameters(x, y);
+    };
+    xyMorphPad.getReadout = [this]
+    {
+        juce::String text;
+        if (auto* drive = audioProcessor.parameters.getRawParameterValue("distortionAmount"))
+            text << "DRIVE " << juce::roundToInt(drive->load()) << "%";
+        if (auto* shape = audioProcessor.parameters.getParameter("shape"))
+            text << "   SHAPE " << shape->getCurrentValueAsText();
+        return text;
     };
 
     // Free-draw Graphic EQ overlay — shares the scope slot with the XY pad; the

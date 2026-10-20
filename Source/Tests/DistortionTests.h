@@ -1175,6 +1175,13 @@ public:
     void runTest() override;
 };
 
+class XYPadFeedbackTests : public juce::UnitTest
+{
+public:
+    XYPadFeedbackTests() : UnitTest("XY Pad Feedback", TestCategories::Parameters) {}
+    void runTest() override;
+};
+
 // Force static test registration
 inline void registerAllTests()
 {
@@ -1242,6 +1249,7 @@ inline void registerAllTests()
     static NamProfileTests namProfileTests;
     static ProfileLibraryTests profileLibraryTests;
     static ProfileCardAnimationTests profileCardAnimationTests;
+    static XYPadFeedbackTests xyPadFeedbackTests;
 }
 
 #endif // JUCE_DEBUG

@@ -8,15 +8,19 @@
   0.3 dB of its input, drive products below the crossover under -110 dBFS, one LR48 split around
   the drive (double), on/off click-free (15 ms weight `g`, splitter warm). Sub Guard off renders
   byte-identical to before. `SubGuardBehaviourTests` asserts it; nothing is pending.
+- XY Morph pad shows a puck while dragged: crosshair, 12-point trail, axis hints, live DRIVE /
+  SHAPE readout; holds 0.25 s after release, fades 0.5 s (`XYPadFeedback`, tested).
+  `DistortionUiSnapshot --xy-touch` renders it. Branch `feat/xy-pad-feedback`, no PR yet.
 - Drive noise is seedable (`seedNoiseForTesting`; `DistortionRender --seed`, default 1).
 - Golden audio: 16 seeded cases with every parameter pinned, compared with
   `Resources/TestAudio/golden_*.wav` (max error -90 dBFS; compression -85, Shape -80, Clean
   Boost -66). Regenerate: `DISTORTION_GOLDEN_GENERATE=1 DistortionTests Golden`.
-- Verified 2026-10-19 on Linux (cloud, Debug): `verify.sh` passes, 4262 assertions, golden
+- Verified 2026-10-20 on Linux (cloud, Debug): `verify.sh` passes, 4278 assertions, golden
   cases exact run to run; CI green on Linux, Windows and macOS with the golden limits. pluginval
   not run.
 
 ## Next
+0. Owner: try the XY pad feedback in a host (puck size, readout, fade timing); open its PR.
 1. Owner: one listening pass on the Sub Guard work (real 808 and bass line, Sub Guard on vs
    bypassed, preset changes while playing, Sub Guard off and back); re-voice the seven presets
    at 100-150 Hz (Hard Clip, 808 Safe, Vocal Warmth, EXTREME, Bass Driver, Lo-Fi Crush, Diode
