@@ -675,8 +675,8 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
     // An offline render gets its profile before its first block: the startup
     // profile starts here rather than after the prepare, and any load still in
-    // flight is waited for. Before the lock: the loader never takes it, but
-    // nothing else need wait on it.
+    // flight is waited for. The AU wrapper calls this holding the callback lock
+    // (VST3 doesn't), so the loader must never take that lock.
     if (isNonRealtime())
     {
         loadStartupProfileOnce();

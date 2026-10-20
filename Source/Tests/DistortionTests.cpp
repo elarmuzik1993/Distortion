@@ -7334,19 +7334,30 @@ void NamProfileTests::runTest()
             processor.getStateInformation(saved);
         }
 
-        PluginProcessor restored;
-        restored.setNonRealtime(true);
-        // Hold the loader so the restore's load is still in flight at the prepare.
-        restored.getProfileLoader().addJob([] { juce::Thread::sleep(200); });
-        restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
-        expect(restored.getProfileStatus().loading, "The load is in flight before the prepare");
+        // VST3 prepares without the callback lock; the AU wrapper holds it while it
+        // prepares, so the wait must finish without the loader ever needing it.
+        for (const bool wrapperHoldsLock : { false, true })
+        {
+            const juce::String how = wrapperHoldsLock ? " (callback lock held)" : "";
+            PluginProcessor restored;
+            restored.setNonRealtime(true);
+            // Hold the loader so the restore's load is still in flight at the prepare.
+            restored.getProfileLoader().addJob([] { juce::Thread::sleep(200); });
+            restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+            expect(restored.getProfileStatus().loading, "The load is in flight before the prepare" + how);
 
-        prepareForProfileTest(restored);   // no timer tick from here on
-        expect(restored.profileMode, "The profile is installed by the prepare itself");
-        expectEquals(static_cast<int>(restored.oversamplingFactor), 1, "And the chain is at 1x");
-        juce::AudioBuffer<float> out;
-        processSine(restored, 2, &out);
-        expect(! containsInvalidSamples(out), "Output is finite");
+            {
+                std::unique_ptr<juce::ScopedLock> wrapperLock;
+                if (wrapperHoldsLock)
+                    wrapperLock = std::make_unique<juce::ScopedLock>(restored.getCallbackLock());
+                prepareForProfileTest(restored);   // no timer tick from here on
+            }
+            expect(restored.profileMode, "The profile is installed by the prepare itself" + how);
+            expectEquals(static_cast<int>(restored.oversamplingFactor), 1, "And the chain is at 1x" + how);
+            juce::AudioBuffer<float> out;
+            processSine(restored, 2, &out);
+            expect(! containsInvalidSamples(out), "Output is finite" + how);
+        }
     }
 
     beginTest("Clicking through profiles quickly loads only the last one");

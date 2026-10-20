@@ -12,7 +12,7 @@
   `Resources/TestAudio/golden_*.wav` (see AGENTS.md, Build & Test). CI green on all three OSes.
 - `fix/nam-loader` (no PR yet): offline prepare waits for a profile load; imports vetted
   (`NamProfile::check`), problems shown in a dialog; arrow step reads the library once.
-  Verified 2026-10-20 (Linux cloud, Debug): `verify.sh` 4288 assertions; snapshot renders.
+  Verified 2026-10-20 (Linux cloud, Debug): `verify.sh` 4292 assertions; snapshot renders.
 
 ## Next
 1. Owner: listening pass on Sub Guard (real 808 and bass line; on vs bypassed; preset changes
