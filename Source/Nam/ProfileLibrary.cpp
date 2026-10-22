@@ -130,6 +130,27 @@ ProfileLibrary::ImportResult ProfileLibrary::importAll(const juce::Array<juce::F
     return result;
 }
 
+juce::Array<juce::File> ProfileLibrary::collectProfiles(const juce::StringArray& paths)
+{
+    juce::Array<juce::File> found;
+    for (const auto& path : paths)
+    {
+        const juce::File item(path);
+        if (item.existsAsFile() && item.hasFileExtension("nam"))
+            found.addIfNotAlreadyThere(item);
+        else if (item.isDirectory())
+            for (const auto& file : ProfileLibrary(item).list())
+                found.addIfNotAlreadyThere(file);
+    }
+    return found;
+}
+
+bool ProfileLibrary::mayHoldProfiles(const juce::String& path)
+{
+    const juce::File item(path);
+    return item.isDirectory() || item.hasFileExtension("nam");
+}
+
 juce::String ProfileLibrary::fingerprint(const juce::File& file)
 {
     juce::FileInputStream in(file);

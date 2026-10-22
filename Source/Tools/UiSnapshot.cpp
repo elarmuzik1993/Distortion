@@ -108,7 +108,7 @@ void feedScope(PluginProcessor& proc)
 
 bool snapshot(PluginProcessor& proc, int width, int height, const juce::File& out,
               bool extreme = false, bool withSignal = false, bool profileCard = false,
-              bool settings = false, bool xyTouch = false)
+              bool settings = false, bool xyTouch = false, bool dropHint = false)
 {
     PluginEditor editor(proc);
     editor.setSize(width, height);
@@ -156,6 +156,10 @@ bool snapshot(PluginProcessor& proc, int width, int height, const juce::File& ou
         editor.showXyTouchForSnapshot(0.65f, 0.7f);
         juce::MessageManager::getInstance()->runDispatchLoopUntil(400);
     }
+
+    // The hint a .nam drag over the window shows.
+    if (dropHint)
+        editor.showProfileDropHintForSnapshot();
 
     // The Settings panel over the editor, as its gear button opens it.
     if (settings)
@@ -206,7 +210,8 @@ int main(int argc, char* argv[])
                 "  --profile <f>    load a NAM profile (copied into a scratch library)\n"
                 "  --profile-card   show the profile browser's name card\n"
                 "  --settings       open the Settings panel\n"
-                "  --xy-touch       XY Morph pad held (puck, crosshair, readout)\n";
+                "  --xy-touch       XY Morph pad held (puck, crosshair, readout)\n"
+                "  --drop-hint      a .nam file dragged over the window\n";
             return 0;
         }
     }
@@ -217,7 +222,7 @@ int main(int argc, char* argv[])
     bool extreme = false;
     bool signal = false;
     float shapeValue = 0.0f;
-    bool hasShape = false, legacy = false, profileCard = false, settings = false, xyTouch = false;
+    bool hasShape = false, legacy = false, profileCard = false, settings = false, xyTouch = false, dropHint = false;
     juce::String profilePath;
     for (int i = 1; i < argc; ++i)
     {
@@ -233,6 +238,7 @@ int main(int argc, char* argv[])
         else if (t == "--profile-card")          profileCard = true;
         else if (t == "--settings")              settings  = true;
         else if (t == "--xy-touch")              xyTouch   = true;
+        else if (t == "--drop-hint")             dropHint  = true;
     }
 
     // Collapsed (scope folded away) is the other fold state. The harness drives it
@@ -310,7 +316,9 @@ int main(int argc, char* argv[])
             name += "-settings";
         if (xyTouch)
             name += "-xy";
-        allOk &= snapshot(proc, w, h, dir.getChildFile(name + ".png"), extreme, signal, profileCard, settings, xyTouch);
+        if (dropHint)
+            name += "-drop";
+        allOk &= snapshot(proc, w, h, dir.getChildFile(name + ".png"), extreme, signal, profileCard, settings, xyTouch, dropHint);
     }
 
     scratchRoot.deleteRecursively();

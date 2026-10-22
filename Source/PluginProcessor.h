@@ -98,6 +98,7 @@ namespace DSPConstants
     constexpr float PRE_COMP_ATTACK_TIME_S = 0.001f;         // 1ms attack (catches transients)
     constexpr float PRE_COMP_RELEASE_TIME_S = 0.050f;        // 50ms release (preserves punch)
     constexpr float PRE_COMP_THRESHOLD_DB = -12.0f;          // -12dB threshold
+    constexpr float EXTREME_DRIVE_MULT = 4.0f;               // EXTREME: drive x4 (+12 dB), clip types and profiles alike
     constexpr float PRE_COMP_RATIO = 2.5f;                   // 2.5:1 ratio (light compression)
     constexpr float PRE_COMP_KNEE_DB = 6.0f;                 // 6dB soft knee
 
@@ -646,6 +647,7 @@ private:
     LinearRamp<float> inputGainRamp { 1.0f };
     LinearRamp<float> driveRamp     { 1.0f };
     LinearRamp<float> distMixRamp   { 1.0f };
+    LinearRamp<float> extremePushRamp { 1.0f };   // profile mode's EXTREME, ramped like the drive
 
     juce::AudioBuffer<float> scopeBuffer;
     juce::AbstractFifo scopeFifo;
@@ -705,7 +707,8 @@ private:
     // Per-sample input gain, drive, mix and distortion amount, including LFO
     // modulation (which advances lfoPhase). Shared by every distortion loop so
     // they all modulate identically.
-    struct SampleControls { float gain, drive, mix, distortionParam; };
+    // push: the EXTREME gain on a profile's input (1, or EXTREME_DRIVE_MULT).
+    struct SampleControls { float gain, drive, mix, distortionParam, push; };
     SampleControls advanceSampleControls(float lfoPhaseIncrement) noexcept;
     // Runs the active NAM profile over the given channel buffers in place of the
     // built-in clip type. Returns false (touching nothing) when no profile can

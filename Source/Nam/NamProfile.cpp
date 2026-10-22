@@ -85,6 +85,9 @@ std::unique_ptr<NamProfile> NamProfile::load(const juce::File& file, int numChan
         if (first.HasLoudness())
             profile->outputGain = static_cast<float>(
                 std::pow(10.0, (targetLoudnessDb - first.GetLoudness()) / 20.0));
+        if (profile->models.front()->HasInputLevel())
+            profile->inputGain = static_cast<float>(
+                std::pow(10.0, (referenceInputDbu - profile->models.front()->GetInputLevel()) / 20.0));
 
         profile->islands.resize(profile->models.size());
         if (! profile->prepare(hostRate, maxHostBlock))
@@ -151,6 +154,7 @@ bool NamProfile::prepare(double hostRate, int maxHostBlock)
     // Each model runs at its trained rate, on blocks as large as its island hands
     // it. Prewarming settles its internal state, so the first block starts from rest.
     const int modelBlock = islands.empty() ? preparedBlockSize : islands.front().getMaxModelBlock();
+    scaledInput.assign(static_cast<size_t>(modelBlock), 0.0f);
     for (auto& model : models)
         model->ResetAndPrewarm(expectedSampleRate, modelBlock);
     settleSeconds = models.empty() ? 0.0 : models.front()->GetPrewarmSamples() / expectedSampleRate;
@@ -168,8 +172,25 @@ void NamProfile::process(int channel, const float* input, float* output, int num
 {
     auto& model = *models[static_cast<size_t>(channel)];
     islands[static_cast<size_t>(channel)].process(input, output, numSamples,
-        [&model](const float* in, float* out, int count)
+        [this, &model](const float* in, float* out, int count)
         {
+            // The calibration trim goes on at the model's rate, so a profile coming
+            // in on a crossfade gets its own trim from the same island input.
+            if (inputGain != 1.0f)
+            {
+                const int room = static_cast<int>(scaledInput.size());
+                for (int done = 0; done < count;)
+                {
+                    const int n = juce::jmin(room, count - done);
+                    for (int i = 0; i < n; ++i)
+                        scaledInput[static_cast<size_t>(i)] = in[done + i] * inputGain;
+                    NAM_SAMPLE* inPtr = scaledInput.data();
+                    NAM_SAMPLE* outPtr = out + done;
+                    model.process(&inPtr, &outPtr, n);
+                    done += n;
+                }
+                return;
+            }
             // NAM takes non-const channel-pointer arrays; it does not write the input.
             NAM_SAMPLE* inPtr = const_cast<float*>(in);
             NAM_SAMPLE* outPtr = out;

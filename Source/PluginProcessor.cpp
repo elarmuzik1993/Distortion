@@ -730,6 +730,8 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     inputGainRamp.reset(std::pow(inGainParam / 50.0f, 1.5f));
     driveRamp.reset(1.0f + (distParam / 100.0f) * 3.0f);
     distMixRamp.reset(distMixParam ? distMixParam->load() / 100.0f : 1.0f);
+    extremePushRamp.reset(extremeEnabledParam && extremeEnabledParam->load() > 0.5f
+                              ? DSPConstants::EXTREME_DRIVE_MULT : 1.0f);
 
     // Update all sample-rate-dependent coefficients (DC blocking, compression, etc.)
     updateSampleRateDependentCoefficients(sampleRate);
@@ -1640,7 +1642,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         distortionDrive = 1.0f;
 
     if (extremeEnabled)
-        distortionDrive *= 4.0f;
+        distortionDrive *= DSPConstants::EXTREME_DRIVE_MULT;
 
     // Convert modulated gain parameters to processing values
     const float inputGain = std::pow(inGainParam / 50.0f, 1.5f);
@@ -1773,6 +1775,7 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     inputGainRamp.rampTo(inputGain,       actualOversampledSamples);
     driveRamp    .rampTo(distortionDrive, actualOversampledSamples);
     distMixRamp  .rampTo(targetMixAmount, actualOversampledSamples);
+    extremePushRamp.rampTo(extremeEnabled ? DSPConstants::EXTREME_DRIVE_MULT : 1.0f, actualOversampledSamples);
 
     if (actualOversampledSamples > static_cast<size_t>(subGuardSplitter.getLowBand().getNumSamples()))
     {
@@ -2928,6 +2931,7 @@ PluginProcessor::SampleControls PluginProcessor::advanceSampleControls(float lfo
     c.drive           = driveRamp.advance();
     c.mix             = distMixRamp.advance();
     c.distortionParam = pb_modulatedDistortionParam;
+    c.push            = extremePushRamp.advance();
 
     // Only destinations 0 (distortion) and 3 (mix) are modulated here. Destination 4
     // (output gain) is handled in the output-gain stage; advancing lfoPhase here too
@@ -2945,7 +2949,7 @@ PluginProcessor::SampleControls PluginProcessor::advanceSampleControls(float lfo
             c.distortionParam = juce::jlimit(0.0f, 100.0f,
                 pb_distortionParam + sampleLfoMod * 50.0f);
             c.drive = 1.0f + (c.distortionParam / 100.0f) * 3.0f;
-            if (pb_extremeEnabled) c.drive *= 4.0f;
+            if (pb_extremeEnabled) c.drive *= DSPConstants::EXTREME_DRIVE_MULT;
         }
         else if (pb_lfoDestination == 3)
         {
@@ -3008,7 +3012,7 @@ void PluginProcessor::feedProfileWhileBypassed(const juce::AudioBuffer<float>& b
 
     // Below the bypass threshold the model hears the input at the bottom of its
     // input-gain curve, as it would on the active path.
-    const float inputGain = inputGainRamp.peek()
+    const float inputGain = inputGainRamp.peek() * extremePushRamp.peek()
         * juce::Decibels::decibelsToGain(profileInputGainDb(0.0f));
     // The global dry line takes the captured dry, which exists only when it fits.
     const bool feedGlobalDry = numSamples <= dryBuffer.getNumSamples()
@@ -3146,7 +3150,8 @@ void PluginProcessor::applyProfileChunk(float* const* channels, int numChannels,
         // Same bypass threshold as applyDistortionStage. The model keeps running
         // below it so its state stays continuous when the amount comes back up.
         mix[i] = c.distortionParam < 0.5f ? 0.0f : c.mix;
-        const float inputGain = c.gain
+        // EXTREME pushes the profile as it pushes a clip type: the same x4 (+12 dB).
+        const float inputGain = c.gain * c.push
             * juce::Decibels::decibelsToGain(profileInputGainDb(c.distortionParam));
         for (size_t ch = 0; ch < static_cast<size_t>(numChannels); ++ch)
             modelIn[ch][i] = channels[ch][i] * inputGain;

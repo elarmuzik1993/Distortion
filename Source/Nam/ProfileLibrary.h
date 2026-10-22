@@ -59,6 +59,13 @@ public:
     ImportResult importAll(const juce::Array<juce::File>& sources,
                            const std::function<juce::String(const juce::File&)>& check) const;
 
+    // What a drag-and-drop of `paths` offers as profiles: each .nam file as given,
+    // then each folder's .nam files (subfolders included, natural order by relative
+    // path, hidden files skipped). Anything else is ignored; duplicates appear once.
+    static juce::Array<juce::File> collectProfiles(const juce::StringArray& paths);
+    // Whether a dragged path could hold a profile: a .nam file or a folder.
+    static bool mayHoldProfiles(const juce::String& path);
+
     // Identifies a profile's content independently of where it lives: its size
     // and a 64-bit FNV-1a hash of its bytes, "<size>-<hash>". Empty if unreadable.
     static juce::String fingerprint(const juce::File& file);

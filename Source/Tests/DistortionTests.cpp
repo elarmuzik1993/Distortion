@@ -7956,6 +7956,57 @@ void NamProfileTests::runTest()
         }
     }
 
+    beginTest("The capture's input level trims the model's input");
+    {
+        // An identity model shows the trim directly. Captured at 18 dBu, a profile
+        // is driven 6 dB below Sledge's 12 dBu reference; a file that doesn't say
+        // is driven as it always was.
+        const auto identityJson = linearModelJson("1.0", 1, 48000);
+        TempNam plain(identityJson);
+        TempNam calibrated(identityJson.dropLastCharacters(1) + ",\"metadata\":{\"input_level_dbu\":18.0}}");
+        TempNam quiet(identityJson.dropLastCharacters(1) + ",\"metadata\":{\"input_level_dbu\":6.0}}");
+
+        const auto gainOf = [&](const juce::File& file)
+        {
+            juce::String error;
+            auto profile = NamProfile::load(file, 1, 48000.0, 512, error);
+            expect(profile != nullptr, error);
+            if (profile == nullptr)
+                return 0.0;
+            const auto tone = sineAt(1000.0, 48000.0, 0.2, 0.1f);
+            const auto out = runProfile(*profile, tone, 512);
+            return toneAmplitude(out, 4800, 4800, 1000.0, 48000.0) / 0.1;
+        };
+        expectWithinAbsoluteError(toDb(gainOf(plain.file)), 0.0, 0.01, "No input level: unity");
+        expectWithinAbsoluteError(toDb(gainOf(calibrated.file)), -6.0, 0.01, "Captured at 18 dBu: -6 dB");
+        expectWithinAbsoluteError(toDb(gainOf(quiet.file)), 6.0, 0.01, "Captured at 6 dBu: +6 dB");
+
+        juce::String error;
+        auto profile = NamProfile::load(calibrated.file, 1, 48000.0, 512, error);
+        expect(profile != nullptr && std::abs(profile->getInputGain() - 0.501187f) < 1.0e-4f,
+               "getInputGain reports the trim");
+    }
+
+    beginTest("EXTREME pushes a profile's input 12 dB, as it does a clip type's drive");
+    {
+        // An identity model at a level well under the tamer and the soft clipper,
+        // so the push is all that differs between the two renders.
+        TempNam identity(linearModelJson("1.0", 1, 48000));
+        const auto render = [&](bool extreme)
+        {
+            PluginProcessor processor;
+            prepareForProfileTest(processor, 48000.0, 512);
+            configureUnityChain(processor);
+            setParameter(processor.parameters, "extremeEnabled", extreme ? 1.0f : 0.0f);
+            processor.loadProfileBlocking(identity.file);
+            expect(settle(processor), "Identity profile in");
+            const auto out = renderThrough(processor, sineAt(1000.0, 48000.0, 0.5, 0.005f));
+            return toneAmplitude(out, 9600, 9600, 1000.0, 48000.0);
+        };
+        expectWithinAbsoluteError(toDb(render(true) / render(false)), 20.0 * std::log10(4.0), 0.1,
+                                  "EXTREME on vs off");
+    }
+
     beginTest("Sub Guard stays flat through its crossover with a profile loaded");
     {
         TempNam identity(linearModelJson("1.0", 1, 48000));
@@ -8649,6 +8700,27 @@ void ProfileLibraryTests::runTest()
                      juce::String("amp 2.nam|amp 10.nam|Fender/clean.nam"));
         expect(ProfileLibrary(scratch.dir.getChildFile("missing")).list().isEmpty(),
                "A library that doesn't exist yet is empty");
+    }
+
+    beginTest("A drop offers .nam files and the profiles in dropped folders, once each");
+    {
+        ScratchFolder scratch("sledge-drop");
+        const auto loose = scratch.write("loose.nam", "loose");
+        scratch.write("pack/b 10.nam", "b10");
+        scratch.write("pack/b 2.nam", "b2");
+        scratch.write("pack/deep/c.nam", "c");
+        const auto notes = scratch.write("notes.txt", "not a profile");
+
+        juce::StringArray paths { loose.getFullPathName(), notes.getFullPathName(),
+                                  scratch.dir.getChildFile("pack").getFullPathName(),
+                                  scratch.dir.getChildFile("pack/b 2.nam").getFullPathName() };
+        expectEquals(relativeNames(ProfileLibrary::collectProfiles(paths), scratch.dir).joinIntoString("|"),
+                     juce::String("loose.nam|pack/b 2.nam|pack/b 10.nam|pack/deep/c.nam"));
+        expect(ProfileLibrary::collectProfiles({ notes.getFullPathName() }).isEmpty(), "Nothing usable: empty");
+
+        expect(ProfileLibrary::mayHoldProfiles(loose.getFullPathName()), "A .nam file");
+        expect(ProfileLibrary::mayHoldProfiles(scratch.dir.getFullPathName()), "A folder");
+        expect(! ProfileLibrary::mayHoldProfiles(notes.getFullPathName()), "Not a text file");
     }
 
     beginTest("Steps wrap at both ends and start from an end outside the library");

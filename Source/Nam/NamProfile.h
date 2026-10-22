@@ -20,6 +20,10 @@ public:
     // Loudness every profile is normalised to when the file reports its own,
     // matching the NAM plugin's convention.
     static constexpr double targetLoudnessDb = -18.0;
+    // The analogue level Sledge's 0 dBFS stands for when a profile reports the
+    // level it was captured at (input_level_dbu): the NAM plugin's default
+    // interface calibration. A capture made at a hotter level is driven less.
+    static constexpr double referenceInputDbu = 12.0;
 
     // Loads a .nam file and prepares numChannels models for the host rate. Returns
     // nullptr and fills errorOut if the file can't be read, isn't a single-input,
@@ -62,6 +66,9 @@ public:
     double getSettleSeconds() const noexcept { return settleSeconds; }
     // Linear gain that brings the profile to targetLoudnessDb (1 if unknown).
     float getOutputGain() const noexcept { return outputGain; }
+    // Linear gain on the model's input that follows the capture's calibration:
+    // referenceInputDbu - input_level_dbu, in dB. 1 when the file doesn't say.
+    float getInputGain() const noexcept { return inputGain; }
     const juce::File& getFile() const noexcept { return file; }
     juce::String getName() const { return file.getFileNameWithoutExtension(); }
     // The load request that produced this profile. The processor keeps a profile
@@ -81,6 +88,8 @@ private:
     double expectedSampleRate = 48000.0;
     double settleSeconds = 0.0;
     float outputGain = 1.0f;
+    float inputGain = 1.0f;
+    std::vector<float> scaledInput;   // the model's input after inputGain, one model block
     bool ready = false;
     int requestId = 0;
 
