@@ -10,8 +10,9 @@
   --seed`).
 - Golden audio: 16 seeded cases with every parameter pinned, compared with
   `Resources/TestAudio/golden_*.wav` (see AGENTS.md, Build & Test). CI green on all three OSes.
-- Verified 2026-10-20 on Linux (cloud, Debug) at `c9c8e92`: `verify.sh` passes, 4262
-  assertions. pluginval not run.
+- `fix/nam-loader`, PR #83: offline prepare waits for a profile load; imports vetted
+  (`NamProfile::check`), problems shown in a dialog; arrow step reads the library once.
+  Verified 2026-10-20 (Linux cloud, Debug): `verify.sh` 4292 assertions; snapshot renders.
 
 ## Next
 1. Owner: listening pass on Sub Guard (real 808 and bass line; on vs bypassed; preset changes
@@ -21,18 +22,21 @@
 2. Sub Guard follow-ups: leaving true bypass resumes the splitter stale (reset it, `toneFilterLow`
    and `g` there, as `shapePost` is); warm switch-on only proven at distMix 0; NAM-mode `g` leads
    by D during the ramp. Plan step 8 only if measured (F6, C5, a C3 hint on the knob).
-3. Release prep for the marketing direction below: NAM out of prototype (or labelled beta); three
+3. Owner, NAM before it leaves prototype: EXTREME with a profile only skips the tamer (push
+   ~+12 dB or grey out?); `input_level_dbu` calibration ignored. Both change the sound. Also
+   drag-and-drop; offline state restored after prepare still waits for the timer.
+4. Release prep for the marketing direction below: NAM out of prototype (or labelled beta); three
    demo clips (808 on a phone speaker, bass DI through a NAM capture with Sub Guard on/off, the
    drawn EQ); a short comparison page (crossover vs blend). First verify rivals' claims: NAM 9000
    "Split Drive" (price, platforms) and UnplugRed Prisma's Linux support (unverified).
-4. Owner, Release build: clip column font, Legacy Filter on a v2.3 session, profile browser.
-5. #44 (pluginval Automation segfault, Linux 96 kHz / 64 samples); `prepareToPlay` shrinks band
+5. Owner, Release build: clip column font, Legacy Filter on a v2.3 session, profile browser.
+6. #44 (pluginval Automation segfault, Linux 96 kHz / 64 samples); `prepareToPlay` shrinks band
    buffers below `rebuildOversampling`'s size. Then pluginval (strictness 10), bump CMake
    `VERSION 2.3.0`, tag. Owner: ASIO standalone pass.
-6. Follow-ups: Legacy switch may click; XY Y-axis silent in Legacy; arrow click lists the library
-   twice; failed import is silent. Delete merged Sub Guard branches (owner to confirm); decide
-   `claude/ui-screenshot-readme-6vbm01`, `docs/profile-morph*`, `fix/profile-browser-review`,
-   `fix/transition-clicks`, `test/crossing-probe`.
+7. Follow-ups: Legacy switch may click; XY Y-axis silent in Legacy. Delete merged Sub Guard
+   branches (owner to confirm); decide `claude/ui-screenshot-readme-6vbm01`,
+   `docs/profile-morph*`, `fix/profile-browser-review`, `fix/transition-clicks`,
+   `test/crossing-probe`.
 
 ## Decisions
 - `legacyFilter` is a session param; state v3 turns it on for v2.3 states that used the filter.

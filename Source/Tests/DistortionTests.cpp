@@ -7320,6 +7320,46 @@ void NamProfileTests::runTest()
         expect(restored.isProfileLoaded(), "It stays loaded");
     }
 
+    beginTest("An offline render has a restored session's profile from its first block");
+    {
+        // A render run straight after the session opens prepares at once and then
+        // runs faster than real time, before the message-thread timer would have
+        // installed a load still in flight.
+        const auto model = namTestModel("wavenet.nam");
+        juce::MemoryBlock saved;
+        {
+            PluginProcessor processor;
+            prepareForProfileTest(processor);
+            processor.loadProfileBlocking(model);
+            processor.getStateInformation(saved);
+        }
+
+        // VST3 prepares without the callback lock; the AU wrapper holds it while it
+        // prepares, so the wait must finish without the loader ever needing it.
+        for (const bool wrapperHoldsLock : { false, true })
+        {
+            const juce::String how = wrapperHoldsLock ? " (callback lock held)" : "";
+            PluginProcessor restored;
+            restored.setNonRealtime(true);
+            // Hold the loader so the restore's load is still in flight at the prepare.
+            restored.getProfileLoader().addJob([] { juce::Thread::sleep(200); });
+            restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+            expect(restored.getProfileStatus().loading, "The load is in flight before the prepare" + how);
+
+            {
+                std::unique_ptr<juce::ScopedLock> wrapperLock;
+                if (wrapperHoldsLock)
+                    wrapperLock = std::make_unique<juce::ScopedLock>(restored.getCallbackLock());
+                prepareForProfileTest(restored);   // no timer tick from here on
+            }
+            expect(restored.profileMode, "The profile is installed by the prepare itself" + how);
+            expectEquals(static_cast<int>(restored.oversamplingFactor), 1, "And the chain is at 1x" + how);
+            juce::AudioBuffer<float> out;
+            processSine(restored, 2, &out);
+            expect(! containsInvalidSamples(out), "Output is finite" + how);
+        }
+    }
+
     beginTest("Clicking through profiles quickly loads only the last one");
     {
         PluginProcessor processor;
@@ -8631,8 +8671,18 @@ void ProfileLibraryTests::runTest()
         expectEquals(position.count, 3);
         expectEquals(library.positionOf({}).index, -1);
 
+        // A step reports where it landed from the same read, so the arrows list once.
+        ProfileLibrary::Position where;
+        expect(library.step(c, 1, &where) == a, "Forward from the last, with its position");
+        expectEquals(where.index, 0);
+        expectEquals(where.count, 3);
+        library.step({}, -1, &where);
+        expectEquals(where.index, 2, "From outside, back lands on the last");
+
         ScratchFolder empty("sledge-library-empty");
-        expect(ProfileLibrary(empty.dir).step(a, 1) == juce::File(), "An empty library has nowhere to go");
+        expect(ProfileLibrary(empty.dir).step(a, 1, &where) == juce::File(), "An empty library has nowhere to go");
+        expectEquals(where.index, -1);
+        expectEquals(where.count, 0);
     }
 
     beginTest("Importing copies in, reuses the same content and numbers different content");
@@ -8659,6 +8709,55 @@ void ProfileLibraryTests::runTest()
 
         expect(library.import(outside.dir.getChildFile("gone.nam"), error) == juce::File(), "A missing file fails");
         expect(error.isNotEmpty(), "With a reason");
+    }
+
+    beginTest("Checking a profile vets it without loading it for playback");
+    {
+        ScratchFolder scratch("sledge-check");
+        juce::String error;
+        expect(NamProfile::check(namTestModel("wavenet.nam"), error), "A good profile passes: " + error);
+        expect(NamProfile::check(namTestModel("lstm.nam"), error), "So does another architecture: " + error);
+
+        expect(! NamProfile::check(scratch.write("broken.nam", "{ not json"), error), "Garbage fails");
+        expect(error.contains("broken.nam"), "Naming the file: " + error);
+        expect(! NamProfile::check(scratch.write("model.txt", "x"), error), "So does the wrong extension");
+        expect(! NamProfile::check(scratch.dir.getChildFile("gone.nam"), error), "And a missing file");
+    }
+
+    beginTest("Importing several files keeps bad ones out and reports every problem");
+    {
+        ScratchFolder scratch("sledge-library");
+        ScratchFolder downloads("sledge-downloads");
+        ProfileLibrary library(scratch.dir.getChildFile("Profiles"));
+        const auto check = [](const juce::File& file)
+        {
+            juce::String error;
+            return NamProfile::check(file, error) ? juce::String() : error;
+        };
+
+        const auto broken = downloads.write("broken.nam", "{ not json");
+        const auto good = downloads.dir.getChildFile("wavenet.nam");
+        expect(namTestModel("wavenet.nam").copyFileTo(good), "Test model copied");
+        const auto gone = downloads.dir.getChildFile("gone.nam");
+
+        const auto result = library.importAll({ broken, good, gone }, check);
+        expectEquals(result.loadable.size(), 1, "Only the good file is loadable");
+        expect(result.loadable.getFirst() == library.getRoot().getChildFile("wavenet.nam"),
+               "And it is the library's copy");
+        expectEquals(relativeNames(library.list(), library.getRoot()).joinIntoString("|"),
+                     juce::String("wavenet.nam"), "The broken file never enters the library");
+        expectEquals(result.problems.size(), 2, "Both bad files are reported");
+        expect(result.problems[0].contains("broken.nam") && result.problems[1].contains("gone.nam"),
+               "In order, by name: " + result.problems.joinIntoString(" / "));
+
+        // A library that can't be created (its path is taken by a file): the good
+        // profile still plays from where it is, and that is reported too.
+        const auto blocked = scratch.write("Blocked", "a file, not a folder");
+        const auto fallback = ProfileLibrary(blocked).importAll({ good }, check);
+        expectEquals(fallback.loadable.size(), 1);
+        expect(fallback.loadable.getFirst() == good, "It loads from its own folder");
+        expectEquals(fallback.problems.size(), 1, "Reported: " + fallback.problems.joinIntoString(" / "));
+        expect(fallback.problems[0].contains("own folder"), "Saying where it plays from");
     }
 
     beginTest("Fingerprints identify content, wherever the file is");

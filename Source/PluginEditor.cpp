@@ -1587,27 +1587,36 @@ void PluginEditor::showProfileMenu()
 
 void PluginEditor::importAndLoadProfiles(const juce::Array<juce::File>& files)
 {
-    const auto library = audioProcessor.getProfileLibrary();
-    juce::File first;
     for (const auto& file : files)
-    {
-        if (! file.existsAsFile())
-            continue;
-        profileImportFolder = file.getParentDirectory();
-        juce::String error;
-        const auto copy = library.import(file, error);
-        // A copy that fails still loads from where it is; the session then points there.
-        const auto target = copy.existsAsFile() ? copy : file;
-        if (first == juce::File())
-            first = target;
-    }
+        if (file.existsAsFile())
+            profileImportFolder = file.getParentDirectory();
     if (profileImportFolder.isDirectory())
         writeSettingsAttribute("profileImportFolder", profileImportFolder.getFullPathName());
-    if (first != juce::File())
-        loadLibraryProfile(first, 0);
+
+    // Files that aren't usable profiles stay out of the library, and anything that
+    // didn't go in cleanly is reported rather than dropped.
+    const auto result = audioProcessor.getProfileLibrary().importAll(files, [](const juce::File& file)
+    {
+        juce::String error;
+        return NamProfile::check(file, error) ? juce::String() : error;
+    });
+    if (! result.loadable.isEmpty())
+        loadLibraryProfile(result.loadable.getFirst(), 0);
+    if (! result.problems.isEmpty())
+    {
+        const bool noneLoaded = result.loadable.isEmpty();
+        juce::AlertWindow::showAsync(juce::MessageBoxOptions()
+                                         .withIconType(juce::MessageBoxIconType::WarningIcon)
+                                         .withTitle(noneLoaded ? "No profile loaded" : "Some profiles were not imported")
+                                         .withMessage(result.problems.joinIntoString("\n"))
+                                         .withButton("OK")
+                                         .withAssociatedComponent(this),
+                                     nullptr);
+    }
 }
 
-void PluginEditor::loadLibraryProfile(const juce::File& file, int direction)
+void PluginEditor::loadLibraryProfile(const juce::File& file, int direction,
+                                      ProfileLibrary::Position position)
 {
     const auto status = audioProcessor.getProfileStatus();
     // Already loaded or on its way (a one-profile library, a repeated pick): just
@@ -1617,7 +1626,7 @@ void PluginEditor::loadLibraryProfile(const juce::File& file, int direction)
     if (! held)
         audioProcessor.loadProfileAsync(file);
     pendingLastProfile = file;
-    showProfileCard(file, direction);
+    showProfileCard(file, direction, position);
 }
 
 void PluginEditor::rememberLastProfile()
@@ -1651,16 +1660,17 @@ void PluginEditor::stepProfile(int delta)
 {
     const auto status = audioProcessor.getProfileStatus();
     const juce::File current = status.path.isNotEmpty() ? juce::File(status.path) : juce::File();
-    const auto next = audioProcessor.getProfileLibrary().step(current, delta);
+    ProfileLibrary::Position position;
+    const auto next = audioProcessor.getProfileLibrary().step(current, delta, &position);
     if (next == juce::File())
     {
         showProfileCard({}, delta);
         return;
     }
-    loadLibraryProfile(next, delta);
+    loadLibraryProfile(next, delta, position);
 }
 
-void PluginEditor::showProfileCard(const juce::File& file, int direction)
+void PluginEditor::showProfileCard(const juce::File& file, int direction, ProfileLibrary::Position position)
 {
     ProfileCard::Content content;
     if (file == juce::File())
@@ -1672,7 +1682,9 @@ void PluginEditor::showProfileCard(const juce::File& file, int direction)
     {
         const auto library = audioProcessor.getProfileLibrary();
         content.name = file.getFileNameWithoutExtension();
-        const auto position = library.positionOf(file);
+        // Callers that have just read the library pass the position; others look it up.
+        if (position.index < 0)
+            position = library.positionOf(file);
         if (position.index >= 0)
         {
             content.detail = juce::String(position.index + 1) + " / " + juce::String(position.count);

@@ -32,18 +32,22 @@ bool ProfileLibrary::contains(const juce::File& file) const
     return root != juce::File() && file.isAChildOf(root);
 }
 
-juce::File ProfileLibrary::step(const juce::File& current, int delta) const
+juce::File ProfileLibrary::step(const juce::File& current, int delta, Position* where) const
 {
     const auto files = list();
-    if (files.isEmpty())
-        return {};
-
     const int count = files.size();
-    const int index = files.indexOf(current);
-    if (index < 0)
-        return delta >= 0 ? files.getFirst() : files.getLast();
-
-    return files[((index + delta) % count + count) % count];
+    int next = -1;
+    if (count > 0)
+    {
+        const int index = files.indexOf(current);
+        if (index < 0)
+            next = delta >= 0 ? 0 : count - 1;
+        else
+            next = ((index + delta) % count + count) % count;
+    }
+    if (where != nullptr)
+        *where = { next, count };
+    return next >= 0 ? files[next] : juce::File();
 }
 
 ProfileLibrary::Position ProfileLibrary::positionOf(const juce::File& file) const
@@ -94,6 +98,36 @@ juce::File ProfileLibrary::import(const juce::File& source, juce::String& errorO
 
     errorOut = "Too many profiles named " + source.getFileName();
     return {};
+}
+
+ProfileLibrary::ImportResult ProfileLibrary::importAll(const juce::Array<juce::File>& sources,
+                                                      const std::function<juce::String(const juce::File&)>& check) const
+{
+    ImportResult result;
+    for (const auto& source : sources)
+    {
+        if (const auto problem = check != nullptr ? check(source) : juce::String(); problem.isNotEmpty())
+        {
+            result.problems.add(problem);
+            continue;
+        }
+        juce::String error;
+        const auto copy = import(source, error);
+        if (copy.existsAsFile())
+        {
+            result.loadable.add(copy);
+            continue;
+        }
+        if (! source.existsAsFile())
+        {
+            result.problems.add(error);
+            continue;
+        }
+        // It plays from where it is, but a session then depends on that file staying put.
+        result.loadable.add(source);
+        result.problems.add(error + "; it plays from its own folder");
+    }
+    return result;
 }
 
 juce::String ProfileLibrary::fingerprint(const juce::File& file)

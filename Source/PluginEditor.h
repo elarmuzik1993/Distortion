@@ -2880,12 +2880,13 @@ private:
     void updateProfileIndicator();
     // Loads the profile `delta` steps away in the library and shows the card.
     void stepProfile(int delta);
-    // Copies files into the library and loads the first of them.
+    // Copies the usable files into the library, loads the first of them and
+    // reports any it couldn't take.
     void importAndLoadProfiles(const juce::Array<juce::File>& files);
-    void loadLibraryProfile(const juce::File& file, int direction);
+    void loadLibraryProfile(const juce::File& file, int direction, ProfileLibrary::Position position = {});
     // direction: +1/-1 from the arrows, 0 from the menu. An invalid file shows the
     // empty-library hint.
-    void showProfileCard(const juce::File& file, int direction);
+    void showProfileCard(const juce::File& file, int direction, ProfileLibrary::Position position = {});
     void layoutProfileCard();
     void advanceProfileCard();
     // Records a profile chosen here as the one new instances start with, once it
