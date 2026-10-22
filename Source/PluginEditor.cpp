@@ -963,6 +963,59 @@ void PluginEditor::paintOverChildren(juce::Graphics& g)
     // bottom-right. Painting last makes the frame independent of child bounds.
     g.setColour(juce::Colour(0xFF, 0x00, 0x44));  // Fully opaque neon red
     g.drawRect(getLocalBounds().toFloat(), 1.5f);  // 1.5px solid frame
+
+    // A profile drag over the window: dim it and say what a drop does.
+    if (profileDragOver)
+    {
+        const float s = getWidth() / 960.0f;
+        const auto area = getLocalBounds().toFloat();
+        g.setColour(juce::Colours::black.withAlpha(0.6f));
+        g.fillRect(area);
+        g.setColour(juce::Colour(0xFF, 0x00, 0x44));
+        g.drawRoundedRectangle(area.reduced(10.0f * s), 8.0f * s, 3.0f * s);
+        g.setColour(juce::Colours::white);
+        g.setFont(juce::Font(22.0f * s, juce::Font::bold));
+        g.drawText("DROP TO LOAD PROFILE", area, juce::Justification::centred);
+    }
+}
+
+bool PluginEditor::isInterestedInFileDrag(const juce::StringArray& files)
+{
+    for (const auto& path : files)
+        if (ProfileLibrary::mayHoldProfiles(path))
+            return true;
+    return false;
+}
+
+void PluginEditor::fileDragEnter(const juce::StringArray&, int, int)
+{
+    profileDragOver = true;
+    repaint();
+}
+
+void PluginEditor::fileDragExit(const juce::StringArray&)
+{
+    profileDragOver = false;
+    repaint();
+}
+
+void PluginEditor::filesDropped(const juce::StringArray& files, int, int)
+{
+    profileDragOver = false;
+    repaint();
+    const auto profiles = ProfileLibrary::collectProfiles(files);
+    if (profiles.isEmpty())
+    {
+        juce::AlertWindow::showAsync(juce::MessageBoxOptions()
+                                         .withIconType(juce::MessageBoxIconType::WarningIcon)
+                                         .withTitle("No profile loaded")
+                                         .withMessage("Nothing dropped was a .nam profile.")
+                                         .withButton("OK")
+                                         .withAssociatedComponent(this),
+                                     nullptr);
+        return;
+    }
+    importAndLoadProfiles(profiles);
 }
 
 void PluginEditor::resized()

@@ -2728,7 +2728,8 @@ private:
     double lastNow = 0.0;
 };
 
-class PluginEditor : public juce::AudioProcessorEditor, public juce::Timer
+class PluginEditor : public juce::AudioProcessorEditor, public juce::Timer,
+                     public juce::FileDragAndDropTarget
 {
 public:
     explicit PluginEditor(PluginProcessor&);
@@ -2756,7 +2757,16 @@ public:
         applyScopeOverlayMode(1);
         xyMorphPad.holdForSnapshot(x, y);
     }
+    // The hint a .nam drag over the window shows.
+    void showProfileDropHintForSnapshot() { profileDragOver = true; repaint(); }
    #endif
+
+    // .nam files, or folders of them, dropped anywhere on the window are imported
+    // and the first is loaded, as "Load profile..." does.
+    bool isInterestedInFileDrag(const juce::StringArray& files) override;
+    void fileDragEnter(const juce::StringArray&, int, int) override;
+    void fileDragExit(const juce::StringArray&) override;
+    void filesDropped(const juce::StringArray& files, int, int) override;
 
     // Product data root and the settings file inside it. Static and free of
     // side effects (neither creates a directory), so tests can pin the
@@ -2990,6 +3000,7 @@ private:
     // Copies the usable files into the library, loads the first of them and
     // reports any it couldn't take.
     void importAndLoadProfiles(const juce::Array<juce::File>& files);
+    bool profileDragOver = false;   // a profile drag is over the window: paint the drop hint
     void loadLibraryProfile(const juce::File& file, int direction, ProfileLibrary::Position position = {});
     // direction: +1/-1 from the arrows, 0 from the menu. An invalid file shows the
     // empty-library hint.

@@ -6,15 +6,12 @@
 - Sub Guard plan (`docs/SUB_GUARD_TRANSITION_REVIEW.md`) steps 1-7 done: the sub leaves within
   0.3 dB of its input, drive products below the crossover under -110 dBFS, one LR48 split around
   the drive (double), click-free on/off (15 ms weight `g`, splitter warm), tested by
-  `SubGuardBehaviourTests`. Drive noise is seedable (`seedNoiseForTesting`, `DistortionRender
-  --seed`).
-- Golden audio: 16 seeded cases with every parameter pinned, compared with
-  `Resources/TestAudio/golden_*.wav` (see AGENTS.md, Build & Test). CI green on all three OSes.
-- PR #83 merged: offline prepare waits for a profile load; imports vetted
-  (`NamProfile::check`), problems shown in a dialog; arrow step reads the library once.
-- XY Morph pad shows a puck while dragged: crosshair, 12-point trail, axis hints, live DRIVE /
-  SHAPE readout; holds 0.25 s after release, fades 0.5 s (`XYPadFeedback`, tested).
-  `DistortionUiSnapshot --xy-touch` renders it (PR #82).
+  `SubGuardBehaviourTests`. Golden audio: 16 seeded cases (AGENTS.md, Build & Test).
+- PRs #82 (XY pad puck and readout) and #83 (NAM loader gaps) merged.
+- `feat/nam-calibration-dnd`: EXTREME pushes a profile +12 dB (`extremePushRamp`); the capture's
+  `input_level_dbu` trims the model input against a 12 dBu reference; `.nam` files and folders
+  drop onto the editor. Verified 2026-10-22 (Linux cloud, Debug): `verify.sh` 4315 assertions,
+  goldens unchanged (no profile in them); `--drop-hint` snapshot checked at 100% and collapsed.
 
 ## Next
 1. Owner: listening pass on Sub Guard (real 808 and bass line; on vs bypassed; preset changes
@@ -24,9 +21,8 @@
 2. Sub Guard follow-ups: leaving true bypass resumes the splitter stale (reset it, `toneFilterLow`
    and `g` there, as `shapePost` is); warm switch-on only proven at distMix 0; NAM-mode `g` leads
    by D during the ramp. Plan step 8 only if measured (F6, C5, a C3 hint on the knob).
-3. Owner, NAM before it leaves prototype: EXTREME with a profile only skips the tamer (push
-   ~+12 dB or grey out?); `input_level_dbu` calibration ignored. Both change the sound. Also
-   drag-and-drop; offline state restored after prepare still waits for the timer.
+3. Owner: listen to profiles with EXTREME and with calibrated captures (a hot capture now drives
+   less); decide if 12 dBu should be a setting. Then drop "prototype" or label NAM beta.
 4. Release prep for the marketing direction below: NAM out of prototype (or labelled beta); three
    demo clips (808 on a phone speaker, bass DI through a NAM capture with Sub Guard on/off, the
    drawn EQ); a short comparison page (crossover vs blend). First verify rivals' claims: NAM 9000
