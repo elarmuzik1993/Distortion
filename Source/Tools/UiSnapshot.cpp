@@ -108,7 +108,7 @@ void feedScope(PluginProcessor& proc)
 
 bool snapshot(PluginProcessor& proc, int width, int height, const juce::File& out,
               bool extreme = false, bool withSignal = false, bool profileCard = false,
-              bool settings = false)
+              bool settings = false, bool xyTouch = false)
 {
     PluginEditor editor(proc);
     editor.setSize(width, height);
@@ -147,6 +147,13 @@ bool snapshot(PluginProcessor& proc, int width, int height, const juce::File& ou
     if (profileCard)
     {
         editor.showProfileCardForSnapshot(1);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(400);
+    }
+
+    // XY Morph pad held at a fixed point, captured with its trail settled.
+    if (xyTouch)
+    {
+        editor.showXyTouchForSnapshot(0.65f, 0.7f);
         juce::MessageManager::getInstance()->runDispatchLoopUntil(400);
     }
 
@@ -198,7 +205,8 @@ int main(int argc, char* argv[])
                 "  --legacy         Legacy Filter mode, Low Pass at 800 Hz (the knob slot shows the filter)\n"
                 "  --profile <f>    load a NAM profile (copied into a scratch library)\n"
                 "  --profile-card   show the profile browser's name card\n"
-                "  --settings       open the Settings panel\n";
+                "  --settings       open the Settings panel\n"
+                "  --xy-touch       XY Morph pad held (puck, crosshair, readout)\n";
             return 0;
         }
     }
@@ -209,7 +217,7 @@ int main(int argc, char* argv[])
     bool extreme = false;
     bool signal = false;
     float shapeValue = 0.0f;
-    bool hasShape = false, legacy = false, profileCard = false, settings = false;
+    bool hasShape = false, legacy = false, profileCard = false, settings = false, xyTouch = false;
     juce::String profilePath;
     for (int i = 1; i < argc; ++i)
     {
@@ -224,6 +232,7 @@ int main(int argc, char* argv[])
         else if (t == "--legacy")                legacy    = true;
         else if (t == "--profile-card")          profileCard = true;
         else if (t == "--settings")              settings  = true;
+        else if (t == "--xy-touch")              xyTouch   = true;
     }
 
     // Collapsed (scope folded away) is the other fold state. The harness drives it
@@ -299,7 +308,9 @@ int main(int argc, char* argv[])
             name += "-card";
         if (settings)
             name += "-settings";
-        allOk &= snapshot(proc, w, h, dir.getChildFile(name + ".png"), extreme, signal, profileCard, settings);
+        if (xyTouch)
+            name += "-xy";
+        allOk &= snapshot(proc, w, h, dir.getChildFile(name + ".png"), extreme, signal, profileCard, settings, xyTouch);
     }
 
     scratchRoot.deleteRecursively();

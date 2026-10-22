@@ -10,9 +10,11 @@
   --seed`).
 - Golden audio: 16 seeded cases with every parameter pinned, compared with
   `Resources/TestAudio/golden_*.wav` (see AGENTS.md, Build & Test). CI green on all three OSes.
-- `fix/nam-loader`, PR #83: offline prepare waits for a profile load; imports vetted
+- PR #83 merged: offline prepare waits for a profile load; imports vetted
   (`NamProfile::check`), problems shown in a dialog; arrow step reads the library once.
-  Verified 2026-10-20 (Linux cloud, Debug): `verify.sh` 4292 assertions; snapshot renders.
+- XY Morph pad shows a puck while dragged: crosshair, 12-point trail, axis hints, live DRIVE /
+  SHAPE readout; holds 0.25 s after release, fades 0.5 s (`XYPadFeedback`, tested).
+  `DistortionUiSnapshot --xy-touch` renders it (PR #82).
 
 ## Next
 1. Owner: listening pass on Sub Guard (real 808 and bass line; on vs bypassed; preset changes
@@ -33,7 +35,8 @@
 6. #44 (pluginval Automation segfault, Linux 96 kHz / 64 samples); `prepareToPlay` shrinks band
    buffers below `rebuildOversampling`'s size. Then pluginval (strictness 10), bump CMake
    `VERSION 2.3.0`, tag. Owner: ASIO standalone pass.
-7. Follow-ups: Legacy switch may click; XY Y-axis silent in Legacy. Delete merged Sub Guard
+7. Follow-ups: Legacy switch may click; XY Y-axis silent in Legacy (its SCOOP/BARK hints still
+   show there); XY pad feel in a host (puck size, readout, fade) unchecked. Delete merged Sub Guard
    branches (owner to confirm); decide `claude/ui-screenshot-readme-6vbm01`,
    `docs/profile-morph*`, `fix/profile-browser-review`, `fix/transition-clicks`,
    `test/crossing-probe`.

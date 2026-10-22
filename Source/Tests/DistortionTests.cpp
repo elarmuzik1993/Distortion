@@ -5,6 +5,7 @@
 #include "../FactoryPresets.h"
 #include "../LegacyInputFilter.h"
 #include "../ProfileCardAnimation.h"
+#include "../XYPadFeedback.h"
 #include "../RTAllocationGuard.h"
 #include "../ShapeFilter.h"
 #include <atomic>
@@ -9180,6 +9181,61 @@ void LegacyFilterSwitchTests::runTest()
         PluginProcessor dst;
         dst.setStateInformation(saved.getData(), (int) saved.getSize());
         expectEquals(valueOf(dst, "legacyFilter"), 1.0f, "Legacy mode lost on reload");
+    }
+}
+
+//==============================================================================
+// XY pad feedback
+//==============================================================================
+
+void XYPadFeedbackTests::runTest()
+{
+    using F = XYPadFeedback;
+    const double t0 = 50.0;
+
+    beginTest("The puck shows from the press, holds after release, then fades out");
+    {
+        F f;
+        expect(! f.isVisible(t0), "Nothing drawn before the pad is touched");
+        f.press(0.25f, 0.75f);
+        expectWithinAbsoluteError(f.getAlpha(t0), 1.0f, 1.0e-6f, "Lit at once on press");
+        expectWithinAbsoluteError(f.getAlpha(t0 + 10.0), 1.0f, 1.0e-6f, "Stays lit while held");
+
+        f.release(t0 + 1.0);
+        expectWithinAbsoluteError(f.getAlpha(t0 + 1.0 + F::holdSeconds * 0.5), 1.0f, 1.0e-6f,
+                                  "Holds just after release");
+        const float mid = f.getAlpha(t0 + 1.0 + F::holdSeconds + F::fadeSeconds * 0.5);
+        expect(mid > 0.0f && mid < 1.0f, "Fading");
+        expect(f.getAlpha(t0 + 1.0 + F::holdSeconds + F::fadeSeconds * 0.25) > mid,
+               "Fades monotonically");
+        expect(! f.isVisible(t0 + 1.0 + F::holdSeconds + F::fadeSeconds + 0.01), "Gone after the fade");
+
+        f.release(t0 + 5.0);
+        expect(! f.isVisible(t0 + 5.0), "A second release does not relight it");
+
+        f.press(0.5f, 0.5f);
+        expectWithinAbsoluteError(f.getAlpha(t0 + 100.0), 1.0f, 1.0e-6f, "A new press relights it");
+    }
+
+    beginTest("The trail keeps the newest positions and restarts on each press");
+    {
+        F f;
+        f.press(0.1f, 0.2f);
+        expectEquals(f.getTrailSize(), 1, "A press starts a one-point trail");
+        expectWithinAbsoluteError(f.getTrailPoint(0).x, 0.1f, 1.0e-6f, "The puck is the press point");
+
+        for (int i = 1; i <= F::trailLength + 5; ++i)
+            f.push((float) i / 100.0f, 0.5f);
+        expectEquals(f.getTrailSize(), F::trailLength, "The trail is bounded");
+        const int last = F::trailLength + 5;
+        expectWithinAbsoluteError(f.getTrailPoint(0).x, (float) last / 100.0f, 1.0e-6f, "Newest first");
+        expectWithinAbsoluteError(f.getTrailPoint(F::trailLength - 1).x,
+                                  (float) (last - F::trailLength + 1) / 100.0f, 1.0e-6f,
+                                  "Oldest kept point is trailLength back");
+
+        f.press(0.9f, 0.9f);
+        expectEquals(f.getTrailSize(), 1, "A new press drops the old trail");
+        expectWithinAbsoluteError(f.getTrailPoint(0).y, 0.9f, 1.0e-6f, "and starts at the new point");
     }
 }
 

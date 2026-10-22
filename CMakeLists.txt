@@ -158,6 +158,7 @@ set(PLUGIN_SOURCES
     Source/SubGuardSplitter.h
     Source/LegacyInputFilter.h
     Source/ProfileCardAnimation.h
+    Source/XYPadFeedback.h
     Source/Diagnostics/AppPaths.h
     Source/Diagnostics/Report.h
     Source/Diagnostics/ITransport.h
