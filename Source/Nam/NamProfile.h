@@ -27,6 +27,10 @@ public:
     static std::unique_ptr<NamProfile> load(const juce::File& file, int numChannels,
                                             double hostRate, int maxHostBlock,
                                             juce::String& errorOut);
+    // Whether a file is a profile load() could take: it parses, builds one model
+    // without prewarming it and checks it is mono. Much cheaper than load(), so
+    // it can vet files as they are imported. Fills errorOut when it isn't.
+    static bool check(const juce::File& file, juce::String& errorOut);
     // "This profile can't run at 44.056 kHz"
     static juce::String unsupportedRateMessage(double hostRate);
     ~NamProfile();

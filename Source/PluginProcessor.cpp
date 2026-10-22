@@ -673,6 +673,16 @@ void PluginProcessor::changeProgramName(int index, const juce::String& newName)
 //==============================================================================
 void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
+    // An offline render gets its profile before its first block: the startup
+    // profile starts here rather than after the prepare, and any load still in
+    // flight is waited for. The AU wrapper calls this holding the callback lock
+    // (VST3 doesn't), so the loader must never take that lock.
+    if (isNonRealtime())
+    {
+        loadStartupProfileOnce();
+        waitForProfileLoads(DSPConstants::PROFILE_OFFLINE_WAIT_MS);
+    }
+
     // Held for the whole prepare: the timer installs profiles and rebuilds the
     // oversampler under the same lock, so the two never interleave.
     const juce::ScopedLock callbackLockGuard(getCallbackLock());
@@ -2206,6 +2216,20 @@ void PluginProcessor::loadStartupProfileOnce()
     // open with an error about a file nobody asked for this time.
     if (startupProfile.existsAsFile())
         loadProfileAsync(startupProfile);
+}
+
+bool PluginProcessor::waitForProfileLoads(int timeoutMs)
+{
+    // A finished load is staged, and prepareProfilesForHost installs whatever is
+    // staged, so the prepare that follows this puts it in without the timer.
+    const auto deadline = juce::Time::getMillisecondCounterHiRes() + timeoutMs;
+    while (getProfileStatus().loading || stagedRefreshesInFlight.load() > 0)
+    {
+        if (juce::Time::getMillisecondCounterHiRes() >= deadline)
+            return false;
+        juce::Thread::sleep(1);
+    }
+    return true;
 }
 
 int PluginProcessor::beginProfileRequest(const juce::File& file, const juce::String& fingerprint)
