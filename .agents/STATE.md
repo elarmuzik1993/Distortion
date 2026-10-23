@@ -1,59 +1,49 @@
 # State
 
 ## Now
-- `main` has NAM profiles with a profile browser, Shape with the Shape / Legacy switch, and the
-  four-pill clip column. Unreleased; the plugin reports 2.3.0 (last release).
-- Sub Guard plan (`docs/SUB_GUARD_TRANSITION_REVIEW.md`) steps 1-7 done: the sub leaves within
-  0.3 dB of its input, drive products below the crossover under -110 dBFS, one LR48 split around
-  the drive (double), click-free on/off (15 ms weight `g`, splitter warm), tested by
-  `SubGuardBehaviourTests`. Golden audio: 16 seeded cases (AGENTS.md, Build & Test).
-- PRs #82 (XY pad puck and readout) and #83 (NAM loader gaps) merged.
-- `feat/nam-calibration-dnd`: EXTREME pushes a profile +12 dB (`extremePushRamp`); the capture's
-  `input_level_dbu` trims the model input against a 12 dBu reference; `.nam` files and folders
-  drop onto the editor. Verified 2026-10-22 (Linux cloud, Debug): `verify.sh` 4315 assertions,
-  goldens unchanged (no profile in them); `--drop-hint` snapshot checked at 100% and collapsed.
+- Unreleased work on `main` (plugin still reports 2.3.0): NAM profiles with a library browser,
+  drag-and-drop import, capture calibration (`input_level_dbu` vs a 12 dBu reference) and
+  EXTREME's +12 dB push; Shape with the Shape / Legacy switch; four-pill clip column; XY Morph
+  pad puck and readout; Sub Guard as one LR48 split around the drive (plan steps 1-7).
+- Golden audio: 16 seeded cases, none with a profile (AGENTS.md, Build & Test).
+- Verified 2026-10-23 on Linux (cloud, Debug) at `3023286`: `verify.sh` 4315 assertions.
+  CI green on Windows, Linux and macOS for that tree. pluginval not run locally.
 
 ## Next
-1. Owner: listening pass on Sub Guard (real 808 and bass line; on vs bypassed; preset changes
-   while playing; off and back). Re-voice the seven presets at 100-150 Hz (Hard Clip, 808 Safe,
-   Vocal Warmth, EXTREME, Bass Driver, Lo-Fi Crush, Diode Bite). Decide the knob labels
-   (PRESERVE/CONTROL/AGGRO describe slopes that are gone). Measure Release CPU (~12% more, Debug).
-2. Sub Guard follow-ups: leaving true bypass resumes the splitter stale (reset it, `toneFilterLow`
-   and `g` there, as `shapePost` is); warm switch-on only proven at distMix 0; NAM-mode `g` leads
-   by D during the ramp. Plan step 8 only if measured (F6, C5, a C3 hint on the knob).
-3. Owner: listen to profiles with EXTREME and with calibrated captures (a hot capture now drives
-   less); decide if 12 dBu should be a setting. Then drop "prototype" or label NAM beta.
-4. Release prep for the marketing direction below: NAM out of prototype (or labelled beta); three
-   demo clips (808 on a phone speaker, bass DI through a NAM capture with Sub Guard on/off, the
-   drawn EQ); a short comparison page (crossover vs blend). First verify rivals' claims: NAM 9000
-   "Split Drive" (price, platforms) and UnplugRed Prisma's Linux support (unverified).
-5. Owner, Release build: clip column font, Legacy Filter on a v2.3 session, profile browser.
-6. #44 (pluginval Automation segfault, Linux 96 kHz / 64 samples); `prepareToPlay` shrinks band
-   buffers below `rebuildOversampling`'s size. Then pluginval (strictness 10), bump CMake
-   `VERSION 2.3.0`, tag. Owner: ASIO standalone pass.
-7. Follow-ups: Legacy switch may click; XY Y-axis silent in Legacy (its SCOOP/BARK hints still
-   show there); XY pad feel in a host (puck size, readout, fade) unchecked. Delete merged Sub Guard
-   branches (owner to confirm); decide `claude/ui-screenshot-readme-6vbm01`,
-   `docs/profile-morph*`, `fix/profile-browser-review`, `fix/transition-clicks`,
-   `test/crossing-probe`.
+1. Owner, listening: NAM captures with EXTREME and with calibrated files (hot captures now drive
+   less); decide if 12 dBu should be a setting; then drop "prototype" or label NAM beta.
+2. Owner, listening: Sub Guard (808, bass; on vs bypassed; preset changes while playing).
+   Re-voice Hard Clip, 808 Safe, Vocal Warmth, EXTREME, Bass Driver, Lo-Fi Crush, Diode Bite at
+   100-150 Hz; rename PRESERVE/CONTROL/AGGRO; measure Release CPU (~12% more in Debug).
+3. Owner, in a host (Release build): a real `.nam` drag-and-drop, XY pad feel, profile browser,
+   clip column font, Legacy Filter on a v2.3 session.
+4. Sub Guard follow-ups: reset the splitter, `toneFilterLow` and `g` when leaving true bypass;
+   warm switch-on only proven at distMix 0; NAM-mode `g` leads by D during the ramp.
+5. Release: fix #44 (pluginval Automation segfault, Linux 96 kHz / 64 samples) and
+   `prepareToPlay` shrinking band buffers below `rebuildOversampling`'s size; pluginval
+   strictness 10; bump CMake `VERSION`; tag. Owner: ASIO standalone pass.
+6. Marketing prep: three demo clips (808 on a phone speaker, bass DI through a NAM capture with
+   Sub Guard on/off, the drawn EQ); a crossover-vs-blend page. Verify NAM 9000 "Split Drive"
+   and UnplugRed Prisma's Linux support first.
+7. Small: Legacy switch may click; XY Y-axis hints show in Legacy though the axis is silent.
+   Owner to confirm deleting merged and stale branches.
 
 ## Decisions
-- `legacyFilter` is a session param; state v3 turns it on for v2.3 states that used the filter.
+- EXTREME pushes a profile's input x4 like a clip type's drive; captures follow their own
+  `input_level_dbu` against 12 dBu, the NAM plugin's default (owner, 2026-10-22).
 - Profiles live in Sledge's library; sessions fall back by content fingerprint, never by name.
-- Clip column can't widen (texture cutouts); stack sits 3 px below knob centre (owner's eye).
-- Merge PRs once all three builds pass. A base change or manual workflow run doesn't start CI
-  (dispatch is refused, 403): merge `main` into the branch and push.
-- Sub Guard: one LR48 split around the drive; on/off as weight `g`, splitter warm; sound change
-  accepted, no version gate (owner, 2026-10-19). Golden cases never use presets.
-- Positioning (2026-10-20, from a web check): "free, open-source distortion for modern bass:
-  crush the top, keep the sub, load any NAM capture". Stay pay-what-you-want; a price would
-  pit it against Neural DSP Parallax X (~€99) and Saturn 2. Audiences: NAM/TONE3000, Linux
-  audio, budget 808 producers, bass players. Don't claim "first": NAM 9000 and Prisma overlap.
+- `legacyFilter` is a session param; state v3 turns it on for v2.3 states that used the filter.
+- Clip column can't widen (texture cutouts registered to the knobs).
+- Merge PRs once all three builds pass. Manual workflow dispatch is refused (403): to re-run CI
+  merge `main` into the branch and push.
+- Sub Guard sound change accepted without a version gate (owner, 2026-10-19).
+- Positioning: free, open-source distortion for modern bass ("crush the top, keep the sub, load
+  any NAM capture"); pay-what-you-want; don't claim "first".
 
 ## Known issues
-- `verify.sh` runs tests only; on Linux it needs `build.yml`'s apt packages. Two builds at once
-  can run the container out of memory: build one at a time or with `-j2`.
-- Tests never build the editor: check UI with `DistortionUiSnapshot`.
+- `verify.sh` builds tests only, never the editor: check UI with `DistortionUiSnapshot`. On Linux
+  it needs `build.yml`'s apt packages; build with `-j2` or one target at a time (memory).
 - Set `bugReports="0"` in settings.xml before a local pluginval of a Release build.
 - `pkill -f` on the standalone's path kills the calling shell; kill by PID.
-- Host bypass freezes the island, delay lines and Sub Guard splitter; IIR ring after a bypass gap.
+- Host bypass freezes the island, delay lines and Sub Guard splitter; IIR ring after a gap.
+- Importing many large captures at once briefly blocks the UI (vetting runs on that thread).
