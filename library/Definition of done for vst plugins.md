@@ -15,7 +15,7 @@ This document defines the criteria for transitioning a VST plugin from the **Dev
 - [x] **Gain Staging:** Default settings provide a sane output level; switching algorithms (e.g., Clip Types) does not cause massive, unexpected volume jumps.
 - [x] **Bypass Behavior:** The plugin implements a "soft bypass" (crossfaded) to prevent pops when toggling the effect.
 - [x] **Visual Feedback:** All meters (Gain Reduction, Phase Correlation, Oscilloscope) are accurate and calibrated.
-- [x] **Preset Management:** A factory bank of at least 10-20 presets is included to demonstrate the range of the plugin.
+- [ ] **Preset Management:** A factory bank of at least 10-20 presets is included to demonstrate the range of the plugin. (Removed during development, 2026-10-25: only Default ships until the sound settles.)
 
 ## 3. Artistic & Curation Baseline (The "Freeze")
 - [ ] **DSP Freeze:** No new algorithms or "just one more feature" additions.

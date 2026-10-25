@@ -3174,7 +3174,7 @@ void StateIOTests::testLegacyMigration()
 
 void FactoryPresetTests::runTest()
 {
-    beginTest("Factory bank meets the 10-20 preset target");
+    beginTest("Factory bank starts with Default and stays within 20 presets");
     testBankSize();
 
     beginTest("Every preset references valid parameter IDs");
@@ -3189,9 +3189,12 @@ void FactoryPresetTests::runTest()
 
 void FactoryPresetTests::testBankSize()
 {
-    const auto count = FactoryPresets::all().size();
-    expect(count >= 10, "Factory bank below the DoD floor of 10 presets");
-    expect(count <= 20, "Factory bank above the DoD ceiling of 20 presets");
+    // Only Default while the sound is in development; the DoD floor of 10 voiced
+    // presets comes back with them.
+    const auto& bank = FactoryPresets::all();
+    expect(! bank.empty() && juce::String(bank.front().name) == "Default",
+           "The bank must start with Default, the reset entry the editor falls back to");
+    expect(bank.size() <= 20, "Factory bank above the DoD ceiling of 20 presets");
 }
 
 void FactoryPresetTests::testParamIdsExist()

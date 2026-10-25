@@ -5,6 +5,8 @@
   drag-and-drop import, capture calibration (`input_level_dbu` vs a 12 dBu reference) and
   EXTREME's +12 dB push; Shape with the Shape / Legacy switch; four-pill clip column; XY Morph
   pad puck and readout; Sub Guard as one LR48 split around the drive (plan steps 1-7).
+- Branch `chore/remove-factory-presets` (not merged): factory bank cut to Default only until the
+  sound settles; the DoD's 10-20 preset box is unticked.
 - Golden audio: 16 seeded cases, none with a profile (AGENTS.md, Build & Test).
 - Verified 2026-10-23 on Linux (cloud, Debug) at `3023286`: `verify.sh` 4315 assertions.
   CI green on Windows, Linux and macOS for that tree. pluginval not run locally.
@@ -13,13 +15,12 @@
 1. Owner, listening: NAM captures with EXTREME and with calibrated files (hot captures now drive
    less); decide if 12 dBu should be a setting; then drop "prototype" or label NAM beta.
 2. Owner, listening: Sub Guard (808, bass; on vs bypassed; preset changes while playing).
-   Re-voice Hard Clip, 808 Safe, Vocal Warmth, EXTREME, Bass Driver, Lo-Fi Crush, Diode Bite at
-   100-150 Hz; rename PRESERVE/CONTROL/AGGRO; measure Release CPU (~12% more in Debug).
+   Rename PRESERVE/CONTROL/AGGRO; measure Release CPU (~12% more in Debug).
 3. Owner, in a host (Release build): a real `.nam` drag-and-drop, XY pad feel, profile browser,
    clip column font, Legacy Filter on a v2.3 session.
 4. Sub Guard follow-ups: reset the splitter, `toneFilterLow` and `g` when leaving true bypass;
    warm switch-on only proven at distMix 0; NAM-mode `g` leads by D during the ramp.
-5. Release: fix #44 (pluginval Automation segfault, Linux 96 kHz / 64 samples) and
+5. Release: voice and add 10-20 factory presets (owner; removed 2026-10-25); fix #44 (pluginval Automation segfault, Linux 96 kHz / 64 samples) and
    `prepareToPlay` shrinking band buffers below `rebuildOversampling`'s size; pluginval
    strictness 10; bump CMake `VERSION`; tag. Owner: ASIO standalone pass.
 6. Marketing prep: three demo clips (808 on a phone speaker, bass DI through a NAM capture with
@@ -29,6 +30,7 @@
    Owner to confirm deleting merged and stale branches.
 
 ## Decisions
+- No factory presets but Default until development ends; owner adds them then (2026-10-25).
 - EXTREME pushes a profile's input x4 like a clip type's drive; captures follow their own
   `input_level_dbu` against 12 dBu, the NAM plugin's default (owner, 2026-10-22).
 - Profiles live in Sledge's library; sessions fall back by content fingerprint, never by name.

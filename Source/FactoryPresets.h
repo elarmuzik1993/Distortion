@@ -72,91 +72,14 @@ namespace FactoryPresets
         return b;
     }
 
-    // The factory bank. Shape replaced the input filter in v2.4: presets that used a low cut now set Shape (and Sub Guard where the cut was tightening the bass). Sessions are unaffected: they store parameter values, not preset names.
+    // The factory bank. Only "Default" (the baseline, a one-click reset) while the
+    // sound is still in development; the voiced presets come back once it settles
+    // (owner, 2026-10-25). A new preset is one entry here: { name, overrides }.
+    // Sessions are unaffected: they store parameter values, not preset names.
     inline const std::vector<Preset>& all()
     {
         static const std::vector<Preset> presets = {
             { "Default", {} },
-            { "Warm Tube", {
-                { "inputGain", 60.0f }, { "outputGain", 45.0f },
-                { "distortionAmount", 30.0f }, { "shape", -30.0f },
-                { "subGuardFreq", 80.0f },
-                { "clipType", 1.0f }, { "distMix", 70.0f } } },
-            { "Hard Clip", {
-                { "inputGain", 70.0f }, { "outputGain", 40.0f },
-                { "distortionAmount", 70.0f }, { "shape", 20.0f },
-                { "subGuardFreq", 150.0f }, { "clipType", 0.0f },
-                { "compPeakReduction", 30.0f }, { "compMakeupGain", 60.0f },
-                { "compEnabled", 1.0f } } },
-            { "Soft Saturation", {
-                { "inputGain", 55.0f }, { "outputGain", 48.0f },
-                { "distortionAmount", 20.0f }, { "shape", -10.0f },
-                { "clipType", 3.0f }, { "distMix", 50.0f } } },
-            { "808 Safe", {
-                { "inputGain", 65.0f }, { "outputGain", 45.0f },
-                { "distortionAmount", 60.0f }, { "shape", -40.0f },
-                { "subGuardFreq", 150.0f }, { "clipType", 3.0f } } },
-            { "Parallel Grit", {
-                { "inputGain", 58.0f }, { "distortionAmount", 85.0f },
-                { "shape", 30.0f }, { "clipType", 5.0f },
-                { "globalMix", 35.0f }, { "compPeakReduction", 20.0f },
-                { "compEnabled", 1.0f } } },
-            { "Vocal Warmth", {
-                { "distortionAmount", 25.0f }, { "shape", -20.0f },
-                { "subGuardFreq", 100.0f },
-                { "clipType", 1.0f }, { "tone", 6000.0f }, { "distMix", 60.0f },
-                { "lfoEnabled", 1.0f }, { "lfoDestination", 1.0f },
-                { "lfoRate", 0.3f }, { "lfoDepth", 30.0f } } },
-            { "EXTREME", {
-                { "inputGain", 75.0f }, { "outputGain", 35.0f },
-                { "distortionAmount", 90.0f }, { "shape", 60.0f },
-                { "subGuardFreq", 120.0f }, { "clipType", 6.0f },
-                { "extremeEnabled", 1.0f }, { "compPeakReduction", 40.0f },
-                { "compRatio", 1.0f }, { "compEnabled", 1.0f } } },
-            // ---- v2.2 additions ----------------------------------------------
-            { "Bass Driver", {
-                { "inputGain", 62.0f }, { "outputGain", 46.0f },
-                { "distortionAmount", 45.0f }, { "shape", -50.0f },
-                { "subGuardFreq", 120.0f }, { "clipType", 4.0f },
-                { "tone", 9000.0f }, { "compPeakReduction", 25.0f },
-                { "compMakeupGain", 55.0f }, { "compEnabled", 1.0f } } },
-            { "Lo-Fi Crush", {
-                { "inputGain", 60.0f }, { "outputGain", 44.0f },
-                { "distortionAmount", 55.0f }, { "shape", -60.0f },
-                { "subGuardFreq", 100.0f },
-                { "clipType", 2.0f }, { "tone", 5000.0f }, { "distMix", 80.0f } } },
-            { "Transformer Glue", {
-                { "inputGain", 54.0f }, { "outputGain", 50.0f },
-                { "distortionAmount", 35.0f }, { "clipType", 4.0f },
-                { "tone", 12000.0f }, { "distMix", 65.0f },
-                { "compPeakReduction", 15.0f }, { "compEnabled", 1.0f } } },
-            { "Drum Smash", {
-                { "inputGain", 64.0f }, { "outputGain", 42.0f },
-                { "distortionAmount", 75.0f }, { "shape", 40.0f },
-                { "clipType", 0.0f }, { "globalMix", 50.0f },
-                { "compPeakReduction", 35.0f }, { "compRatio", 1.0f },
-                { "compEnabled", 1.0f } } },
-            { "Vintage Tape", {
-                { "inputGain", 56.0f }, { "outputGain", 48.0f },
-                { "distortionAmount", 30.0f }, { "shape", -10.0f },
-                { "clipType", 3.0f }, { "tone", 8000.0f },
-                { "distMix", 75.0f }, { "waveshaperMix", 20.0f } } },
-            { "Diode Bite", {
-                { "inputGain", 60.0f }, { "outputGain", 45.0f },
-                { "distortionAmount", 55.0f }, { "shape", 25.0f },
-                { "subGuardFreq", 100.0f },
-                { "clipType", 5.0f }, { "tone", 7000.0f }, { "distMix", 90.0f } } },
-            { "Tremolo Drive", {
-                { "inputGain", 56.0f }, { "outputGain", 48.0f },
-                { "distortionAmount", 40.0f }, { "clipType", 1.0f },
-                { "distMix", 80.0f }, { "lfoEnabled", 1.0f },
-                { "lfoDestination", 4.0f }, { "lfoRate", 4.0f },
-                { "lfoDepth", 50.0f }, { "lfoWaveform", 0.0f } } },
-            { "Screamer", {
-                { "inputGain", 58.0f }, { "outputGain", 46.0f },
-                { "distortionAmount", 25.0f }, { "shape", -60.0f },
-                { "clipType", 1.0f }, { "tone", 14000.0f },
-                { "distMix", 80.0f }, { "cleanBoost", 1.0f } } },
         };
         return presets;
     }

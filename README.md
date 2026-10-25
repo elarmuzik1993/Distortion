@@ -108,7 +108,7 @@ dBFS output ceiling as the last gain stage, a phase-coherent Linear Phase Dry
 path with no comb filtering at partial mix, and latency reported to the host for
 PDC — re-imposed on the bypass path so toggling causes no timing jump.
 
-16 factory presets. 3100+ test assertions, and every build is validated with
+4300+ test assertions, and every build is validated with
 `pluginval` at strictness 10 on Windows and Linux, plus `auval` on macOS.
 
 See [`CHANGELOG.md`](CHANGELOG.md) for what changed in each release.

@@ -96,7 +96,8 @@ int main(int argc, char* argv[])
               << "s of audio @ " << (int) kSampleRate << " Hz, block " << kBlockSize << "\n";
 
     // One processor per instance, each loaded with a rotating factory preset so
-    // varied DSP paths run concurrently; one pre-sized work buffer per instance
+    // varied DSP paths run concurrently (while the bank holds only Default, every
+    // instance runs the default sound); one pre-sized work buffer per instance
     // so the render loop does no allocation (keeps the leak metric clean).
     std::vector<std::unique_ptr<PluginProcessor>> procs;
     std::vector<juce::AudioBuffer<float>>          work;
