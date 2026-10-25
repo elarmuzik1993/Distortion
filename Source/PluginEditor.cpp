@@ -38,7 +38,7 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     // Settings "Overlay" selector decides which one is interactive. Reads/writes
     // the eqThird0..30 APVTS params so the curve automates and saves with presets.
     addChildComponent(graphicEqOverlay);
-    graphicEqOverlay.getBandGainDb = [this](int i) -> float
+    graphicEqOverlay.getBandDb = [this](int i) -> float
     {
         if (auto* param = audioProcessor.parameters.getParameter(PluginProcessor::eqBandParamId(i)))
             return param->convertFrom0to1(param->getValue());
@@ -48,6 +48,16 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     {
         if (auto* param = audioProcessor.parameters.getParameter(PluginProcessor::eqBandParamId(i)))
             param->setValueNotifyingHost(param->convertTo0to1(db));
+    };
+    graphicEqOverlay.onGestureBegin = [this](int i)
+    {
+        if (auto* param = audioProcessor.parameters.getParameter(PluginProcessor::eqBandParamId(i)))
+            param->beginChangeGesture();
+    };
+    graphicEqOverlay.onGestureEnd = [this](int i)
+    {
+        if (auto* param = audioProcessor.parameters.getParameter(PluginProcessor::eqBandParamId(i)))
+            param->endChangeGesture();
     };
     graphicEqOverlay.getSampleRate = [this]() { return audioProcessor.getSampleRate(); };
     // eqEnabled is stored as "1 = active"; the overlay speaks in terms of bypass.

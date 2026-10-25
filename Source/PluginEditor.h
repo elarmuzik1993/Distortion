@@ -2056,12 +2056,11 @@ private:
 
 //==============================================================================
 // Free-draw graphic EQ overlay — sits over the oscilloscope (same slot as
-// XYMorphPad). Drag to draw a target curve: one dot per 1/3-octave band (31,
-// 20 Hz to 20 kHz), -24..+12 dB. Each edit refits the band gains
-// (GraphicEqCurve::fit) so the bank's summed response follows the dots, writes
-// them to the eqThird0..30 params, and the line drawn is that real response.
-// Double-click flattens the curve. When not being dragged it mirrors the params,
-// so preset recall and host automation are reflected live.
+// XYMorphPad). Drag to draw a curve: one dot per 1/3-octave band (31, 20 Hz to
+// 20 kHz), -24..+12 dB, each the eqThird param of its band. The line drawn is the
+// bank's real response: the overlay runs the processor's fit (GraphicEqCurve::fit)
+// at the session's rate. Double-click flattens the curve. When not being dragged it
+// mirrors the params, so preset recall and host automation are reflected live.
 class GraphicEqOverlay : public juce::Component, public juce::Timer
 {
 public:
@@ -2074,11 +2073,25 @@ public:
         setOpaque(false);
     }
 
-    ~GraphicEqOverlay() override { stopTimer(); }
+    ~GraphicEqOverlay() override { stopTimer(); endGestures(); }
 
-    // Editor supplies these to read/write the APVTS eqThird params.
-    std::function<float(int)>        getBandGainDb;
+    // Hidden mid-drag (overlay switched off, scope folded): the mouse-up never
+    // arrives, so close the host gestures here.
+    void visibilityChanged() override
+    {
+        if (! isVisible())
+        {
+            dragging = false;
+            endGestures();
+        }
+    }
+
+    // Editor supplies these to read/write the APVTS eqThird params (drawn levels).
+    std::function<float(int)>        getBandDb;
     std::function<void(int, float)>  onBandChanged;
+    // A drag is one gesture per band it touches, so hosts record automation for it.
+    std::function<void(int)>         onGestureBegin;
+    std::function<void(int)>         onGestureEnd;
     // The host rate: the fit and the drawn response use it, so both leave out the
     // bands the DSP drops there.
     std::function<double()>          getSampleRate;
@@ -2090,16 +2103,12 @@ public:
     // mode becomes active, or on preset load).
     void syncFromParams()
     {
-        if (getBandGainDb)
-        {
+        if (getBandDb)
             for (int i = 0; i < kNumBands; ++i)
-                gains[(size_t) i] = getBandGainDb(i);
-            targetsFromGains();
-        }
+                targets[(size_t) i] = getBandDb(i);
         if (getBypassed)
             bypassed = getBypassed();
-        curveDirty = true;
-        repaint();
+        refit();
     }
 
     void mouseDown(const juce::MouseEvent& e) override
@@ -2119,6 +2128,8 @@ public:
 
         if (e.getNumberOfClicks() >= 2)   // double-click resets the curve to flat
         {
+            endGestures();
+            dragging = false;
             flatten();
             return;
         }
@@ -2134,7 +2145,12 @@ public:
             paintAt(e.position);
     }
 
-    void mouseUp(const juce::MouseEvent&) override { dragging = false; repaint(); }
+    void mouseUp(const juce::MouseEvent&) override
+    {
+        dragging = false;
+        endGestures();
+        repaint();
+    }
 
     void mouseMove(const juce::MouseEvent& e) override
     {
@@ -2151,35 +2167,28 @@ public:
 
     void timerCallback() override
     {
-        // Mirror params while idle so automation / preset recall shows up.
-        if (dragging || ! getBandGainDb)
+        // Mirror params while idle so automation / preset recall shows up, and
+        // refit when the session's rate changes, as the processor does.
+        if (dragging || ! getBandDb)
             return;
 
-        bool changed = false;
+        bool changed = sampleRate() != fittedRate;
         for (int i = 0; i < kNumBands; ++i)
         {
-            const float g = getBandGainDb(i);
-            auto& gain = gains[(size_t) i];
-            if (std::abs(g - gain) > 1.0e-3f)
+            const float v = getBandDb(i);
+            if (v != targets[(size_t) i])
             {
-                gain = g;
+                targets[(size_t) i] = v;
                 changed = true;
             }
-        }
-        if (changed)
-        {
-            // Our own writes land back here equal to `gains`, so only an outside
-            // change (automation, preset) gets here and resets the dots.
-            targetsFromGains();
-            curveDirty = true;
         }
         if (getBypassed)
         {
             const bool b = getBypassed();
-            if (b != bypassed) { bypassed = b; changed = true; }
+            if (b != bypassed) { bypassed = b; repaint(); }
         }
         if (changed)
-            repaint();
+            refit();
     }
 
     void paint(juce::Graphics& g) override
@@ -2257,7 +2266,7 @@ public:
         // its drawn level follow it.
         juce::String label = bypassed ? "GRAPHIC EQ  (BYPASSED)" : "GRAPHIC EQ";
         if (hoverBand >= 0)
-            label << "   " << bandName(hoverBand) << "  "
+            label << "   " << PluginProcessor::eqBandName(hoverBand) << "  "
                   << juce::String(targets[(size_t) hoverBand], 1) << " dB";
         g.setColour(neon.withAlpha(0.55f));
         g.setFont(9.0f);
@@ -2266,18 +2275,11 @@ public:
         g.drawText(label, labelArea, juce::Justification::centredLeft);
     }
 
-    // "31.5 Hz", "1.25 kHz"
-    static juce::String bandName(int band)
-    {
-        const float hz = DSPConstants::EQ_FREQS[band];
-        const bool kilo = hz >= 1000.0f;
-        return juce::String(kilo ? hz / 1000.0f : hz, 2).trimCharactersAtEnd("0").trimCharactersAtEnd(".")
-             + (kilo ? " kHz" : " Hz");
-    }
-
 private:
-    Bands targets { };   // the drawn dots (dB)
-    Bands gains { };     // the fitted band gains, as written to the params
+    Bands targets { };   // the drawn dots (dB), as the params hold them
+    Bands gains { };     // the band gains the processor fits from them
+    double fittedRate = 0.0;
+    std::array<bool, kNumBands> inGesture { };
     juce::Path curve;
     bool  curveDirty = true;
     bool  dragging = false;
@@ -2361,13 +2363,44 @@ private:
         curveDirty = false;
     }
 
-    // Dots that reproduce gains set from outside: the bank's level at each centre.
-    void targetsFromGains()
+    // The gains the processor plays for the current dots, so the line shows what
+    // is heard.
+    void refit()
+    {
+        fittedRate = sampleRate();
+        gains = GraphicEqCurve::fit(targets, fittedRate);
+        curveDirty = true;
+        repaint();
+    }
+
+    // Write one dot, inside a gesture for its band.
+    void setDot(int i, float db)
+    {
+        // The params step in 0.01 dB; snapping here keeps the dot equal to the
+        // param, so mirroring it back is not seen as an outside change.
+        db = std::round(juce::jlimit(DSPConstants::EQ_DRAW_MIN_DB, DSPConstants::EQ_DRAW_MAX_DB, db) * 100.0f) / 100.0f;
+        if (db == targets[(size_t) i])
+            return;
+        if (! inGesture[(size_t) i])
+        {
+            inGesture[(size_t) i] = true;
+            if (onGestureBegin)
+                onGestureBegin(i);
+        }
+        targets[(size_t) i] = db;
+        if (onBandChanged)
+            onBandChanged(i, db);
+    }
+
+    void endGestures()
     {
         for (int i = 0; i < kNumBands; ++i)
-            targets[(size_t) i] = juce::jlimit(
-                DSPConstants::EQ_DRAW_MIN_DB, DSPConstants::EQ_DRAW_MAX_DB,
-                (float) GraphicEqCurve::responseDb(gains, DSPConstants::EQ_FREQS[i], sampleRate()));
+            if (inGesture[(size_t) i])
+            {
+                inGesture[(size_t) i] = false;
+                if (onGestureEnd)
+                    onGestureEnd(i);
+            }
     }
 
     void paintAt(juce::Point<float> p)
@@ -2387,37 +2420,24 @@ private:
             for (int i = lastBand + step; i != nearest; i += step)
             {
                 const float f = (float) (i - lastBand) / (float) (nearest - lastBand);
-                targets[(size_t) i] = lastDb + (db - lastDb) * f;
+                setDot(i, lastDb + (db - lastDb) * f);
             }
         }
 
-        targets[(size_t) nearest] = db;
+        setDot(nearest, db);
         lastBand = nearest;
         lastDb   = db;
         hoverBand = nearest;
-        applyFit();
+        refit();
     }
 
-    // Refit the gains to the dots and write the ones that moved.
-    void applyFit()
-    {
-        const auto fitted = GraphicEqCurve::fit(targets, sampleRate());
-        for (int i = 0; i < kNumBands; ++i)
-        {
-            if (std::abs(fitted[(size_t) i] - gains[(size_t) i]) < 0.005f)
-                continue;
-            gains[(size_t) i] = fitted[(size_t) i];
-            if (onBandChanged)
-                onBandChanged(i, fitted[(size_t) i]);
-        }
-        curveDirty = true;
-        repaint();
-    }
-
+    // Each band that is not already flat, as its own one-step gesture.
     void flatten()
     {
-        targets.fill(0.0f);
-        applyFit();
+        for (int i = 0; i < kNumBands; ++i)
+            setDot(i, 0.0f);
+        endGestures();
+        refit();
     }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(GraphicEqOverlay)

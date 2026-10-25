@@ -274,10 +274,9 @@ int main(int argc, char* argv[])
         target[4] = -12.0f;
         target[17] = -24.0f;
         for (int i = 26; i <= 30; ++i) target[(size_t) i] = 6.0f;
-        const auto gains = GraphicEqCurve::fit(target, proc.getSampleRate());
         for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
             if (auto* p = proc.parameters.getParameter(PluginProcessor::eqBandParamId(i)))
-                p->setValueNotifyingHost(p->convertTo0to1(gains[(size_t) i]));
+                p->setValueNotifyingHost(p->convertTo0to1(target[(size_t) i]));
     }
     if (legacy)   { setParam("legacyFilter", 1.0f); setParam("filterMode", 1.0f); setParam("highPassFreq", 800.0f); }
 

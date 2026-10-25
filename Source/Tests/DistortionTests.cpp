@@ -4944,7 +4944,7 @@ void GraphicEqTests::runTest()
             // Alternating full boost/cut — an aggressive, jagged curve.
             for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
                 setParameter(p.parameters, PluginProcessor::eqBandParamId(i),
-                             (i % 2 == 0) ? DSPConstants::EQ_BAND_MAX_DB : DSPConstants::EQ_BAND_MIN_DB);
+                             (i % 2 == 0) ? DSPConstants::EQ_DRAW_MAX_DB : DSPConstants::EQ_DRAW_MIN_DB);
 
             juce::MidiBuffer midi;
             bool clean = true;
@@ -4970,7 +4970,7 @@ void GraphicEqTests::runTest()
         float vals[DSPConstants::EQ_NUM_BANDS] { };
         for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
         {
-            vals[i] = -28.0f + (float) i * 1.5f;   // spread across the -30..+18 range
+            vals[i] = -24.0f + (float) i * 1.2f;   // spread across the -24..+12 range
             setParameter(a.parameters, PluginProcessor::eqBandParamId(i), vals[i]);
         }
 
@@ -5092,72 +5092,251 @@ void GraphicEqTests::runTest()
         for (float v : g)
             inRange = inRange && std::isfinite(v)
                    && v >= DSPConstants::EQ_BAND_MIN_DB && v <= DSPConstants::EQ_BAND_MAX_DB;
-        expect(inRange, "Fitted gain outside the eqThird param range");
+        expect(inRange, "Fitted gain outside the band gain range");
     }
+
+    // --- The processor ------------------------------------------------------------
+    // A processor whose chain is transparent but for the EQ (as steadyRms), at any
+    // rate, fed a phase-continuous sine: generateSineWave restarts at phase 0 every
+    // call, and the click at each block edge is broadband energy a cut cannot
+    // remove, which would read as a shallow cut.
+    struct EqRig
+    {
+        PluginProcessor p;
+        double rate;
+        bool active;
+        double phase = 0.0;
+        juce::MidiBuffer midi;
+
+        // active: compressor on at zero reduction, so the signal takes the active
+        // path (oversampler and all); otherwise the true-bypass path.
+        EqRig(double r, const Bands& drawing = {}, bool activePath = true) : rate(r), active(activePath)
+        {
+            p.setRateAndBufferSizeDetails(rate, 512);
+            p.prepareToPlay(rate, 512);
+            transparent();
+            draw(drawing);
+        }
+
+        // Everything but the EQ neutral. Again after a state restore, which brings
+        // its own drive and auto-gain.
+        void transparent()
+        {
+            for (auto [id, v] : { std::pair<const char*, float> { "distortionAmount", 0.0f },
+                                  { "compEnabled", active ? 1.0f : 0.0f }, { "compPeakReduction", 0.0f },
+                                  { "subGuardFreq", 0.0f }, { "autoGainEnabled", 0.0f },
+                                  { "globalMix", 100.0f }, { "inputGain", 50.0f }, { "outputGain", 50.0f } })
+                setParameter(p.parameters, id, v);
+        }
+
+        void draw(const Bands& drawing)
+        {
+            for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
+                setParameter(p.parameters, PluginProcessor::eqBandParamId(i), drawing[(size_t) i]);
+        }
+
+        juce::AudioBuffer<float> sine(double f, float amplitude)
+        {
+            juce::AudioBuffer<float> buf(2, 512);
+            const double inc = juce::MathConstants<double>::twoPi * f / rate;
+            for (int n = 0; n < 512; ++n, phase += inc)
+                for (int ch = 0; ch < 2; ++ch)
+                    buf.setSample(ch, n, amplitude * (float) std::sin(phase));
+            return buf;
+        }
+
+        // Steady-state RMS at f after ~0.5 s, measured over at least 20 cycles: a
+        // block at 192 kHz holds a twentieth of a 20 Hz cycle, whose RMS depends on
+        // where in the cycle it falls.
+        float rmsAt(double f, float amplitude)
+        {
+            const int warm = (int) std::ceil(0.5 * rate / 512.0);
+            for (int b = 0; b < warm; ++b)
+            {
+                auto buf = sine(f, amplitude);
+                p.processBlock(buf, midi);
+            }
+            const int measure = juce::jmax(1, (int) std::ceil(20.0 / f * rate / 512.0));
+            double sum = 0.0;
+            for (int b = 0; b < measure; ++b)
+            {
+                auto buf = sine(f, amplitude);
+                p.processBlock(buf, midi);
+                for (int n = 0; n < 512; ++n)
+                    sum += (double) buf.getSample(0, n) * buf.getSample(0, n);
+            }
+            return (float) std::sqrt(sum / (measure * 512.0));
+        }
+    };
+    // At -30 dBFS, so a +12 dB boost stays clear of the soft clipper and limiter
+    // that a hotter tone would run into and read as a smaller boost.
+    const float quiet = juce::Decibels::decibelsToGain(-30.0f);
+    // What the EQ does at f (dB), measured against a flat drawing.
+    auto heardDb = [&](const Bands& drawing, double f, double rate, bool activePath = true)
+    {
+        EqRig withEq(rate, drawing, activePath), flat(rate, {}, activePath);
+        return juce::Decibels::gainToDecibels(withEq.rmsAt(f, quiet) / flat.rmsAt(f, quiet));
+    };
 
     beginTest("A drawn notch cuts the processor's output by about 24 dB");
     {
-        const auto g = fitted({ { 17, -24.0f } });
-        auto rmsWith = [&](const Bands& gains, double f, double rate) -> float
-        {
-            PluginProcessor p;
-            p.setRateAndBufferSizeDetails(rate, blockSize);
-            p.prepareToPlay(rate, blockSize);
-            setParameter(p.parameters, "distortionAmount", 0.0f);
-            setParameter(p.parameters, "compEnabled",       1.0f);
-            setParameter(p.parameters, "compPeakReduction", 0.0f);
-            setParameter(p.parameters, "subGuardFreq",      0.0f);
-            setParameter(p.parameters, "autoGainEnabled",   0.0f);
-            setParameter(p.parameters, "globalMix",         100.0f);
-            setParameter(p.parameters, "inputGain",         50.0f);
-            setParameter(p.parameters, "outputGain",        50.0f);
-            for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
-                setParameter(p.parameters, PluginProcessor::eqBandParamId(i), gains[(size_t) i]);
-            // Phase-continuous across blocks: generateSineWave restarts at phase 0
-            // every call, and the click at each block edge is broadband energy a
-            // notch cannot remove, which would read as a shallow notch.
-            double phase = 0.0;
-            const double inc = juce::MathConstants<double>::twoPi * f / rate;
-            auto nextBlock = [&]
-            {
-                juce::AudioBuffer<float> buf(2, blockSize);
-                for (int n = 0; n < blockSize; ++n, phase += inc)
-                    for (int ch = 0; ch < 2; ++ch)
-                        buf.setSample(ch, n, amp * (float) std::sin(phase));
-                return buf;
-            };
-            juce::MidiBuffer midi;
-            for (int b = 0; b < 40; ++b)
-            {
-                auto buf = nextBlock();
-                p.processBlock(buf, midi);
-            }
-            auto meas = nextBlock();
-            p.processBlock(meas, midi);
-            return calculateRMS(meas);
-        };
-        const double at1k  = juce::Decibels::gainToDecibels(rmsWith(g, 1000.0, sr) / rmsWith(Bands {}, 1000.0, sr));
-        const double at500 = juce::Decibels::gainToDecibels(rmsWith(g, 500.0, sr)  / rmsWith(Bands {}, 500.0, sr));
+        Bands notch {};
+        notch[17] = -24.0f;   // 1 kHz
+        const double at1k  = heardDb(notch, 1000.0, sr);
+        const double at500 = heardDb(notch, 500.0, sr);
         logMessage(juce::String::formatted("processor notch: 1k %.2f dB, 500 Hz %.2f dB", at1k, at500));
         expectWithinAbsoluteError(at1k, -24.0, 1.5, "Processor notch depth at 1 kHz");
         expectWithinAbsoluteError(at500, 0.0, 0.75, "Processor notch moved 500 Hz");
+    }
 
-        // Near Nyquist the bands are built with bandQ; the DSP must match the model
-        // there too, or a drawn air lift would not sound as drawn.
+    beginTest("The EQ plays in true bypass (drive and compressor off)");
+    {
+        // It is a tone control on its own; it used to sit only on the active path,
+        // so with the drive at 0 a drawn curve went silent.
+        Bands notch {};
+        notch[17] = -24.0f;
+        const double at1k = heardDb(notch, 1000.0, sr, false);
+        logMessage(juce::String::formatted("true-bypass notch at 1 kHz: %.2f dB", at1k));
+        expectWithinAbsoluteError(at1k, -24.0, 1.5, "The EQ does not play in true bypass");
+    }
+
+    beginTest("Deep bass cuts and boosts hold at 192 kHz (double-precision bank)");
+    {
+        // In float, a -24 dB cut at 20 Hz came out at -16 dB at 192 kHz and +12 dB
+        // at +10: the coefficients cannot place the poles that close to z = 1.
+        for (float level : { DSPConstants::EQ_DRAW_MIN_DB, DSPConstants::EQ_DRAW_MAX_DB })
+        {
+            Bands deep {};
+            deep[0] = level;   // 20 Hz
+            const auto gains = GraphicEqCurve::fit(deep, 192000.0);
+            const double heard = heardDb(deep, 20.0, 192000.0);
+            const double model = GraphicEqCurve::responseDb(gains, 20.0, 192000.0);
+            logMessage(juce::String::formatted("20 Hz at 192 kHz, drawn %.0f: heard %.2f, model %.2f",
+                                               level, heard, model));
+            expectWithinAbsoluteError(heard, model, 0.3, "20 Hz band at 192 kHz does not play as fitted");
+        }
+    }
+
+    beginTest("An air lift plays as drawn at 44.1 kHz, and after a rate change");
+    {
+        // Near Nyquist the bands are built with bandQ, and the fit leaves out the
+        // 20 kHz band the DSP drops at 44.1 kHz; the processor must match the model.
         Bands air {};
         for (int i = 26; i < DSPConstants::EQ_NUM_BANDS; ++i)
             air[(size_t) i] = 6.0f;
         const auto airGains = GraphicEqCurve::fit(air, 44100.0);
+
+        EqRig flat(44100.0);
+        EqRig moved(48000.0, air);   // drawn at 48 kHz, then the session moves to 44.1
+        {
+            auto buf = moved.sine(1000.0, amp);
+            moved.p.processBlock(buf, moved.midi);
+        }
+        moved.rate = 44100.0;
+        moved.p.setRateAndBufferSizeDetails(44100.0, 512);
+        moved.p.prepareToPlay(44100.0, 512);
+
         for (double hz : { 11200.0, 14000.0 })   // between band centres
         {
-            const double heard = juce::Decibels::gainToDecibels(
-                rmsWith(airGains, hz, 44100.0) / rmsWith(Bands {}, hz, 44100.0));
             const double model = GraphicEqCurve::responseDb(airGains, hz, 44100.0);
-            logMessage(juce::String::formatted("air lift at %.0f Hz, 44.1 kHz: heard %.2f, model %.2f",
-                                               hz, heard, model));
+            const double heard = heardDb(air, hz, 44100.0);
+            const double afterMove = juce::Decibels::gainToDecibels(moved.rmsAt(hz, quiet) / flat.rmsAt(hz, quiet));
+            logMessage(juce::String::formatted("air lift at %.0f Hz, 44.1 kHz: heard %.2f, after a "
+                                               "rate change %.2f, model %.2f", hz, heard, afterMove, model));
             expectWithinAbsoluteError(heard, model, 0.5, "DSP and model disagree near Nyquist");
+            expectWithinAbsoluteError(afterMove, model, 0.5, "Not refitted for the new rate");
             expectWithinAbsoluteError(heard, 6.0, 1.5, "Air lift not heard as drawn");
         }
+    }
+
+    beginTest("Automating a dot does not zipper");
+    {
+        // Flip the 1 kHz dot between -24 and +12 dB every block, under a 100 Hz tone
+        // it barely touches. The 30 ms ramp is followed every 32 samples, so the
+        // flips leave nothing at high frequencies; stepping the coefficients once per
+        // 512-sample block left a click on every step.
+        EqRig rig(sr);
+        auto* dot = rig.p.parameters.getParameter("eqThird17");
+        // Three cascaded 2nd-order high-passes per channel, so the 100 Hz tone itself
+        // sits ~200 dB down; run from the first block so their own start-up has
+        // died away before anything is counted.
+        juce::IIRFilter hp[2][3];
+        for (auto& chain : hp)
+            for (auto& f : chain)
+                f.setCoefficients(juce::IIRCoefficients::makeHighPass(sr, 6000.0));
+        double hfEnergy = 0.0, total = 0.0;
+        for (int b = 0; b < 60; ++b)
+        {
+            dot->setValueNotifyingHost(dot->convertTo0to1(b % 2 == 0 ? DSPConstants::EQ_DRAW_MIN_DB
+                                                                     : DSPConstants::EQ_DRAW_MAX_DB));
+            auto buf = rig.sine(100.0, amp);
+            rig.p.processBlock(buf, rig.midi);
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                auto* x = buf.getWritePointer(ch);
+                if (b >= 20)
+                    for (int n = 0; n < buf.getNumSamples(); ++n)
+                        total += (double) x[n] * x[n];
+                for (auto& f : hp[ch])
+                    f.processSamples(x, buf.getNumSamples());
+                if (b >= 20)
+                    for (int n = 0; n < buf.getNumSamples(); ++n)
+                        hfEnergy += (double) x[n] * x[n];
+            }
+        }
+        const double ratioDb = 10.0 * std::log10(hfEnergy / total + 1.0e-30);
+        logMessage(juce::String::formatted("energy above 6 kHz while automating: %.1f dB", ratioDb));
+        expect(ratioDb < -90.0, "Automating a dot leaves zipper noise above 6 kHz");
+    }
+
+    beginTest("A band that goes flat rings out, then stops and starts from silence");
+    {
+        // A 20 Hz boost on a 20 Hz tone, then flattened. The band must keep running
+        // while it rings (no step), then stop and clear its memory, after which the
+        // output is the input bit for bit.
+        // On the true-bypass path, whose only other stages are exact at these
+        // settings.
+        Bands boost {};
+        boost[0] = DSPConstants::EQ_DRAW_MAX_DB;
+        EqRig rig(sr, boost, false);
+        rig.rmsAt(20.0, quiet);
+        rig.draw({});
+
+        EqRig ref(sr, {}, false);   // the same path with the EQ flat throughout
+        ref.rmsAt(20.0, quiet);
+
+        // The ramp, the hold, then a little more. Per block, the largest difference
+        // from the flat chain: the band's ring-out, then exactly 0 once it stops.
+        const int blocks = (int) std::ceil((DSPConstants::EQ_GAIN_SMOOTH_TIME_S + DSPConstants::EQ_IDLE_HOLD_S + 0.1)
+                                           * sr / 512.0);
+        std::vector<float> diffs;
+        for (int b = 0; b < blocks; ++b)
+        {
+            auto x = rig.sine(20.0, quiet);
+            auto y = ref.sine(20.0, quiet);
+            rig.p.processBlock(x, rig.midi);
+            ref.p.processBlock(y, ref.midi);
+            float diff = 0.0f;
+            for (int ch = 0; ch < 2; ++ch)
+                for (int n = 0; n < 512; ++n)
+                    diff = juce::jmax(diff, std::abs(x.getSample(ch, n) - y.getSample(ch, n)));
+            diffs.push_back(diff);
+        }
+        // Where it stopped, and what it left behind just before: the step a clear
+        // makes. A 20 Hz ring sampled in ~11 ms blocks rises and falls block to
+        // block, so take the largest over the last cycle (5 blocks).
+        int stopped = blocks;
+        while (stopped > 0 && diffs[(size_t) stopped - 1] == 0.0f)
+            --stopped;
+        float lastRing = 0.0f;
+        for (int b = juce::jmax(0, stopped - 5); b < stopped; ++b)
+            lastRing = juce::jmax(lastRing, diffs[(size_t) b]);
+        const float stepDb = juce::Decibels::gainToDecibels(lastRing / quiet, -200.0f);
+        logMessage(juce::String::formatted("band stopped after %.0f ms; ring-out left at the stop: %.1f dB "
+                                           "below the signal", (stopped * 512.0 / sr) * 1000.0, -stepDb));
+        expect(stopped < blocks, "Once idle, the bank must leave the signal bit for bit");
+        expect(stopped * 512.0 / sr >= DSPConstants::EQ_IDLE_HOLD_S, "The band stopped before its hold ran out");
+        expect(stepDb < -60.0f, "A band stopped while still ringing (an audible step)");
     }
 
     // --- v2.3 states (12 bands, eqBand0..11) --------------------------------------
@@ -5190,7 +5369,7 @@ void GraphicEqTests::runTest()
         juce::AudioProcessor::copyXmlToBinary(*xml, v3);
         return v3;
     };
-    auto bandsOf = [](PluginProcessor& p)
+    auto drawingOf = [](PluginProcessor& p)
     {
         Bands g {};
         for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
@@ -5200,25 +5379,30 @@ void GraphicEqTests::runTest()
         }
         return g;
     };
+    auto legacyDb = [](const float (&legacy)[DSPConstants::EQ_LEGACY_NUM_BANDS], double hz, double rate)
+    {
+        double old = 0.0;
+        for (int m = 0; m < DSPConstants::EQ_LEGACY_NUM_BANDS; ++m)
+            old += GraphicEqCurve::peakDb(hz, DSPConstants::EQ_LEGACY_FREQS[m], DSPConstants::EQ_LEGACY_Q,
+                                          legacy[m], rate);
+        return old;
+    };
 
     beginTest("A v2.3 EQ curve migrates onto the 31 bands and sounds the same");
     {
         const auto v3 = legacyState({ { 2, -12.0f }, { 6, 12.0f }, { 10, 6.0f } });   // 100 Hz, 1 kHz, 9 kHz
         PluginProcessor dst;
         dst.setStateInformation(v3.getData(), (int) v3.getSize());
-        const auto g = bandsOf(dst);
+        const auto g = GraphicEqCurve::fit(drawingOf(dst));
 
         const float legacy[DSPConstants::EQ_LEGACY_NUM_BANDS] = { 0, 0, -12, 0, 0, 0, 12, 0, 0, 0, 6, 0 };
         for (double hz : { 50.0, 100.0, 300.0, 1000.0, 3000.0, 9000.0 })
         {
-            double old = 0.0;
-            for (int m = 0; m < DSPConstants::EQ_LEGACY_NUM_BANDS; ++m)
-                old += GraphicEqCurve::peakDb(hz, DSPConstants::EQ_LEGACY_FREQS[m], DSPConstants::EQ_LEGACY_Q,
-                                              legacy[m], DSPConstants::EQ_FIT_SAMPLE_RATE);
-            // Near the top the bands are narrowest (bilinear warping at the fit rate),
-            // so between two centres the bank can sit ~1.5 dB under a broad old peak.
-            expectWithinAbsoluteError(respAt(g, hz), old, hz > 5000.0 ? 2.0 : 1.0,
-                "Migrated curve differs from v2.3 at " + juce::String(hz) + " Hz");
+            // The new bank follows straight lines between centres, so an old peak
+            // midway between two of them (9 kHz, between 8 and 10) comes back lower.
+            expectWithinAbsoluteError(respAt(g, hz), legacyDb(legacy, hz, DSPConstants::EQ_FIT_SAMPLE_RATE),
+                                      hz > 5000.0 ? 2.0 : 1.0,
+                                      "Migrated curve differs from v2.3 at " + juce::String(hz) + " Hz");
         }
 
         juce::MemoryBlock resaved;
@@ -5231,6 +5415,28 @@ void GraphicEqTests::runTest()
         expect(! stale, "Migrated state still carries the old eqBand params");
     }
 
+    beginTest("A v2.3 session restored before prepare plays its 16 kHz boost at 44.1 kHz");
+    {
+        // Hosts often restore state before they prepare, when no rate is known. The
+        // drawing does not depend on the rate; the processor fits it at 44.1 kHz,
+        // where the 20 kHz band is gone, instead of keeping a 48 kHz fit that leaned on it.
+        const auto v3 = legacyState({ { 11, 12.0f } });   // 16 kHz
+        const float legacy[DSPConstants::EQ_LEGACY_NUM_BANDS] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12 };
+        EqRig restored(44100.0);
+        restored.p.setStateInformation(v3.getData(), (int) v3.getSize());
+        restored.p.prepareToPlay(44100.0, 512);
+        restored.transparent();
+        EqRig flat(44100.0);
+        for (double hz : { 12500.0, 16000.0 })
+        {
+            const double heard = juce::Decibels::gainToDecibels(restored.rmsAt(hz, quiet) / flat.rmsAt(hz, quiet));
+            const double old = legacyDb(legacy, hz, 44100.0);
+            logMessage(juce::String::formatted("v2.3 16 kHz boost at %.0f Hz, 44.1 kHz: heard %.2f, v2.3 %.2f",
+                                               hz, heard, old));
+            expectWithinAbsoluteError(heard, old, 1.5, "Migrated 16 kHz boost lost at 44.1 kHz");
+        }
+    }
+
     beginTest("A v2.3 state with a flat EQ loads flat, over a drawn curve");
     {
         const auto v3 = legacyState({});
@@ -5238,7 +5444,7 @@ void GraphicEqTests::runTest()
         setParameter(dst.parameters, "eqThird17", -20.0f);   // must not survive the load
         dst.setStateInformation(v3.getData(), (int) v3.getSize());
         bool flat = true;
-        for (float v : bandsOf(dst))
+        for (float v : drawingOf(dst))
             flat = flat && v == 0.0f;
         expect(flat, "A flat v2.3 EQ must load as an exactly flat bank");
     }

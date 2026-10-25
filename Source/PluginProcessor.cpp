@@ -1702,6 +1702,12 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
         feedProfileWhileBypassed(buffer);   // profile mode only; the output is untouched
 
+        // The graphic EQ is a tone control too: it plays with the drive and
+        // compressor off, at the same place relative to the output gain as on the
+        // active path, so moving between the two paths does not jump it. While the
+        // curve is flat the bank is bypassed and bypass stays bit-clean.
+        processGraphicEq(buffer);
+
         for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
         {
             const float currentOutputGain = smoothedOutputGain.getNextValue();
@@ -2201,8 +2207,9 @@ void PluginProcessor::migrateState(const juce::XmlElement& xmlState)
 
     // --- v3 -> v4 -------------------------------------------------------------
     // The graphic EQ went from 12 bands (eqBand0..11, Q 1.4) to 31 on the 1/3-octave
-    // centres (eqThird0..30). Refit the old curve's response onto the new bank, so
-    // a v2.3 session sounds the same, and drop the old params from the tree.
+    // centres (eqThird0..30), which hold the drawing rather than band gains. Draw
+    // the old curve's response at the new centres, so a v2.3 session sounds the
+    // same, and drop the old params from the tree.
     // A state without them is flat; set every band anyway, since APVTS would keep
     // whatever the instance had.
     if (loadedVersion < 4)
@@ -2219,11 +2226,12 @@ void PluginProcessor::migrateState(const juce::XmlElement& xmlState)
                 parameters.state.removeChild(old, nullptr);
         }
 
-        // At the host rate when known, so a band v2.3 dropped stays dropped.
-        const auto gains = GraphicEqCurve::fitLegacy(legacy, getSampleRate());
+        // A drawing, not gains, so it does not depend on the rate: the processor fits
+        // it at whatever rate the session runs at.
+        const auto drawn = GraphicEqCurve::legacyDrawing(legacy);
         for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
             if (auto* param = parameters.getParameter(eqBandParamId(i)))
-                param->setValueNotifyingHost(param->convertTo0to1(gains[(size_t) i]));
+                param->setValueNotifyingHost(param->convertTo0to1(drawn[(size_t) i]));
     }
 
     // --- future migrations go here -------------------------------------------
@@ -3807,90 +3815,156 @@ void PluginProcessor::applyAutoGainAndISP(juce::AudioBuffer<float>& buffer)
 //==============================================================================
 // Free-draw graphic EQ (output-stage peaking bank, base rate)
 
+void PluginProcessor::EqBand::setGainDb(float db) noexcept
+{
+    // RBJ peaking biquad with the rate's w0 and Q cached; only A changes. Same
+    // formula as writePeakFilterCoeffs, in double.
+    const double A = std::pow(10.0, (double) db / 40.0);
+    const double a0inv = 1.0 / (1.0 + alpha / A);
+    b0 = (1.0 + alpha * A) * a0inv;
+    b1 = c2 * a0inv;
+    b2 = (1.0 - alpha * A) * a0inv;
+    a1 = b1;
+    a2 = (1.0 - alpha / A) * a0inv;
+    appliedDb = db;
+}
+
+GraphicEqCurve::Bands PluginProcessor::eqDrawing() const noexcept
+{
+    GraphicEqCurve::Bands drawn {};
+    const bool enabled = eqEnabledParam == nullptr || eqEnabledParam->load() > 0.5f;
+    if (enabled)
+        for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
+            drawn[(size_t) i] = eqBandParam[i] ? eqBandParam[i]->load() : 0.0f;
+    return drawn;
+}
+
 void PluginProcessor::prepareEqBands(const juce::dsp::ProcessSpec& baseSpec)
 {
     eqSampleRate = baseSpec.sampleRate;
+    eqIdleHoldSamples = (int) std::ceil(DSPConstants::EQ_IDLE_HOLD_S * eqSampleRate);
+    eqFitter.prepare(eqSampleRate);
+
+    // Start settled on the current drawing, refitted for this rate, so a session
+    // restored before prepare (or a rate change) plays its curve from the first
+    // sample without a ramp.
+    eqFittedFor = eqDrawing();
+    eqFittedGains = eqFitter.fit(eqFittedFor);
+
+    constexpr double twoPi = 6.283185307179586;
     for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
     {
+        auto& band = eqBand[i];
         // A peaking band at/above Nyquist is unstable (negative alpha puts the poles
         // on or outside the unit circle), so drop those bands at low base rates
         // rather than writing coefficients that would make the filter diverge.
-        eqBandUsable[i] = GraphicEqCurve::bandUsable(i, eqSampleRate);
-        eqBandQ[i] = eqBandUsable[i] ? GraphicEqCurve::bandQ(DSPConstants::EQ_FREQS[i], eqSampleRate)
-                                     : (double) DSPConstants::EQ_Q;
+        band.usable = GraphicEqCurve::bandUsable(i, eqSampleRate);
+        const double w0 = twoPi * DSPConstants::EQ_FREQS[i] / eqSampleRate;
+        band.alpha = band.usable
+                   ? std::sin(w0) / (2.0 * GraphicEqCurve::bandQ(DSPConstants::EQ_FREQS[i], eqSampleRate))
+                   : 0.0;
+        band.c2 = -2.0 * std::cos(w0);
+        band.clear();
 
-        auto& band = eqBands[(size_t) i];
-        band.prepare(baseSpec);
-        // Seed with unity (0 dB) peak at this band's centre frequency.
-        if (eqBandUsable[i])
-            writePeakFilterCoeffs(*band.state, eqSampleRate,
-                                  DSPConstants::EQ_FREQS[i], eqBandQ[i], 1.0);
-        band.reset();
-
-        eqGainSmoothed[i].reset(baseSpec.sampleRate, DSPConstants::EQ_GAIN_SMOOTH_TIME_S);
-        const float g = eqBandParam[i] ? eqBandParam[i]->load() : 0.0f;
+        const float g = eqFittedGains[(size_t) i];
+        eqGainSmoothed[i].reset(eqSampleRate, DSPConstants::EQ_GAIN_SMOOTH_TIME_S);
         eqGainSmoothed[i].setCurrentAndTargetValue(g);
-        eqLastGainDb[i] = 1.0e9f;  // force first coeff write when non-flat
+        band.setGainDb(g);
+        band.running = band.usable && std::abs(g) > DSPConstants::EQ_FLAT_EPS_DB;
+        band.idleSamples = 0;
     }
 }
 
 void PluginProcessor::processGraphicEq(juce::AudioBuffer<float>& buffer)
 {
+    using namespace DSPConstants;
     const int numSamples = buffer.getNumSamples();
-    if (numSamples <= 0)
+    const int numChannels = juce::jmin(buffer.getNumChannels(), 2);
+    if (numSamples <= 0 || numChannels <= 0)
         return;
 
-    // Master bypass: when off, ramp the applied gains to flat (0 dB) instead of a
-    // hard cut — click-free, and the drawn curve (eqThird params) is left intact so
-    // re-enabling restores it. The whole-bank bypass below then kicks in once the
-    // ramp settles, so a bypassed EQ costs nothing.
-    const bool eqEnabled = eqEnabledParam == nullptr || eqEnabledParam->load() > 0.5f;
-
-    // Push the latest drawn gains into the smoothers and find out whether the
-    // curve is doing anything. A smoother is "settled flat" only when both its
-    // current value and its target are within epsilon of 0 dB.
-    bool anyActive = false;
-    for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
+    // Refit when the drawing changed (a drag, automation, a preset, the master
+    // bypass). The master bypass fits a flat drawing, so the gains ramp to flat
+    // (click-free) while the drawn curve (eqThird params) is left intact.
+    const auto drawn = eqDrawing();
+    if (drawn != eqFittedFor)
     {
-        const float raw = eqBandParam[i] ? eqBandParam[i]->load() : 0.0f;
-        const float target = eqEnabled ? raw : 0.0f;
-        eqGainSmoothed[i].setTargetValue(target);
+        eqFittedFor = drawn;
+        eqFittedGains = eqFitter.fit(drawn);
+    }
 
-        // Out-of-band bands never process, so their gain must not keep the bank awake.
-        if (! eqBandUsable[i])
+    // Which bands run this block. A band runs while its target or ramp is off 0 dB,
+    // then for EQ_IDLE_HOLD_S more so its ringing decays, and is then cleared and
+    // stops; a band that starts again therefore starts from silence, not from
+    // memory left over from its last use.
+    bool anyRunning = false;
+    for (int i = 0; i < EQ_NUM_BANDS; ++i)
+    {
+        auto& band = eqBand[i];
+        const float target = eqFittedGains[(size_t) i];
+        eqGainSmoothed[i].setTargetValue(target);
+        if (! band.usable)
             continue;
 
-        if (std::abs(target) > DSPConstants::EQ_FLAT_EPS_DB
-            || std::abs(eqGainSmoothed[i].getCurrentValue()) > DSPConstants::EQ_FLAT_EPS_DB)
-            anyActive = true;
+        const bool flat = std::abs(target) <= EQ_FLAT_EPS_DB
+                       && std::abs(eqGainSmoothed[i].getCurrentValue()) <= EQ_FLAT_EPS_DB;
+        if (! flat)
+        {
+            band.running = true;
+            band.idleSamples = 0;
+        }
+        else if (band.running && band.idleSamples >= eqIdleHoldSamples)
+        {
+            band.running = false;
+            band.clear();
+            eqGainSmoothed[i].setCurrentAndTargetValue(target);
+            band.setGainDb(target);
+        }
+        anyRunning = anyRunning || band.running;
     }
 
     // Whole-bank bypass while flat — zero CPU and bit-transparent for a fresh
     // instance or a flattened curve.
-    if (! anyActive)
+    if (! anyRunning)
         return;
 
-    juce::dsp::AudioBlock<float> block(buffer);
-    juce::dsp::ProcessContextReplacing<float> context(block);
+    float* data[2] = { buffer.getWritePointer(0), numChannels > 1 ? buffer.getWritePointer(1) : nullptr };
 
-    for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
+    // Coefficients follow the smoothed gains every EQ_SUBBLOCK samples, so a drag
+    // or automation moves the curve without zipper steps at the block size.
+    for (int start = 0; start < numSamples; start += EQ_SUBBLOCK)
     {
-        if (! eqBandUsable[i])
-            continue;
-
-        // Advance the ramp across this block; rewrite coefficients only when the
-        // gain actually moved (in place, no allocation).
-        auto& band = eqBands[(size_t) i];
-        const float g = eqGainSmoothed[i].skip(numSamples);
-        if (std::abs(g - eqLastGainDb[i]) > 1.0e-3f)
+        const int len = juce::jmin(EQ_SUBBLOCK, numSamples - start);
+        for (int i = 0; i < EQ_NUM_BANDS; ++i)
         {
-            writePeakFilterCoeffs(*band.state, eqSampleRate,
-                                  DSPConstants::EQ_FREQS[i], eqBandQ[i],
-                                  juce::Decibels::decibelsToGain(g));
-            eqLastGainDb[i] = g;
-        }
+            auto& band = eqBand[i];
+            if (! band.running)
+                continue;
 
-        band.process(context);
+            const float g = eqGainSmoothed[i].isSmoothing() ? eqGainSmoothed[i].skip(len)
+                                                            : eqGainSmoothed[i].getTargetValue();
+            if (g != band.appliedDb)
+                band.setGainDb(g);
+            if (std::abs(g) <= EQ_FLAT_EPS_DB && std::abs(eqGainSmoothed[i].getTargetValue()) <= EQ_FLAT_EPS_DB)
+                band.idleSamples += len;
+
+            const double b0 = band.b0, b1 = band.b1, b2 = band.b2, a1 = band.a1, a2 = band.a2;
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                float* x = data[ch] + start;
+                double s1 = band.s1[ch], s2 = band.s2[ch];
+                for (int n = 0; n < len; ++n)
+                {
+                    const double in = x[n];
+                    const double out = b0 * in + s1;
+                    s1 = b1 * in - a1 * out + s2;
+                    s2 = b2 * in - a2 * out;
+                    x[n] = (float) out;
+                }
+                band.s1[ch] = s1;
+                band.s2[ch] = s2;
+            }
+        }
     }
 }
 
@@ -3910,9 +3984,8 @@ void PluginProcessor::resetDSPState()
         toneFilter.reset();
     if (toneFilterLow.state)
         toneFilterLow.reset();
-    for (auto& band : eqBands)
-        if (band.state)
-            band.reset();
+    for (auto& band : eqBand)
+        band.clear();
 
     // Reset envelope states
     preCompEnvelope[0] = 1.0f;
@@ -4262,23 +4335,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         "EQ Enabled",
         true));
 
-    // Free-draw graphic EQ — one gain (dB) per 1/3-octave peaking band, as fitted
-    // from the drawn curve. Default flat (0 dB), so a fresh instance bypasses the
-    // whole bank. Automatable + saved in state.
+    // Free-draw graphic EQ — the drawn level (dB) at each 1/3-octave centre; the
+    // processor fits the band gains from these. Default flat (0 dB), so a fresh
+    // instance bypasses the whole bank. Automatable + saved in state. Added after
+    // v2.3, hence version hint 2.
     for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
-    {
-        // "31.5 Hz", "100 Hz", "1.25 kHz", "20 kHz"
-        const float hz = DSPConstants::EQ_FREQS[i];
-        const bool kilo = hz >= 1000.0f;
-        juce::String freqText(kilo ? hz / 1000.0f : hz, 2);
-        freqText = freqText.trimCharactersAtEnd("0").trimCharactersAtEnd(".") + (kilo ? " kHz" : " Hz");
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
-            juce::ParameterID{ eqBandParamId(i), 1 },
-            "EQ " + freqText,
-            juce::NormalisableRange<float>(DSPConstants::EQ_BAND_MIN_DB,
-                                            DSPConstants::EQ_BAND_MAX_DB, 0.01f),
+            juce::ParameterID{ eqBandParamId(i), 2 },
+            "EQ " + eqBandName(i),
+            juce::NormalisableRange<float>(DSPConstants::EQ_DRAW_MIN_DB,
+                                            DSPConstants::EQ_DRAW_MAX_DB, 0.01f),
             0.0f));
-    }
 
     return { params.begin(), params.end() };
 }

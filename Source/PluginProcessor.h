@@ -187,6 +187,7 @@ class PluginProcessor : public juce::AudioProcessor,
     friend class SampleRateTests;
     friend class ThreadSafetyTests;
     friend class StateIOTests;
+    friend class GraphicEqTests;
     friend class GoldenAudioTests;
     friend class HarmonicDensityTests;
     friend class OutputLimiterTests;
@@ -269,10 +270,19 @@ public:
     // called AFTER replaceState so the parameters being migrated exist.
     void migrateState(const juce::XmlElement& xmlState);
 
-    // Graphic EQ band gain params, one per 1/3-octave band (dB). New IDs since state
-    // version 4: the v2.3 bank's eqBand0..11 sat on other frequencies, so reusing
-    // those IDs would point old automation lanes at the wrong band.
+    // Graphic EQ params, the drawn level (dB) at each 1/3-octave centre. New IDs
+    // since state version 4: the v2.3 bank's eqBand0..11 were band gains on other
+    // frequencies, so reusing those IDs would point old automation lanes at the
+    // wrong band.
     static juce::String eqBandParamId(int band) { return "eqThird" + juce::String(band); }
+    // A band's centre as text: "31.5 Hz", "100 Hz", "1.25 kHz", "20 kHz".
+    static juce::String eqBandName(int band)
+    {
+        const float hz = DSPConstants::EQ_FREQS[band];
+        const bool kilo = hz >= 1000.0f;
+        return juce::String(kilo ? hz / 1000.0f : hz, 2).trimCharactersAtEnd("0").trimCharactersAtEnd(".")
+             + (kilo ? " kHz" : " Hz");
+    }
 
     //==============================================================================
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
@@ -427,22 +437,32 @@ private:
     juce::SmoothedValue<float> smoothedBoostDepth;  // 0=off, 1=full boost (morphs the toggle)
     float lastBoostDepth = -1.0f;
 
-    // Free-draw graphic EQ — output-stage peaking bank at BASE rate. Coefficients
-    // mutate .state in place (see writePeakFilterCoeffs) from per-band smoothed
-    // gains, so nothing allocates on the audio thread.
-    std::array<juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-        juce::dsp::IIR::Coefficients<float>>, DSPConstants::EQ_NUM_BANDS> eqBands;
-    std::atomic<float>* eqBandParam[DSPConstants::EQ_NUM_BANDS] = {};  // eqThird0..30 gain (dB)
+    // Free-draw graphic EQ — output-stage peaking bank at BASE rate, in double:
+    // in float the 20 Hz band at 192 kHz cut 16 dB where 24 were asked for. The
+    // params hold the drawing; eqFitter turns it into band gains at this rate
+    // whenever it changes (on the audio thread, allocation-free).
+    struct EqBand
+    {
+        double alpha = 0.0, c2 = 0.0;              // sin(w0)/(2Q), -2cos(w0) at this rate
+        double b0 = 1.0, b1 = 0.0, b2 = 0.0, a1 = 0.0, a2 = 0.0;
+        double s1[2] = {}, s2[2] = {};             // transposed direct form II, per channel
+        float  appliedDb = 0.0f;                   // gain the coefficients hold
+        int    idleSamples = 0;                    // how long it has been flat
+        bool   running = false;                    // processing (not yet idle)
+        bool   usable = false;                     // centre below EQ_MAX_FREQ_RATIO x rate
+
+        void setGainDb(float db) noexcept;
+        void clear() noexcept { s1[0] = s1[1] = s2[0] = s2[1] = 0.0; }
+    };
+    EqBand eqBand[DSPConstants::EQ_NUM_BANDS];
+    GraphicEqCurve::Fitter eqFitter;
+    GraphicEqCurve::Bands eqFittedFor {};          // the drawing eqFitter last fitted
+    GraphicEqCurve::Bands eqFittedGains {};        // ...and its band gains
+    std::atomic<float>* eqBandParam[DSPConstants::EQ_NUM_BANDS] = {};  // eqThird0..30: drawn level (dB)
     std::atomic<float>* eqEnabledParam = nullptr;   // EQ master bypass (1 = active, 0 = bypassed)
     juce::SmoothedValue<float> eqGainSmoothed[DSPConstants::EQ_NUM_BANDS];
-    float eqLastGainDb[DSPConstants::EQ_NUM_BANDS] = {};               // last coeffs written
-    // False for bands whose centre sits at/above EQ_MAX_FREQ_RATIO * base rate —
-    // a peaking biquad is unstable there (see EQ_MAX_FREQ_RATIO). Set in
-    // prepareEqBands; such bands are never given coefficients or processed.
-    bool eqBandUsable[DSPConstants::EQ_NUM_BANDS] = {};
-    // Each band's Q at the base rate (GraphicEqCurve::bandQ). Set in prepareEqBands.
-    double eqBandQ[DSPConstants::EQ_NUM_BANDS] = {};
     double eqSampleRate = 44100.0;                                     // base rate for coeff writes
+    int eqIdleHoldSamples = 0;                                         // EQ_IDLE_HOLD_S at this rate
 
     juce::AudioBuffer<float> dryBuffer;       // For global wet/dry mix
 
@@ -721,11 +741,14 @@ private:
     // push the blended output past the ceiling. Shared by the bypass and active paths.
     void applyFinalLimiter(juce::AudioBuffer<float>& buffer);
 
-    // Free-draw graphic EQ (output-stage). prepareEqBands seeds unity coeffs at
-    // each band's centre frequency; processGraphicEq updates changed bands in
-    // place and processes the base-rate buffer. Bypassed when the curve is flat.
+    // Free-draw graphic EQ (output-stage). prepareEqBands builds the fitter and the
+    // bands for the base rate and settles them on the current drawing;
+    // processGraphicEq refits when the drawing changes and runs the bands that are
+    // not flat. Bypassed when the curve is flat.
     void prepareEqBands(const juce::dsp::ProcessSpec& baseSpec);
     void processGraphicEq(juce::AudioBuffer<float>& buffer);
+    // The drawing the params hold, or flat while the master bypass is off.
+    GraphicEqCurve::Bands eqDrawing() const noexcept;
 
     // Helper methods for studio distortion DSP
     float applyStudioDistortion(float x, float gain, float drive, int clipType, float harmonicScale, int channel = 0);
