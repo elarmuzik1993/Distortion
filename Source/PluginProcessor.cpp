@@ -146,7 +146,7 @@ PluginProcessor::PluginProcessor()
     monoInputParam = parameters.getRawParameterValue("monoInput");
     cleanBoostParam = parameters.getRawParameterValue("cleanBoost");
     for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
-        eqBandParam[i] = parameters.getRawParameterValue("eqBand" + juce::String(i));
+        eqBandParam[i] = parameters.getRawParameterValue(eqBandParamId(i));
     eqEnabledParam = parameters.getRawParameterValue("eqEnabled");
     // Verify all parameters were found
     jassert(inputGainParam && outputGainParam && distortionAmountParam
@@ -2199,8 +2199,35 @@ void PluginProcessor::migrateState(const juce::XmlElement& xmlState)
             param->setValueNotifyingHost(active ? 1.0f : 0.0f);
         }
 
+    // --- v3 -> v4 -------------------------------------------------------------
+    // The graphic EQ went from 12 bands (eqBand0..11, Q 1.4) to 31 on the 1/3-octave
+    // centres (eqThird0..30). Refit the old curve's response onto the new bank, so
+    // a v2.3 session sounds the same, and drop the old params from the tree.
+    // A state without them is flat; set every band anyway, since APVTS would keep
+    // whatever the instance had.
+    if (loadedVersion < 4)
+    {
+        float legacy[DSPConstants::EQ_LEGACY_NUM_BANDS] = {};
+        for (int i = 0; i < DSPConstants::EQ_LEGACY_NUM_BANDS; ++i)
+        {
+            const juce::String id = "eqBand" + juce::String(i);
+            for (auto* node : xmlState.getChildWithTagNameIterator("PARAM"))
+                if (node->getStringAttribute("id") == id)
+                    legacy[i] = juce::jlimit(-12.0f, 12.0f, (float) node->getDoubleAttribute("value"));
+            auto old = parameters.state.getChildWithProperty("id", id);
+            if (old.isValid())
+                parameters.state.removeChild(old, nullptr);
+        }
+
+        // At the host rate when known, so a band v2.3 dropped stays dropped.
+        const auto gains = GraphicEqCurve::fitLegacy(legacy, getSampleRate());
+        for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
+            if (auto* param = parameters.getParameter(eqBandParamId(i)))
+                param->setValueNotifyingHost(param->convertTo0to1(gains[(size_t) i]));
+    }
+
     // --- future migrations go here -------------------------------------------
-    // if (loadedVersion < 4) { ... }
+    // if (loadedVersion < 5) { ... }
 
     // Upgrade the live tree to the current version so the next save is written
     // in the latest format regardless of where this state originated.
@@ -3783,20 +3810,21 @@ void PluginProcessor::applyAutoGainAndISP(juce::AudioBuffer<float>& buffer)
 void PluginProcessor::prepareEqBands(const juce::dsp::ProcessSpec& baseSpec)
 {
     eqSampleRate = baseSpec.sampleRate;
-    const double maxEqFreq = eqSampleRate * DSPConstants::EQ_MAX_FREQ_RATIO;
     for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
     {
         // A peaking band at/above Nyquist is unstable (negative alpha puts the poles
         // on or outside the unit circle), so drop those bands at low base rates
         // rather than writing coefficients that would make the filter diverge.
-        eqBandUsable[i] = DSPConstants::EQ_FREQS[i] < maxEqFreq;
+        eqBandUsable[i] = GraphicEqCurve::bandUsable(i, eqSampleRate);
+        eqBandQ[i] = eqBandUsable[i] ? GraphicEqCurve::bandQ(DSPConstants::EQ_FREQS[i], eqSampleRate)
+                                     : (double) DSPConstants::EQ_Q;
 
         auto& band = eqBands[(size_t) i];
         band.prepare(baseSpec);
         // Seed with unity (0 dB) peak at this band's centre frequency.
         if (eqBandUsable[i])
             writePeakFilterCoeffs(*band.state, eqSampleRate,
-                                  DSPConstants::EQ_FREQS[i], DSPConstants::EQ_Q, 1.0);
+                                  DSPConstants::EQ_FREQS[i], eqBandQ[i], 1.0);
         band.reset();
 
         eqGainSmoothed[i].reset(baseSpec.sampleRate, DSPConstants::EQ_GAIN_SMOOTH_TIME_S);
@@ -3813,7 +3841,7 @@ void PluginProcessor::processGraphicEq(juce::AudioBuffer<float>& buffer)
         return;
 
     // Master bypass: when off, ramp the applied gains to flat (0 dB) instead of a
-    // hard cut — click-free, and the drawn curve (eqBand params) is left intact so
+    // hard cut — click-free, and the drawn curve (eqThird params) is left intact so
     // re-enabling restores it. The whole-bank bypass below then kicks in once the
     // ramp settles, so a bypassed EQ costs nothing.
     const bool eqEnabled = eqEnabledParam == nullptr || eqEnabledParam->load() > 0.5f;
@@ -3857,7 +3885,7 @@ void PluginProcessor::processGraphicEq(juce::AudioBuffer<float>& buffer)
         if (std::abs(g - eqLastGainDb[i]) > 1.0e-3f)
         {
             writePeakFilterCoeffs(*band.state, eqSampleRate,
-                                  DSPConstants::EQ_FREQS[i], DSPConstants::EQ_Q,
+                                  DSPConstants::EQ_FREQS[i], eqBandQ[i],
                                   juce::Decibels::decibelsToGain(g));
             eqLastGainDb[i] = g;
         }
@@ -4234,16 +4262,21 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         "EQ Enabled",
         true));
 
-    // Free-draw graphic EQ — one gain (dB) per peaking band. Default flat (0 dB),
-    // so a fresh instance bypasses the whole bank. Automatable + saved in state.
+    // Free-draw graphic EQ — one gain (dB) per 1/3-octave peaking band, as fitted
+    // from the drawn curve. Default flat (0 dB), so a fresh instance bypasses the
+    // whole bank. Automatable + saved in state.
     for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
     {
-        const int freqHz = static_cast<int>(DSPConstants::EQ_FREQS[i]);
+        // "31.5 Hz", "100 Hz", "1.25 kHz", "20 kHz"
+        const float hz = DSPConstants::EQ_FREQS[i];
+        const bool kilo = hz >= 1000.0f;
+        juce::String freqText(kilo ? hz / 1000.0f : hz, 2);
+        freqText = freqText.trimCharactersAtEnd("0").trimCharactersAtEnd(".") + (kilo ? " kHz" : " Hz");
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
-            juce::ParameterID{ "eqBand" + juce::String(i), 1 },
-            "EQ " + juce::String(freqHz) + " Hz",
-            juce::NormalisableRange<float>(-DSPConstants::EQ_GAIN_RANGE_DB,
-                                            DSPConstants::EQ_GAIN_RANGE_DB, 0.01f),
+            juce::ParameterID{ eqBandParamId(i), 1 },
+            "EQ " + freqText,
+            juce::NormalisableRange<float>(DSPConstants::EQ_BAND_MIN_DB,
+                                            DSPConstants::EQ_BAND_MAX_DB, 0.01f),
             0.0f));
     }
 

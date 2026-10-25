@@ -8,6 +8,7 @@
 #include "../XYPadFeedback.h"
 #include "../RTAllocationGuard.h"
 #include "../ShapeFilter.h"
+#include "../GraphicEqCurve.h"
 #include <atomic>
 #include <set>
 #include <iostream>
@@ -3322,7 +3323,7 @@ namespace
             { "eqEnabled", 1.0f },
         };
         for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
-            p.push_back({ "eqBand" + juce::String(i), 0.0f });
+            p.push_back({ PluginProcessor::eqBandParamId(i), 0.0f });
         return p;
     }
 
@@ -4835,7 +4836,7 @@ void GraphicEqTests::runTest()
         setParameter(p.parameters, "inputGain",         50.0f);
         setParameter(p.parameters, "outputGain",        50.0f);
         if (bandIndex >= 0)
-            setParameter(p.parameters, "eqBand" + juce::String(bandIndex), bandDb);
+            setParameter(p.parameters, PluginProcessor::eqBandParamId(bandIndex), bandDb);
 
         juce::MidiBuffer midi;
         for (int b = 0; b < 40; ++b)   // ~426 ms: past the 30 ms EQ ramp + settle
@@ -4850,7 +4851,7 @@ void GraphicEqTests::runTest()
 
     beginTest("Boosting a band raises its level; cutting lowers it");
     {
-        const int   band = 6;        // EQ_FREQS[6] = 1000 Hz
+        const int   band = 17;       // EQ_FREQS[17] = 1000 Hz
         const double f    = 1000.0;
         const float flat  = steadyRms(band,   0.0f, f);
         const float boost = steadyRms(band, +12.0f, f);
@@ -4868,7 +4869,7 @@ void GraphicEqTests::runTest()
         const double f = 1000.0;
 
         // Baseline (curve flat, EQ enabled) and boosted (band 6 = +12, enabled).
-        const float flat  = steadyRms(6, 0.0f, f);
+        const float flat  = steadyRms(17, 0.0f, f);
 
         // Boosted then bypassed: same +12 curve, but eqEnabled = 0.
         PluginProcessor p;
@@ -4882,7 +4883,7 @@ void GraphicEqTests::runTest()
         setParameter(p.parameters, "globalMix",         100.0f);
         setParameter(p.parameters, "inputGain",         50.0f);
         setParameter(p.parameters, "outputGain",        50.0f);
-        setParameter(p.parameters, "eqBand6",           12.0f);
+        setParameter(p.parameters, "eqThird17",         12.0f);
         setParameter(p.parameters, "eqEnabled",         0.0f);   // bypassed
 
         juce::MidiBuffer midi;
@@ -4902,19 +4903,19 @@ void GraphicEqTests::runTest()
         expectWithinAbsoluteError(bypassedRms, flat, flat * 0.05f,
             "Bypassed EQ did not return the signal to the flat baseline");
 
-        // ...while the drawn curve (eqBand6) is left fully intact.
-        auto* band6 = p.parameters.getParameter("eqBand6");
-        expect(band6 != nullptr, "eqBand6 missing");
-        if (band6 != nullptr)
-            expectWithinAbsoluteError(band6->convertFrom0to1(band6->getValue()), 12.0f, 0.05f,
+        // ...while the drawn curve (eqThird17) is left fully intact.
+        auto* band1k = p.parameters.getParameter("eqThird17");
+        expect(band1k != nullptr, "eqThird17 missing");
+        if (band1k != nullptr)
+            expectWithinAbsoluteError(band1k->convertFrom0to1(band1k->getValue()), 12.0f, 0.05f,
                 "Bypass must not alter the stored curve");
     }
 
     beginTest("A band's boost is localised (does not move a distant frequency)");
     {
-        const int    hiBand = 9;         // EQ_FREQS[9] = 5600 Hz
-        const double fHigh   = 5600.0;
-        const double fLow    = 1000.0;   // ~2.5 octaves below the boosted band
+        const int    hiBand = 25;        // EQ_FREQS[25] = 6300 Hz
+        const double fHigh   = 6300.0;
+        const double fLow    = 1000.0;   // ~2.7 octaves below the boosted band
 
         const float highFlat  = steadyRms(-1,      0.0f, fHigh);
         const float highBoost = steadyRms(hiBand, +12.0f, fHigh);
@@ -4922,18 +4923,18 @@ void GraphicEqTests::runTest()
         const float lowBoost  = steadyRms(hiBand, +12.0f, fLow);
 
         logMessage(juce::String::formatted(
-            "5.6k boost: highFlat=%.5f highBoost=%.5f | lowFlat=%.5f lowBoost=%.5f",
+            "6.3k boost: highFlat=%.5f highBoost=%.5f | lowFlat=%.5f lowBoost=%.5f",
             highFlat, highBoost, lowFlat, lowBoost));
-        expect(highBoost > highFlat * 1.30f, "Boost did not raise its own band (5.6 kHz)");
+        expect(highBoost > highFlat * 1.30f, "Boost did not raise its own band (6.3 kHz)");
         expect(lowBoost < lowFlat * 1.20f && lowBoost > lowFlat * 0.80f,
-               "Boosting 5.6 kHz noticeably moved the 1 kHz level");
+               "Boosting 6.3 kHz noticeably moved the 1 kHz level");
     }
 
     beginTest("Wild curve stays finite across 22.05/32/44.1/48/96/192 kHz");
     {
-        // 22.05 and 32 kHz matter: the 16 kHz band sits at/above Nyquist there, and
-        // a peaking biquad diverges once its centre reaches Nyquist. prepareEqBands
-        // must drop those bands instead of writing unstable coefficients.
+        // 22.05, 32 and 44.1 kHz matter: the top bands sit at/above 0.45 x the rate
+        // there, and a peaking biquad diverges once its centre reaches Nyquist.
+        // prepareEqBands must drop those bands instead of writing unstable coefficients.
         for (double rate : { 22050.0, 32000.0, 44100.0, 48000.0, 96000.0, 192000.0 })
         {
             PluginProcessor p;
@@ -4942,8 +4943,8 @@ void GraphicEqTests::runTest()
             setParameter(p.parameters, "distortionAmount", 50.0f);
             // Alternating full boost/cut — an aggressive, jagged curve.
             for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
-                setParameter(p.parameters, "eqBand" + juce::String(i),
-                             (i % 2 == 0) ? +12.0f : -12.0f);
+                setParameter(p.parameters, PluginProcessor::eqBandParamId(i),
+                             (i % 2 == 0) ? DSPConstants::EQ_BAND_MAX_DB : DSPConstants::EQ_BAND_MIN_DB);
 
             juce::MidiBuffer midi;
             bool clean = true;
@@ -4969,8 +4970,8 @@ void GraphicEqTests::runTest()
         float vals[DSPConstants::EQ_NUM_BANDS] { };
         for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
         {
-            vals[i] = -10.0f + (float) i * 1.7f;   // spread across the ±12 range
-            setParameter(a.parameters, "eqBand" + juce::String(i), vals[i]);
+            vals[i] = -28.0f + (float) i * 1.5f;   // spread across the -30..+18 range
+            setParameter(a.parameters, PluginProcessor::eqBandParamId(i), vals[i]);
         }
 
         juce::MemoryBlock state;
@@ -4983,13 +4984,263 @@ void GraphicEqTests::runTest()
 
         for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
         {
-            auto* param = b.parameters.getParameter("eqBand" + juce::String(i));
-            expect(param != nullptr, "eqBand" + juce::String(i) + " missing after load");
+            auto* param = b.parameters.getParameter(PluginProcessor::eqBandParamId(i));
+            expect(param != nullptr, PluginProcessor::eqBandParamId(i) + " missing after load");
             if (param == nullptr) continue;
             const float restored = param->convertFrom0to1(param->getValue());
             expectWithinAbsoluteError(restored, vals[i], 0.05f,
-                "eqBand" + juce::String(i) + " did not round-trip");
+                PluginProcessor::eqBandParamId(i) + " did not round-trip");
         }
+    }
+
+    // --- The drawn curve -> band gains fit (GraphicEqCurve) ----------------------
+    using GraphicEqCurve::Bands;
+    const auto fitted = [](std::initializer_list<std::pair<int, float>> dots)
+    {
+        Bands target {};
+        for (auto [band, db] : dots)
+            target[(size_t) band] = db;
+        return GraphicEqCurve::fit(target);
+    };
+    const auto respAt = [](const Bands& g, double hz) { return GraphicEqCurve::responseDb(g, hz); };
+
+    beginTest("Fit: a flat drawing gives exactly flat gains");
+    {
+        const auto g = GraphicEqCurve::fit(Bands {});
+        bool allZero = true;
+        for (float v : g)
+            allZero = allZero && v == 0.0f;
+        expect(allZero, "A flat target must leave every band at exactly 0 dB (bank bypass)");
+    }
+
+    beginTest("Fit: one dot at -24 dB is a 1/3-octave notch");
+    {
+        const auto g = fitted({ { 17, -24.0f } });   // 1 kHz
+        logMessage(juce::String::formatted("notch: 800=%.2f 1k=%.2f 1.25k=%.2f 500=%.2f 2k=%.2f",
+            respAt(g, 800.0), respAt(g, 1000.0), respAt(g, 1250.0), respAt(g, 500.0), respAt(g, 2000.0)));
+        expectWithinAbsoluteError(respAt(g, 1000.0), -24.0, 1.0, "Notch centre missed -24 dB");
+        expectWithinAbsoluteError(respAt(g, 800.0),  0.0, 1.0, "Notch leaked into 800 Hz");
+        expectWithinAbsoluteError(respAt(g, 1250.0), 0.0, 1.0, "Notch leaked into 1.25 kHz");
+        expectWithinAbsoluteError(respAt(g, 500.0),  0.0, 0.5, "Notch moved 500 Hz");
+        expectWithinAbsoluteError(respAt(g, 2000.0), 0.0, 0.5, "Notch moved 2 kHz");
+    }
+
+    beginTest("Fit: low and high cuts at the ends of the spectrum");
+    {
+        const auto low = fitted({ { 0, -24.0f }, { 1, -24.0f }, { 2, -24.0f },
+                                  { 3, -24.0f }, { 4, -24.0f }, { 5, -24.0f } });   // 20..63 Hz
+        for (double hz : { 20.0, 31.5, 50.0, 63.0 })
+            expectWithinAbsoluteError(respAt(low, hz), -24.0, 1.5, "Low cut at " + juce::String(hz) + " Hz");
+        for (double hz : { 100.0, 200.0, 1000.0 })
+            expectWithinAbsoluteError(respAt(low, hz), 0.0, 1.0, "Low cut leaked to " + juce::String(hz) + " Hz");
+
+        const auto high = fitted({ { 27, -24.0f }, { 28, -24.0f }, { 29, -24.0f }, { 30, -24.0f } });   // 10k..20k
+        for (double hz : { 10000.0, 12500.0, 16000.0 })
+            expectWithinAbsoluteError(respAt(high, hz), -24.0, 1.5, "High cut at " + juce::String(hz) + " Hz");
+        for (double hz : { 1000.0, 5000.0 })
+            expectWithinAbsoluteError(respAt(high, hz), 0.0, 1.0, "High cut leaked to " + juce::String(hz) + " Hz");
+    }
+
+    beginTest("Fit: a broad plateau stays smooth between band centres");
+    {
+        for (float level : { DSPConstants::EQ_DRAW_MIN_DB, -12.0f, DSPConstants::EQ_DRAW_MAX_DB })
+        {
+            Bands target;
+            target.fill(level);
+            const auto g = GraphicEqCurve::fit(target);
+            double lo = 1.0e9, hi = -1.0e9;
+            for (double hz = 40.0; hz < 10000.0; hz *= 1.02)
+            {
+                const double r = respAt(g, hz);
+                lo = std::min(lo, r);
+                hi = std::max(hi, r);
+            }
+            logMessage(juce::String::formatted("plateau %.0f dB: %.2f .. %.2f", level, lo, hi));
+            expect(lo > level - 3.5 && hi < level + 3.5,
+                   "Plateau at " + juce::String(level) + " dB ripples more than 3.5 dB");
+        }
+    }
+
+    beginTest("Fit: an air lift holds at 44.1 kHz, where the 20 kHz band drops out");
+    {
+        Bands target {};
+        for (int i = 26; i < DSPConstants::EQ_NUM_BANDS; ++i)   // 8 kHz up
+            target[(size_t) i] = 6.0f;
+        const auto g = GraphicEqCurve::fit(target, 44100.0);
+        expectEquals(g[30], 0.0f, "A band the DSP drops at 44.1 kHz must stay at 0 dB");
+        for (double hz : { 8000.0, 9000.0, 10000.0, 12500.0, 16000.0 })
+            expectWithinAbsoluteError(GraphicEqCurve::responseDb(g, hz, 44100.0), 6.0, 1.5,
+                                      "Air lift at " + juce::String(hz) + " Hz, 44.1 kHz");
+        expectWithinAbsoluteError(GraphicEqCurve::responseDb(g, 1000.0, 44100.0), 0.0, 0.5,
+                                  "Air lift moved 1 kHz at 44.1 kHz");
+
+        // At 22.05 kHz everything from 10 kHz up is gone; the rest must still fit.
+        const auto low = GraphicEqCurve::fit(target, 22050.0);
+        bool finite = true;
+        for (float v : low)
+            finite = finite && std::isfinite(v);
+        expect(finite && low[27] == 0.0f, "22.05 kHz fit must be finite and leave dropped bands flat");
+    }
+
+    beginTest("Fit: gains stay inside the band param range");
+    {
+        Bands target;
+        for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
+            target[(size_t) i] = (i % 2 == 0) ? DSPConstants::EQ_DRAW_MAX_DB : DSPConstants::EQ_DRAW_MIN_DB;
+        const auto g = GraphicEqCurve::fit(target);
+        bool inRange = true;
+        for (float v : g)
+            inRange = inRange && std::isfinite(v)
+                   && v >= DSPConstants::EQ_BAND_MIN_DB && v <= DSPConstants::EQ_BAND_MAX_DB;
+        expect(inRange, "Fitted gain outside the eqThird param range");
+    }
+
+    beginTest("A drawn notch cuts the processor's output by about 24 dB");
+    {
+        const auto g = fitted({ { 17, -24.0f } });
+        auto rmsWith = [&](const Bands& gains, double f, double rate) -> float
+        {
+            PluginProcessor p;
+            p.setRateAndBufferSizeDetails(rate, blockSize);
+            p.prepareToPlay(rate, blockSize);
+            setParameter(p.parameters, "distortionAmount", 0.0f);
+            setParameter(p.parameters, "compEnabled",       1.0f);
+            setParameter(p.parameters, "compPeakReduction", 0.0f);
+            setParameter(p.parameters, "subGuardFreq",      0.0f);
+            setParameter(p.parameters, "autoGainEnabled",   0.0f);
+            setParameter(p.parameters, "globalMix",         100.0f);
+            setParameter(p.parameters, "inputGain",         50.0f);
+            setParameter(p.parameters, "outputGain",        50.0f);
+            for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
+                setParameter(p.parameters, PluginProcessor::eqBandParamId(i), gains[(size_t) i]);
+            // Phase-continuous across blocks: generateSineWave restarts at phase 0
+            // every call, and the click at each block edge is broadband energy a
+            // notch cannot remove, which would read as a shallow notch.
+            double phase = 0.0;
+            const double inc = juce::MathConstants<double>::twoPi * f / rate;
+            auto nextBlock = [&]
+            {
+                juce::AudioBuffer<float> buf(2, blockSize);
+                for (int n = 0; n < blockSize; ++n, phase += inc)
+                    for (int ch = 0; ch < 2; ++ch)
+                        buf.setSample(ch, n, amp * (float) std::sin(phase));
+                return buf;
+            };
+            juce::MidiBuffer midi;
+            for (int b = 0; b < 40; ++b)
+            {
+                auto buf = nextBlock();
+                p.processBlock(buf, midi);
+            }
+            auto meas = nextBlock();
+            p.processBlock(meas, midi);
+            return calculateRMS(meas);
+        };
+        const double at1k  = juce::Decibels::gainToDecibels(rmsWith(g, 1000.0, sr) / rmsWith(Bands {}, 1000.0, sr));
+        const double at500 = juce::Decibels::gainToDecibels(rmsWith(g, 500.0, sr)  / rmsWith(Bands {}, 500.0, sr));
+        logMessage(juce::String::formatted("processor notch: 1k %.2f dB, 500 Hz %.2f dB", at1k, at500));
+        expectWithinAbsoluteError(at1k, -24.0, 1.5, "Processor notch depth at 1 kHz");
+        expectWithinAbsoluteError(at500, 0.0, 0.75, "Processor notch moved 500 Hz");
+
+        // Near Nyquist the bands are built with bandQ; the DSP must match the model
+        // there too, or a drawn air lift would not sound as drawn.
+        Bands air {};
+        for (int i = 26; i < DSPConstants::EQ_NUM_BANDS; ++i)
+            air[(size_t) i] = 6.0f;
+        const auto airGains = GraphicEqCurve::fit(air, 44100.0);
+        for (double hz : { 11200.0, 14000.0 })   // between band centres
+        {
+            const double heard = juce::Decibels::gainToDecibels(
+                rmsWith(airGains, hz, 44100.0) / rmsWith(Bands {}, hz, 44100.0));
+            const double model = GraphicEqCurve::responseDb(airGains, hz, 44100.0);
+            logMessage(juce::String::formatted("air lift at %.0f Hz, 44.1 kHz: heard %.2f, model %.2f",
+                                               hz, heard, model));
+            expectWithinAbsoluteError(heard, model, 0.5, "DSP and model disagree near Nyquist");
+            expectWithinAbsoluteError(heard, 6.0, 1.5, "Air lift not heard as drawn");
+        }
+    }
+
+    // --- v2.3 states (12 bands, eqBand0..11) --------------------------------------
+    // Rewrite a fresh save as a v3 state carrying the given legacy eqBand values.
+    auto legacyState = [](std::initializer_list<std::pair<int, float>> legacyBands)
+    {
+        PluginProcessor src;
+        juce::MemoryBlock saved;
+        src.getStateInformation(saved);
+        std::unique_ptr<juce::XmlElement> xml(juce::AudioProcessor::getXmlFromBinary(
+            saved.getData(), (int) saved.getSize()));
+        for (auto* child = xml->getFirstChildElement(); child != nullptr;)
+        {
+            auto* next = child->getNextElement();
+            if (child->getStringAttribute("id").startsWith("eqThird"))
+                xml->removeChildElement(child, true);
+            child = next;
+        }
+        for (int i = 0; i < DSPConstants::EQ_LEGACY_NUM_BANDS; ++i)
+        {
+            float v = 0.0f;
+            for (auto [band, db] : legacyBands)
+                if (band == i) v = db;
+            auto* node = xml->createNewChildElement("PARAM");
+            node->setAttribute("id", "eqBand" + juce::String(i));
+            node->setAttribute("value", v);
+        }
+        xml->setAttribute(PluginProcessor::stateVersionAttribute, 3);
+        juce::MemoryBlock v3;
+        juce::AudioProcessor::copyXmlToBinary(*xml, v3);
+        return v3;
+    };
+    auto bandsOf = [](PluginProcessor& p)
+    {
+        Bands g {};
+        for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
+        {
+            auto* param = p.parameters.getParameter(PluginProcessor::eqBandParamId(i));
+            g[(size_t) i] = param->convertFrom0to1(param->getValue());
+        }
+        return g;
+    };
+
+    beginTest("A v2.3 EQ curve migrates onto the 31 bands and sounds the same");
+    {
+        const auto v3 = legacyState({ { 2, -12.0f }, { 6, 12.0f }, { 10, 6.0f } });   // 100 Hz, 1 kHz, 9 kHz
+        PluginProcessor dst;
+        dst.setStateInformation(v3.getData(), (int) v3.getSize());
+        const auto g = bandsOf(dst);
+
+        const float legacy[DSPConstants::EQ_LEGACY_NUM_BANDS] = { 0, 0, -12, 0, 0, 0, 12, 0, 0, 0, 6, 0 };
+        for (double hz : { 50.0, 100.0, 300.0, 1000.0, 3000.0, 9000.0 })
+        {
+            double old = 0.0;
+            for (int m = 0; m < DSPConstants::EQ_LEGACY_NUM_BANDS; ++m)
+                old += GraphicEqCurve::peakDb(hz, DSPConstants::EQ_LEGACY_FREQS[m], DSPConstants::EQ_LEGACY_Q,
+                                              legacy[m], DSPConstants::EQ_FIT_SAMPLE_RATE);
+            // Near the top the bands are narrowest (bilinear warping at the fit rate),
+            // so between two centres the bank can sit ~1.5 dB under a broad old peak.
+            expectWithinAbsoluteError(respAt(g, hz), old, hz > 5000.0 ? 2.0 : 1.0,
+                "Migrated curve differs from v2.3 at " + juce::String(hz) + " Hz");
+        }
+
+        juce::MemoryBlock resaved;
+        dst.getStateInformation(resaved);
+        std::unique_ptr<juce::XmlElement> xml(juce::AudioProcessor::getXmlFromBinary(
+            resaved.getData(), (int) resaved.getSize()));
+        bool stale = false;
+        for (auto* child : xml->getChildIterator())
+            stale = stale || child->getStringAttribute("id").startsWith("eqBand");
+        expect(! stale, "Migrated state still carries the old eqBand params");
+    }
+
+    beginTest("A v2.3 state with a flat EQ loads flat, over a drawn curve");
+    {
+        const auto v3 = legacyState({});
+        PluginProcessor dst;
+        setParameter(dst.parameters, "eqThird17", -20.0f);   // must not survive the load
+        dst.setStateInformation(v3.getData(), (int) v3.getSize());
+        bool flat = true;
+        for (float v : bandsOf(dst))
+            flat = flat && v == 0.0f;
+        expect(flat, "A flat v2.3 EQ must load as an exactly flat bank");
     }
 
 #if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD
@@ -5001,11 +5252,11 @@ void GraphicEqTests::runTest()
         setParameter(p.parameters, "distortionAmount", 50.0f);
         setParameter(p.parameters, "subGuardFreq",      0.0f);
         for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
-            setParameter(p.parameters, "eqBand" + juce::String(i), 3.0f);
+            setParameter(p.parameters, PluginProcessor::eqBandParamId(i), 3.0f);
 
-        auto* band6 = p.parameters.getParameter("eqBand6");
+        auto* band6 = p.parameters.getParameter("eqThird17");
         auto* band6f = dynamic_cast<juce::AudioParameterFloat*>(band6);
-        expect(band6f != nullptr, "eqBand6 parameter not found / type mismatch");
+        expect(band6f != nullptr, "eqThird17 parameter not found / type mismatch");
         if (band6f == nullptr) return;
 
         juce::MidiBuffer midi;

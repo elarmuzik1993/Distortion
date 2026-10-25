@@ -2056,16 +2056,17 @@ private:
 
 //==============================================================================
 // Free-draw graphic EQ overlay — sits over the oscilloscope (same slot as
-// XYMorphPad). Drag to draw a magnitude curve; each of the kNumBands control
-// points maps to one peaking band in the DSP (eqBand0..N params). Double-click
-// flattens the curve. When not being dragged it mirrors the params, so preset
-// recall and host automation are reflected live.
+// XYMorphPad). Drag to draw a target curve: one dot per 1/3-octave band (31,
+// 20 Hz to 20 kHz), -24..+12 dB. Each edit refits the band gains
+// (GraphicEqCurve::fit) so the bank's summed response follows the dots, writes
+// them to the eqThird0..30 params, and the line drawn is that real response.
+// Double-click flattens the curve. When not being dragged it mirrors the params,
+// so preset recall and host automation are reflected live.
 class GraphicEqOverlay : public juce::Component, public juce::Timer
 {
 public:
-    // Must match DSPConstants::EQ_NUM_BANDS / EQ_GAIN_RANGE_DB.
-    static constexpr int   kNumBands = 12;
-    static constexpr float kRangeDb  = 12.0f;
+    static constexpr int kNumBands = DSPConstants::EQ_NUM_BANDS;
+    using Bands = GraphicEqCurve::Bands;
 
     GraphicEqOverlay()
     {
@@ -2075,9 +2076,12 @@ public:
 
     ~GraphicEqOverlay() override { stopTimer(); }
 
-    // Editor supplies these to read/write the APVTS eqBand params.
+    // Editor supplies these to read/write the APVTS eqThird params.
     std::function<float(int)>        getBandGainDb;
     std::function<void(int, float)>  onBandChanged;
+    // The host rate: the fit and the drawn response use it, so both leave out the
+    // bands the DSP drops there.
+    std::function<double()>          getSampleRate;
     // ...and the eqEnabled (master bypass) param.
     std::function<bool()>            getBypassed;      // true = EQ audio bypassed
     std::function<void(bool)>        onBypassToggle;   // set bypass state
@@ -2087,10 +2091,14 @@ public:
     void syncFromParams()
     {
         if (getBandGainDb)
+        {
             for (int i = 0; i < kNumBands; ++i)
                 gains[(size_t) i] = getBandGainDb(i);
+            targetsFromGains();
+        }
         if (getBypassed)
             bypassed = getBypassed();
+        curveDirty = true;
         repaint();
     }
 
@@ -2099,7 +2107,7 @@ public:
         if (! e.mods.isLeftButtonDown())
             return;
 
-        // Power button (top-right) toggles the EQ bypass — one click, curve kept.
+        // Power button (top-left) toggles the EQ bypass — one click, curve kept.
         if (powerButtonArea().contains(e.position))
         {
             bypassed = ! bypassed;
@@ -2126,7 +2134,20 @@ public:
             paintAt(e.position);
     }
 
-    void mouseUp(const juce::MouseEvent&) override { dragging = false; }
+    void mouseUp(const juce::MouseEvent&) override { dragging = false; repaint(); }
+
+    void mouseMove(const juce::MouseEvent& e) override
+    {
+        const int band = powerButtonArea().contains(e.position) ? -1 : nearestBand(e.position.x);
+        if (band != hoverBand) { hoverBand = band; repaint(); }
+    }
+
+    void mouseExit(const juce::MouseEvent&) override
+    {
+        if (hoverBand != -1) { hoverBand = -1; repaint(); }
+    }
+
+    void resized() override { curveDirty = true; }
 
     void timerCallback() override
     {
@@ -2144,6 +2165,13 @@ public:
                 gain = g;
                 changed = true;
             }
+        }
+        if (changed)
+        {
+            // Our own writes land back here equal to `gains`, so only an outside
+            // change (automation, preset) gets here and resets the dots.
+            targetsFromGains();
+            curveDirty = true;
         }
         if (getBypassed)
         {
@@ -2164,26 +2192,31 @@ public:
         // Whole curve dims when the EQ is bypassed (curve stays visible/editable).
         const float ca = bypassed ? 0.30f : 1.0f;
 
-        // dB grid: 0 dB centre emphasised, ±6 / ±12 faint.
-        g.setColour(juce::Colours::white.withAlpha(0.06f));
-        for (float db : { 6.0f, -6.0f })
-            g.drawHorizontalLine(juce::roundToInt(dbToY(db, b)), b.getX(), b.getRight());
-        g.setColour(juce::Colours::white.withAlpha(0.14f));
-        g.drawHorizontalLine(juce::roundToInt(dbToY(0.0f, b)), b.getX(), b.getRight());
-
-        // Smooth curve through the band control points.
-        juce::Path curve;
-        const int steps = juce::jmax(kNumBands * 8, juce::roundToInt(b.getWidth()));
-        for (int s = 0; s <= steps; ++s)
+        // dB grid: 0 dB emphasised, every 6 dB faint.
+        for (float db = DSPConstants::EQ_DRAW_MAX_DB - 6.0f; db > DSPConstants::EQ_DRAW_MIN_DB; db -= 6.0f)
         {
-            const float x = b.getX() + b.getWidth() * (float) s / (float) steps;
-            const float db = sampleCurveDb(x, b);
-            const float y = dbToY(db, b);
-            if (s == 0) curve.startNewSubPath(x, y);
-            else        curve.lineTo(x, y);
+            g.setColour(juce::Colours::white.withAlpha(db == 0.0f ? 0.14f : 0.05f));
+            g.drawHorizontalLine(juce::roundToInt(dbToY(db, b)), b.getX(), b.getRight());
         }
 
-        // Translucent fill from the curve down to the 0 dB line.
+        // Frequency guides along the bottom.
+        g.setFont(8.0f);
+        for (const auto& [hz, text] : { std::pair<float, const char*> { 50.0f, "50" }, { 100.0f, "100" },
+                                        { 200.0f, "200" }, { 500.0f, "500" }, { 1000.0f, "1k" },
+                                        { 2000.0f, "2k" }, { 5000.0f, "5k" }, { 10000.0f, "10k" } })
+        {
+            const float x = freqToX(hz, b);
+            g.setColour(juce::Colours::white.withAlpha(0.04f));
+            g.drawVerticalLine(juce::roundToInt(x), b.getY(), b.getBottom());
+            g.setColour(juce::Colours::white.withAlpha(0.28f));
+            g.drawText(text, juce::Rectangle<float>(x - 16.0f, b.getBottom() - 12.0f, 32.0f, 10.0f),
+                       juce::Justification::centred);
+        }
+
+        // The bank's real response (cached; rebuilt when the gains or size change).
+        if (curveDirty)
+            rebuildCurve(b);
+
         juce::Path fill = curve;
         fill.lineTo(b.getRight(), dbToY(0.0f, b));
         fill.lineTo(b.getX(),     dbToY(0.0f, b));
@@ -2192,17 +2225,18 @@ public:
         g.fillPath(fill);
 
         g.setColour(neon.withAlpha(0.9f * ca));
-        g.strokePath(curve, juce::PathStrokeType(1.8f));
+        g.strokePath(curve, juce::PathStrokeType(1.6f));
 
-        // Band handles.
+        // The drawn dots.
         for (int i = 0; i < kNumBands; ++i)
         {
             const float x = bandX(i, b);
-            const float gain = gains[(size_t) i];
-            const float y = dbToY(gain, b);
-            const bool active = std::abs(gain) > 0.05f;
-            g.setColour((active ? neon : neon.withAlpha(0.45f)).withMultipliedAlpha(ca));
-            g.fillEllipse(x - 2.6f, y - 2.6f, 5.2f, 5.2f);
+            const float y = dbToY(targets[(size_t) i], b);
+            const bool active = std::abs(targets[(size_t) i]) > 0.05f;
+            const bool hot = i == hoverBand;
+            const float r = hot ? 3.4f : 2.2f;
+            g.setColour((active || hot ? neon : neon.withAlpha(0.45f)).withMultipliedAlpha(ca));
+            g.fillEllipse(x - r, y - r, 2.0f * r, 2.0f * r);
         }
 
         // Power / bypass button (top-left): ring + top stroke. Lit neon when the
@@ -2219,19 +2253,36 @@ public:
         g.drawLine(ring.getCentreX(), ring.getY() - 1.0f,
                    ring.getCentreX(), ring.getCentreY(), 1.4f);
 
-        // Label, to the right of the power button.
+        // Label, to the right of the power button; the band under the mouse and
+        // its drawn level follow it.
+        juce::String label = bypassed ? "GRAPHIC EQ  (BYPASSED)" : "GRAPHIC EQ";
+        if (hoverBand >= 0)
+            label << "   " << bandName(hoverBand) << "  "
+                  << juce::String(targets[(size_t) hoverBand], 1) << " dB";
         g.setColour(neon.withAlpha(0.55f));
         g.setFont(9.0f);
         auto labelArea = juce::Rectangle<float>(pb.getRight() + 4.0f, pb.getY(),
                                                 b.getWidth() * 0.6f, pb.getHeight());
-        g.drawText(bypassed ? "GRAPHIC EQ  (BYPASSED)" : "GRAPHIC EQ",
-                   labelArea, juce::Justification::centredLeft);
+        g.drawText(label, labelArea, juce::Justification::centredLeft);
+    }
+
+    // "31.5 Hz", "1.25 kHz"
+    static juce::String bandName(int band)
+    {
+        const float hz = DSPConstants::EQ_FREQS[band];
+        const bool kilo = hz >= 1000.0f;
+        return juce::String(kilo ? hz / 1000.0f : hz, 2).trimCharactersAtEnd("0").trimCharactersAtEnd(".")
+             + (kilo ? " kHz" : " Hz");
     }
 
 private:
-    std::array<float, kNumBands> gains { };
+    Bands targets { };   // the drawn dots (dB)
+    Bands gains { };     // the fitted band gains, as written to the params
+    juce::Path curve;
+    bool  curveDirty = true;
     bool  dragging = false;
     bool  bypassed = false;
+    int   hoverBand = -1;
     int   lastBand = -1;
     float lastDb   = 0.0f;
 
@@ -2246,40 +2297,77 @@ private:
         return { b.getX() + 6.0f, b.getY() + 20.0f, sz, sz };
     }
 
+    // -24 dB at the bottom, +12 dB at the top.
     float dbToY(float db, juce::Rectangle<float> b) const
     {
-        const float t = 0.5f - db / (2.0f * kRangeDb);   // +range → top
+        const float t = (DSPConstants::EQ_DRAW_MAX_DB - db)
+                      / (DSPConstants::EQ_DRAW_MAX_DB - DSPConstants::EQ_DRAW_MIN_DB);
         return b.getY() + t * b.getHeight();
     }
 
     float yToDb(float y, juce::Rectangle<float> b) const
     {
         const float t = (y - b.getY()) / b.getHeight();
-        return juce::jlimit(-kRangeDb, kRangeDb, (0.5f - t) * 2.0f * kRangeDb);
+        return juce::jlimit(DSPConstants::EQ_DRAW_MIN_DB, DSPConstants::EQ_DRAW_MAX_DB,
+                            DSPConstants::EQ_DRAW_MAX_DB
+                                - t * (DSPConstants::EQ_DRAW_MAX_DB - DSPConstants::EQ_DRAW_MIN_DB));
     }
+
+    // The bands are evenly spaced in log frequency, 1/3 octave apart, so the x axis
+    // is one band slot per 1/3 octave with 1 kHz (band 17) as the reference.
+    static constexpr int kRefBand = 17;
 
     float bandX(int i, juce::Rectangle<float> b) const
     {
         return b.getX() + (i + 0.5f) * b.getWidth() / (float) kNumBands;
     }
 
-    // Catmull-Rom interpolation of the control points at pixel x.
-    float sampleCurveDb(float x, juce::Rectangle<float> b) const
+    float freqToX(float hz, juce::Rectangle<float> b) const
     {
-        float fb = (x - b.getX()) / b.getWidth() * (float) kNumBands - 0.5f;
-        fb = juce::jlimit(0.0f, (float) (kNumBands - 1), fb);
-        const int i1 = (int) fb;
-        const int i0 = juce::jmax(0, i1 - 1);
-        const int i2 = juce::jmin(kNumBands - 1, i1 + 1);
-        const int i3 = juce::jmin(kNumBands - 1, i1 + 2);
-        const float t = fb - (float) i1;
-        const float t2 = t * t, t3 = t2 * t;
-        const float p0 = gains[(size_t) i0], p1 = gains[(size_t) i1];
-        const float p2 = gains[(size_t) i2], p3 = gains[(size_t) i3];
-        return 0.5f * ((2.0f * p1)
-                     + (-p0 + p2) * t
-                     + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t2
-                     + (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t3);
+        const float u = (float) kRefBand + 3.0f * std::log2(hz / 1000.0f);
+        return b.getX() + (u + 0.5f) * b.getWidth() / (float) kNumBands;
+    }
+
+    int nearestBand(float x) const
+    {
+        auto b = getLocalBounds().toFloat();
+        if (b.getWidth() <= 0.0f)
+            return -1;
+        const float u = (x - b.getX()) / b.getWidth() * (float) kNumBands - 0.5f;
+        return juce::jlimit(0, kNumBands - 1, juce::roundToInt(u));
+    }
+
+    double sampleRate() const
+    {
+        const double rate = getSampleRate ? getSampleRate() : 0.0;
+        return rate > 0.0 ? rate : DSPConstants::EQ_FIT_SAMPLE_RATE;
+    }
+
+    void rebuildCurve(juce::Rectangle<float> b)
+    {
+        const double sr = sampleRate();
+        curve.clear();
+        const int steps = juce::jmax(kNumBands * 4, juce::roundToInt(b.getWidth() / 2.0f));
+        for (int s = 0; s <= steps; ++s)
+        {
+            const float x = b.getX() + b.getWidth() * (float) s / (float) steps;
+            const float u = (x - b.getX()) / b.getWidth() * (float) kNumBands - 0.5f;
+            const double hz = 1000.0 * std::pow(2.0, (u - kRefBand) / 3.0);
+            const float db = hz < sr * 0.5 ? (float) GraphicEqCurve::responseDb(gains, hz, sr) : 0.0f;
+            const float y = juce::jlimit(b.getY(), b.getBottom(), dbToY(db, b));
+            if (s == 0) curve.startNewSubPath(x, y);
+            else        curve.lineTo(x, y);
+        }
+        curveDirty = false;
+    }
+
+    // Dots that reproduce gains set from outside: the bank's level at each centre.
+    void targetsFromGains()
+    {
+        for (int i = 0; i < kNumBands; ++i)
+            targets[(size_t) i] = juce::jlimit(
+                DSPConstants::EQ_DRAW_MIN_DB, DSPConstants::EQ_DRAW_MAX_DB,
+                (float) GraphicEqCurve::responseDb(gains, DSPConstants::EQ_FREQS[i], sampleRate()));
     }
 
     void paintAt(juce::Point<float> p)
@@ -2289,46 +2377,47 @@ private:
             return;
 
         const float db = yToDb(p.y, b);
-
-        // Nearest band to the cursor.
-        int nearest = 0;
-        float best = 1.0e9f;
-        for (int i = 0; i < kNumBands; ++i)
-        {
-            const float d = std::abs(p.x - bandX(i, b));
-            if (d < best) { best = d; nearest = i; }
-        }
+        const int nearest = nearestBand(p.x);
 
         // Fill any bands skipped since the last event (fast sweeps stay smooth),
-        // lerping the gain across the gap for a natural stroke.
+        // lerping the level across the gap for a natural stroke.
         if (lastBand >= 0 && lastBand != nearest)
         {
             const int step = nearest > lastBand ? 1 : -1;
             for (int i = lastBand + step; i != nearest; i += step)
             {
                 const float f = (float) (i - lastBand) / (float) (nearest - lastBand);
-                setBand(i, lastDb + (db - lastDb) * f);
+                targets[(size_t) i] = lastDb + (db - lastDb) * f;
             }
         }
 
-        setBand(nearest, db);
+        targets[(size_t) nearest] = db;
         lastBand = nearest;
         lastDb   = db;
+        hoverBand = nearest;
+        applyFit();
     }
 
-    void setBand(int i, float db)
+    // Refit the gains to the dots and write the ones that moved.
+    void applyFit()
     {
-        db = juce::jlimit(-kRangeDb, kRangeDb, db);
-        gains[(size_t) i] = db;
-        if (onBandChanged)
-            onBandChanged(i, db);
+        const auto fitted = GraphicEqCurve::fit(targets, sampleRate());
+        for (int i = 0; i < kNumBands; ++i)
+        {
+            if (std::abs(fitted[(size_t) i] - gains[(size_t) i]) < 0.005f)
+                continue;
+            gains[(size_t) i] = fitted[(size_t) i];
+            if (onBandChanged)
+                onBandChanged(i, fitted[(size_t) i]);
+        }
+        curveDirty = true;
         repaint();
     }
 
     void flatten()
     {
-        for (int i = 0; i < kNumBands; ++i)
-            setBand(i, 0.0f);
+        targets.fill(0.0f);
+        applyFit();
     }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(GraphicEqOverlay)

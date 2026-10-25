@@ -13,6 +13,7 @@
 #include <JuceHeader.h>
 #include <juce_dsp/juce_dsp.h>
 #include "ShapeFilter.h"
+#include "GraphicEqCurve.h"
 #include "SubGuardSplitter.h"
 #include "LinearRamp.h"
 #include <atomic>
@@ -72,27 +73,7 @@ namespace DSPConstants
     // Parameter smoothing times (in seconds)
     constexpr double GAIN_SMOOTH_TIME_S = 0.02;               // 20ms for gain changes
 
-    // Free-draw graphic EQ (output-stage tone shaping, base rate).
-    // A bank of peaking filters at fixed log-spaced centre frequencies; the
-    // drawn curve sets each band's gain. Engages whenever the curve is non-flat.
-    constexpr int   EQ_NUM_BANDS = 12;                        // Number of peaking bands
-    constexpr float EQ_GAIN_RANGE_DB = 12.0f;                 // ±12 dB per band
-    constexpr float EQ_Q = 1.4f;                              // Fixed Q (~0.75-oct, gentle overlap)
-    constexpr float EQ_FLAT_EPS_DB = 0.05f;                   // Below this |gain|, treat as flat
-    constexpr double EQ_GAIN_SMOOTH_TIME_S = 0.03;            // 30ms gain ramp (kills zipper on drag)
-    // Highest centre frequency we will run a peaking band at, as a fraction of the
-    // base sample rate. A peaking biquad's alpha term goes negative once its centre
-    // reaches Nyquist (sin(omega) <= 0), which pushes the poles onto/outside the unit
-    // circle and makes the band diverge. Bands above this ratio are skipped entirely
-    // — they are out of the reproducible band anyway. 0.45 keeps a margin below the
-    // 0.5 hard limit. At 44.1 kHz every band is usable; at 32 kHz and below the
-    // 16 kHz band drops out.
-    constexpr double EQ_MAX_FREQ_RATIO = 0.45;
-    // Log-spaced centre frequencies (30 Hz → 16 kHz). Kept in-band at 44.1 kHz.
-    constexpr float EQ_FREQS[EQ_NUM_BANDS] = {
-        30.0f, 55.0f, 100.0f, 180.0f, 320.0f, 560.0f,
-        1000.0f, 1800.0f, 3200.0f, 5600.0f, 9000.0f, 16000.0f
-    };
+    // Free-draw graphic EQ: EQ_* live in GraphicEqCurve.h.
 
     // Pre-distortion transient tamer (hardcoded, always-on)
     constexpr float PRE_COMP_ATTACK_TIME_S = 0.001f;         // 1ms attack (catches transients)
@@ -280,13 +261,18 @@ public:
     // step in migrateState(). State saved before this stamp existed carries no
     // attribute and is treated as version 0 (the bare/legacy format).
     static constexpr const char* stateVersionAttribute = "stateVersion";
-    static constexpr int currentStateVersion = 3;
+    static constexpr int currentStateVersion = 4;
 
     // Reads the schema version from a freshly-restored state element and applies
     // any migrations needed to bring the live parameter tree up to
     // currentStateVersion, then stamps the tree with the current version. Must be
     // called AFTER replaceState so the parameters being migrated exist.
     void migrateState(const juce::XmlElement& xmlState);
+
+    // Graphic EQ band gain params, one per 1/3-octave band (dB). New IDs since state
+    // version 4: the v2.3 bank's eqBand0..11 sat on other frequencies, so reusing
+    // those IDs would point old automation lanes at the wrong band.
+    static juce::String eqBandParamId(int band) { return "eqThird" + juce::String(band); }
 
     //==============================================================================
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
@@ -446,7 +432,7 @@ private:
     // gains, so nothing allocates on the audio thread.
     std::array<juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
         juce::dsp::IIR::Coefficients<float>>, DSPConstants::EQ_NUM_BANDS> eqBands;
-    std::atomic<float>* eqBandParam[DSPConstants::EQ_NUM_BANDS] = {};  // eqBand0..N gain (dB)
+    std::atomic<float>* eqBandParam[DSPConstants::EQ_NUM_BANDS] = {};  // eqThird0..30 gain (dB)
     std::atomic<float>* eqEnabledParam = nullptr;   // EQ master bypass (1 = active, 0 = bypassed)
     juce::SmoothedValue<float> eqGainSmoothed[DSPConstants::EQ_NUM_BANDS];
     float eqLastGainDb[DSPConstants::EQ_NUM_BANDS] = {};               // last coeffs written
@@ -454,6 +440,8 @@ private:
     // a peaking biquad is unstable there (see EQ_MAX_FREQ_RATIO). Set in
     // prepareEqBands; such bands are never given coefficients or processed.
     bool eqBandUsable[DSPConstants::EQ_NUM_BANDS] = {};
+    // Each band's Q at the base rate (GraphicEqCurve::bandQ). Set in prepareEqBands.
+    double eqBandQ[DSPConstants::EQ_NUM_BANDS] = {};
     double eqSampleRate = 44100.0;                                     // base rate for coeff writes
 
     juce::AudioBuffer<float> dryBuffer;       // For global wet/dry mix

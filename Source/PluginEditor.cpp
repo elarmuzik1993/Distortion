@@ -36,19 +36,20 @@ PluginEditor::PluginEditor(PluginProcessor& p)
 
     // Free-draw Graphic EQ overlay — shares the scope slot with the XY pad; the
     // Settings "Overlay" selector decides which one is interactive. Reads/writes
-    // the eqBand0..N APVTS params so the curve automates and saves with presets.
+    // the eqThird0..30 APVTS params so the curve automates and saves with presets.
     addChildComponent(graphicEqOverlay);
     graphicEqOverlay.getBandGainDb = [this](int i) -> float
     {
-        if (auto* param = audioProcessor.parameters.getParameter("eqBand" + juce::String(i)))
+        if (auto* param = audioProcessor.parameters.getParameter(PluginProcessor::eqBandParamId(i)))
             return param->convertFrom0to1(param->getValue());
         return 0.0f;
     };
     graphicEqOverlay.onBandChanged = [this](int i, float db)
     {
-        if (auto* param = audioProcessor.parameters.getParameter("eqBand" + juce::String(i)))
+        if (auto* param = audioProcessor.parameters.getParameter(PluginProcessor::eqBandParamId(i)))
             param->setValueNotifyingHost(param->convertTo0to1(db));
     };
+    graphicEqOverlay.getSampleRate = [this]() { return audioProcessor.getSampleRate(); };
     // eqEnabled is stored as "1 = active"; the overlay speaks in terms of bypass.
     graphicEqOverlay.getBypassed = [this]() -> bool
     {

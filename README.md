@@ -24,7 +24,7 @@ by **[Monolit Beatz](https://monolitbeatz.com)**
 
 Sledge is a free, GPL-licensed distortion plugin built on [JUCE](https://juce.com).
 Seven clip characters from tube warmth to outright destruction, an LA2A-style
-optical compressor, tempo-syncable LFO routing, and a 12-band graphic EQ you
+optical compressor, tempo-syncable LFO routing, and a 31-band graphic EQ you
 *draw* with the mouse — all in front of an oscilloscope that shows you what you
 just did to the waveform.
 
@@ -69,7 +69,9 @@ the drive (up to 200 Hz) that keeps your low end out of the distortion, parallel
 Dist Mix, and true bypass below 0.5% drive.
 
 **Free-draw graphic EQ** — draw a magnitude response directly on the scope and it
-becomes a 12-band peaking EQ (~30 Hz–16 kHz, ±12 dB) at the output stage. Fully
+becomes a 31-band, 1/3-octave EQ (20 Hz–20 kHz, cuts to −24 dB, boosts to +12 dB)
+at the output stage. The bands are fitted so what you hear follows what you drew, down
+to a single-band notch or a steep low or high cut. Fully
 automatable, saved with presets, bit-transparent while flat, and one power button
 mutes it click-free so you can A/B the curve you drew.
 
