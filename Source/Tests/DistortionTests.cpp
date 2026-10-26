@@ -5013,6 +5013,17 @@ void GraphicEqTests::runTest()
         expect(allZero, "A flat target must leave every band at exactly 0 dB (bank bypass)");
     }
 
+    beginTest("Fit: dots a float rounding off 0 dB still give exactly flat gains");
+    {
+        Bands nearlyFlat;
+        nearlyFlat.fill(4.7e-7f);
+        nearlyFlat[3] = -4.7e-7f;
+        bool allZero = true;
+        for (float v : GraphicEqCurve::fit(nearlyFlat))
+            allZero = allZero && v == 0.0f;
+        expect(allZero, "Dots within half a param step of 0 dB must fit to an exactly flat bank");
+    }
+
     beginTest("Fit: one dot at -24 dB is a 1/3-octave notch");
     {
         const auto g = fitted({ { 17, -24.0f } });   // 1 kHz
@@ -5443,10 +5454,17 @@ void GraphicEqTests::runTest()
         PluginProcessor dst;
         setParameter(dst.parameters, "eqThird17", -20.0f);   // must not survive the load
         dst.setStateInformation(v3.getData(), (int) v3.getSize());
-        bool flat = true;
-        for (float v : drawingOf(dst))
-            flat = flat && v == 0.0f;
-        expect(flat, "A flat v2.3 EQ must load as an exactly flat bank");
+        // The params read back 0 dB to within float rounding (a fused multiply-add
+        // leaves ~5e-7); what matters is that the fit then leaves every band at
+        // exactly 0, so the bank stays bypassed.
+        const auto drawn = drawingOf(dst);
+        bool flatDrawing = true, flatBank = true;
+        for (float v : drawn)
+            flatDrawing = flatDrawing && std::abs(v) < 0.005f;
+        for (float g : GraphicEqCurve::fit(drawn))
+            flatBank = flatBank && g == 0.0f;
+        expect(flatDrawing, "A flat v2.3 EQ must load as a flat drawing");
+        expect(flatBank, "A flat drawing must fit to an exactly flat bank");
     }
 
 #if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD

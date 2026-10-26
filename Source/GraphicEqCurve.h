@@ -240,7 +240,16 @@ namespace GraphicEqCurve
         Bands fit(const Bands& drawnDb) const noexcept
         {
             using namespace DSPConstants;
-            auto clampDb = [](float v) { return (double) std::fmin(EQ_DRAW_MAX_DB, std::fmax(EQ_DRAW_MIN_DB, v)); };
+            // A param set to 0 dB can read back a hair off it: the range maps 0 to
+            // -24 + 0.01 x 2400, which a fused multiply-add (Apple silicon) leaves at
+            // ~5e-7. Anything under half a param step is 0, so a flat drawing is
+            // exactly flat on every platform.
+            auto clampDb = [](float v)
+            {
+                if (std::abs(v) < 0.005f)
+                    return 0.0;
+                return (double) std::fmin(EQ_DRAW_MAX_DB, std::fmax(EQ_DRAW_MIN_DB, v));
+            };
 
             Bands gains {};
             if (t == nullptr)
