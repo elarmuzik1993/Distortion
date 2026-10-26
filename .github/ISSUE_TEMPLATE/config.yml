@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Pay-What-You-Want & Commercial Licensing
+  - name: Pay What You Want
+    url: https://ko-fi.com/monolitbeatz
+    about: Support Sledge Distortion with any amount, one-off or monthly, on Ko-fi.
+  - name: Commercial Licensing & Direct Support
     url: https://monolitbeatz.com
     about: Commercial questions, licensing under non-GPL terms, or direct support via aidevblock@gmail.com
