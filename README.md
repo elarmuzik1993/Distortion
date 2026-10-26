@@ -193,9 +193,11 @@ your freedom to use and share it whether you pay or not — what you are paying
 for is prebuilt, ready-to-install binaries, continued development and support.
 If it earns a place in your projects, paying keeps it being built.
 
-To pay, or for anything else — commercial questions, bug reports you would
-rather not file in the issue tracker, or licensing under other terms — get in
-touch at **aidevblock@gmail.com**.
+To pay, use **[Ko-fi](https://ko-fi.com/monolitbeatz)** (any amount, one-off or
+monthly), or the **Sponsor** button at the top of this repository. For anything
+else — commercial questions, bug reports you would rather not file in the issue
+tracker, or licensing under other terms — get in touch at
+**aidevblock@gmail.com**.
 
 ### Trademarks
 
