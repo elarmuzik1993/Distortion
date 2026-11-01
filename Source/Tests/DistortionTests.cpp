@@ -5105,10 +5105,22 @@ void GraphicEqTests::runTest()
                 hi = std::max(hi, r);
             }
             logMessage(juce::String::formatted("plateau %.0f dB: %.2f .. %.2f", level, lo, hi));
-            expect(lo > level - 2.0 && hi < level + 2.0,
-                   "Plateau at " + juce::String(level) + " dB ripples more than 2 dB");
+            expect(lo > level - 0.5 && hi < level + 0.5,
+                   "Plateau at " + juce::String(level) + " dB ripples more than 0.5 dB");
         }
     }
+
+    // mt19937's output is specified exactly; the std distributions are not, so the
+    // seeded drawings map it to doubles by hand and draw the same curves on every compiler.
+    auto uniform01 = [](std::mt19937& r) { return (double) r() / 4294967296.0; };
+    auto normalDraw = [&](std::mt19937& r, double sigma)
+    {
+        double u1 = uniform01(r);
+        while (u1 <= 0.0)
+            u1 = uniform01(r);
+        const double u2 = uniform01(r);
+        return sigma * std::sqrt(-2.0 * std::log(u1)) * std::cos(6.283185307179586 * u2);
+    };
 
     beginTest("Fit: a wandering drawing follows its straight lines between centres");
     {
@@ -5123,7 +5135,7 @@ void GraphicEqTests::runTest()
             double v = 0.0;
             for (auto& x : d)
             {
-                v = std::min(12.0, std::max(-24.0, v + std::normal_distribution<>(0.0, 5.0)(rng)));
+                v = std::min(12.0, std::max(-24.0, v + normalDraw(rng, 5.0)));
                 x = (float) v;
             }
             const auto g = GraphicEqCurve::fit(d);
@@ -5153,7 +5165,7 @@ void GraphicEqTests::runTest()
             for (int i = 1; i < 30; ++i)
             {
                 if (i % 8 == 1)
-                    v = std::uniform_real_distribution<>(-24.0, 12.0)(rng);
+                    v = -24.0 + 36.0 * uniform01(rng);
                 d[(size_t) i] = (float) (std::round(v * 100.0) / 100.0);
             }
             drawings.push_back(d);
@@ -5425,7 +5437,8 @@ void GraphicEqTests::runTest()
         }
         const double ratioDb = 10.0 * std::log10(hfEnergy / total + 1.0e-30);
         logMessage(juce::String::formatted("energy above 6 kHz while automating: %.1f dB", ratioDb));
-        expect(ratioDb < -75.0, "Automating a dot leaves zipper noise above 6 kHz");
+        // HEAD measures -87.6 dB with 61 peaks (main's 31-peak bank was below -90).
+        expect(ratioDb < -84.0, "Automating a dot leaves zipper noise above 6 kHz");
     }
 
     beginTest("The end dots are a high-pass and a low-pass");
@@ -5455,8 +5468,8 @@ void GraphicEqTests::runTest()
         {
             const double model = GraphicEqCurve::totalDb(GraphicEqCurve::Gains {}, ends, pt.first, sr);
             const double heard = heardDb(ends, pt.first, sr);
-            logMessage(juce::String::formatted("end filters at %.0f Hz (%s): heard %.2f, model %.2f",
-                                               pt.first, pt.second, heard, model));
+            logMessage("end filters at " + juce::String(pt.first, 0) + " Hz (" + juce::String(pt.second)
+                       + "): heard " + juce::String(heard, 2) + ", model " + juce::String(model, 2));
             expectWithinAbsoluteError(heard, model, 0.5, juce::String("End filters: DSP and model disagree, ") + pt.second);
         }
         expect(GraphicEqCurve::totalDb(GraphicEqCurve::Gains {}, ends, 160.0, sr) < -9.0, "The high-pass barely cuts an octave below");
@@ -5509,6 +5522,71 @@ void GraphicEqTests::runTest()
         logMessage(juce::String::formatted("largest sample step while the HP faded out: %.3g (sine: %.3g)",
                                            maxStep, sineStep));
         expect(maxStep < sineStep * 1.5f, "Switching the high-pass off stepped the output");
+    }
+
+    beginTest("An end filter switched on fades in without a step");
+    {
+        EqRig rig(sr, {}, false);
+        rig.rmsAt(100.0, quiet);
+        Bands hp {};
+        hp[0] = -24.0f;
+        rig.draw(hp);
+
+        const int blocks = (int) std::ceil((DSPConstants::EQ_GAIN_SMOOTH_TIME_S + 0.1) * sr / 512.0);
+        float maxStep = 0.0f, prev = 0.0f;
+        bool first = true;
+        for (int b = 0; b < blocks; ++b)
+        {
+            auto x = rig.sine(100.0, quiet);
+            rig.p.processBlock(x, rig.midi);
+            for (int n = 0; n < 512; ++n)
+            {
+                const float v = x.getSample(0, n);
+                if (! first)
+                    maxStep = juce::jmax(maxStep, std::abs(v - prev));
+                first = false;
+                prev = v;
+            }
+        }
+        const float sineStep = (float) (6.283185307179586 * 100.0 / sr) * quiet;
+        logMessage(juce::String::formatted("largest sample step while the HP faded in: %.3g (sine: %.3g)",
+                                           maxStep, sineStep));
+        expect(maxStep < sineStep * 1.5f, "Switching the high-pass on stepped the output");
+
+        // Settled, it is what the model says at 100 Hz (below the 320 Hz cutoff).
+        const double heard = heardDb(hp, 100.0, sr, false);
+        const double model = GraphicEqCurve::totalDb(GraphicEqCurve::Gains {}, hp, 100.0, sr);
+        expectWithinAbsoluteError(heard, model, 0.5, "A switched-on high-pass disagrees with the model");
+    }
+
+    beginTest("An end filter toggled every block stays finite and steps no more than the tone");
+    {
+        EqRig rig(sr, {}, false);
+        rig.rmsAt(100.0, quiet);
+        float maxStep = 0.0f, prev = 0.0f;
+        bool first = true, finite = true;
+        for (int b = 0; b < 60; ++b)
+        {
+            Bands d {};
+            d[0] = (b % 2 == 0) ? -24.0f : 0.0f;
+            rig.draw(d);
+            auto x = rig.sine(100.0, quiet);
+            rig.p.processBlock(x, rig.midi);
+            for (int n = 0; n < 512; ++n)
+            {
+                const float v = x.getSample(0, n);
+                finite = finite && std::isfinite(v);
+                if (! first)
+                    maxStep = juce::jmax(maxStep, std::abs(v - prev));
+                first = false;
+                prev = v;
+            }
+        }
+        const float sineStep = (float) (6.283185307179586 * 100.0 / sr) * quiet;
+        logMessage(juce::String::formatted("largest sample step while the HP flapped: %.3g (sine: %.3g)",
+                                           maxStep, sineStep));
+        expect(finite, "A flapping end filter produced a non-finite sample");
+        expect(maxStep < sineStep * 1.5f, "A flapping end filter stepped the output");
     }
 
     beginTest("A band that goes flat rings out, then stops and starts from silence");
@@ -5688,6 +5766,9 @@ void GraphicEqTests::runTest()
         setParameter(p.parameters, "subGuardFreq",      0.0f);
         for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
             setParameter(p.parameters, PluginProcessor::eqBandParamId(i), 3.0f);
+        // Both end filters on, so the edge loop is part of what is measured.
+        setParameter(p.parameters, PluginProcessor::eqBandParamId(0), -12.0f);
+        setParameter(p.parameters, PluginProcessor::eqBandParamId(DSPConstants::EQ_NUM_BANDS - 1), -12.0f);
 
         auto* band6 = p.parameters.getParameter("eqThird17");
         auto* band6f = dynamic_cast<juce::AudioParameterFloat*>(band6);
@@ -5704,6 +5785,8 @@ void GraphicEqTests::runTest()
             // Drive live coefficient rewrites every block.
             const float g = -12.0f + 24.0f * (float) i / 99.0f;
             band6->setValueNotifyingHost(band6f->convertTo0to1(g));
+            // The high-pass cutoff glides every block too.
+            setParameter(p.parameters, PluginProcessor::eqBandParamId(0), i % 2 == 0 ? -12.0f : -18.0f);
             auto buf = generateSineWave(1000.0, sr, blockSize, 0.25f);
             p.processBlock(buf, midi);
         }

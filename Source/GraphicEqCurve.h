@@ -6,10 +6,11 @@
 #include <memory>
 
 // Free-draw graphic EQ (output-stage tone shaping, base rate).
-// A bank of 31 peaking filters on the ISO 1/3-octave centres, 20 Hz to 20 kHz. The
-// eqThird params hold the drawn curve, one level per band centre. A Fitter turns it
-// into band gains at the session's rate, so the bank's summed response follows the
-// drawing; overlapping peaks would otherwise pile up past what was drawn. The
+// 31 dots on the ISO 1/3-octave centres, 20 Hz to 20 kHz, drive a bank of 61 peaking
+// filters (a peak on each dot and one halfway between neighbours). The eqThird params
+// hold the drawn curve, one level per dot. A Fitter turns it into the 61 peak gains at
+// the session's rate, so the bank's summed response follows the drawing; overlapping
+// peaks would otherwise pile up past what was drawn. The
 // processor fits on the audio thread whenever the drawing changes, and the editor
 // runs the same fit to draw what is heard.
 // The two end dots are not peaks: dot 0 is a high-pass and dot 30 a low-pass (see
@@ -39,7 +40,7 @@ namespace DSPConstants
     // About 0.4 octave wide, measured against the peaks' 1/6-octave spacing. Chosen
     // with the 61-peak bank in a numeric sweep: peaks this close, with four fit points
     // per dot gap, cut the ringing around a steep jump from ~25 dB of excess wiggle (31
-    // peaks, Q 2.5) to ~7 dB, and the dot error beside a jump from 5 to under 1 dB,
+    // peaks, Q 2.5) to ~7 dB in the scratch harness (~8.6 dB in the in-repo test), and the dot error beside a jump from 5 to under 1 dB,
     // while a one-dot notch still reaches its depth. Narrower rings less but cannot
     // reach a notch; wider smears the cuts.
     // Near Nyquist each peak is built with GraphicEqCurve::bandQ, which keeps this
@@ -251,8 +252,8 @@ namespace GraphicEqCurve
 
     /** Turns a drawn curve into band gains at one sample rate. prepare() builds the
         solver (about a millisecond; allocates its ~300 kB of tables the first
-        time, so not for the audio thread); fit() is allocation-free and cheap (tens
-        of microseconds), so the processor runs it on the audio thread whenever the
+        time, so not for the audio thread); fit() is allocation-free and cheap (about
+        97 microseconds in Release), so the processor runs it on the audio thread whenever the
         drawing changes. fit() before any prepare() returns flat gains. */
     class Fitter
     {

@@ -2240,8 +2240,10 @@ public:
         for (int i = 0; i < kNumBands; ++i)
         {
             const float x = bandX(i, b);
-            const float y = dbToY(targets[(size_t) i], b);
-            const bool active = std::abs(targets[(size_t) i]) > 0.05f;
+            // An end dot above 0 dB (host automation can set it) is "off": draw it there.
+            const float level = GraphicEqCurve::isEdgeBand(i) ? juce::jmin(targets[(size_t) i], 0.0f) : targets[(size_t) i];
+            const float y = dbToY(level, b);
+            const bool active = std::abs(level) > 0.05f;
             const bool hot = i == hoverBand;
             const float r = hot ? 3.4f : 2.2f;
             g.setColour((active || hot ? neon : neon.withAlpha(0.45f)).withMultipliedAlpha(ca));
@@ -2386,13 +2388,16 @@ private:
     {
         const double sr = sampleRate();
         curve.clear();
+        float heldDb = 0.0f;   // held past Nyquist, where the model has no response
         const int steps = juce::jmax(kNumBands * 4, juce::roundToInt(b.getWidth() / 2.0f));
         for (int s = 0; s <= steps; ++s)
         {
             const float x = b.getX() + b.getWidth() * (float) s / (float) steps;
             const float u = (x - b.getX()) / b.getWidth() * (float) kNumBands - 0.5f;
             const double hz = 1000.0 * std::pow(2.0, (u - kRefBand) / 3.0);
-            const float db = hz < sr * 0.5 ? (float) GraphicEqCurve::totalDb(gains, targets, hz, sr) : 0.0f;
+            if (hz < sr * 0.5)
+                heldDb = (float) GraphicEqCurve::totalDb(gains, targets, hz, sr);
+            const float db = heldDb;
             const float y = juce::jlimit(b.getY(), b.getBottom(), dbToY(db, b));
             if (s == 0) curve.startNewSubPath(x, y);
             else        curve.lineTo(x, y);
