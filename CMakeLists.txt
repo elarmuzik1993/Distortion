@@ -21,7 +21,7 @@ if(APPLE)
     endif()
 endif()
 
-project(Distortion VERSION 2.3.0 LANGUAGES CXX)
+project(Distortion VERSION 2.4.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -203,7 +203,7 @@ if(APPLE)
 endif()
 
 juce_add_plugin(Distortion
-    VERSION 2.3.0
+    VERSION 2.4.0
     COMPANY_NAME "Monolit Beatz"
     BUNDLE_ID "com.monolitbeatz.MonolitDistortion"
     IS_SYNTH FALSE
