@@ -30,6 +30,7 @@ Full development history, newest first.
 - **No more click on preset or session load with Sub Guard at 100-150 Hz.** Loading a preset or session while playing reset only the crossover used at low Sub Guard settings, so at 100 Hz and 150 Hz the first moment after the load ran filters still holding the previous audio and could pop. Every Sub Guard crossover is now cleared on load.
 - **Offline renders hear the NAM profile from the first sample.** A render started straight after opening a session played its opening through the built-in clip type while the profile was still loading.
 - **Profile imports are checked, and problems are reported.** A file that is not a usable `.nam` model stays out of the library, and every file skipped, or left playing from its original folder because the copy failed, is listed in a warning. Before, those errors were silent.
+- **No more thump when the drive comes back from zero.** With Distortion Amount below 0.5% and the compressor off, the plugin passes audio straight through, and the filters it skips kept whatever they held. Turning the drive back up replayed it: a loud bass from before came back as a thump at about -4 dB, even over silence. Those filters now restart clean.
 
 ---
 

@@ -1696,9 +1696,9 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             juce::dsp::AudioBlock<float> shapeBlock(buffer);
             shapePre.process(shapeBlock);
         }
-        // The post-drive half is idle here; clear it so leaving bypass does not
-        // replay filter memory from before it.
-        shapePost.reset();
+        // Everything recursive the active path runs and this branch does not is idle
+        // here; clear it so leaving bypass does not replay filter memory from before it.
+        clearFiltersSkippedByBypass();
 
         feedProfileWhileBypassed(buffer);   // profile mode only; the output is untouched
 
@@ -3966,6 +3966,36 @@ void PluginProcessor::processGraphicEq(juce::AudioBuffer<float>& buffer)
             }
         }
     }
+}
+
+void PluginProcessor::clearFiltersSkippedByBypass() noexcept
+{
+    // True bypass never oversamples, so none of these can be kept warm through it. Left
+    // as they were, they ring out what they held on the first active block: a loud sub
+    // came back at about -4 dB on silence after a long bypass, from the input filter, the
+    // DC blocker, the oversamplers and Sub Guard's crossover together (clearing only some
+    // of them made the rest stand out more). The input filter stays warm when bypass
+    // runs it, as do pre-drive Shape and the graphic EQ.
+    if (! isInputFilterActive())
+        inputFilter.reset();
+    shapePost.reset();
+    subGuardSplitter.reset();
+    if (toneFilter.state)
+        toneFilter.reset();
+    if (toneFilterLow.state)
+        toneFilterLow.reset();
+    emphasisFilter.reset();
+    deEmphasisFilter.reset();
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        manualDCBlockerPrevInput[ch] = 0.0f;
+        manualDCBlockerPrevOutput[ch] = 0.0f;
+    }
+    // In lock-step, as in resetDSPState: the dry instance is phase-locked to the wet one.
+    if (oversampling)
+        oversampling->reset();
+    if (dryOversampling)
+        dryOversampling->reset();
 }
 
 void PluginProcessor::resetDSPState()
