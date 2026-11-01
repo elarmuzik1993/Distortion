@@ -41,7 +41,7 @@ constexpr float kBaseHeight = 564.0f;
 // layout regression that does not exist. So the harness writes the state it
 // wants into a scratch root and renders from that; the real settings are never
 // read or touched.
-juce::File writeScratchSettings(const juce::File& root, bool collapsed, int scalePercent)
+juce::File writeScratchSettings(const juce::File& root, bool collapsed, int scalePercent, int overlay)
 {
     root.createDirectory();
 
@@ -49,7 +49,7 @@ juce::File writeScratchSettings(const juce::File& root, bool collapsed, int scal
     xml.setAttribute("oscilloscope", collapsed ? 0 : 1);
     xml.setAttribute("windowScale", scalePercent);
     xml.setAttribute("oscilloscopeStereo", 1);
-    xml.setAttribute("scopeOverlay", 0);   // no overlay intercepting the scope
+    xml.setAttribute("scopeOverlay", overlay);   // 0 = none, 2 = Graphic EQ (--eq)
     xml.setAttribute("tooltips", 0);
     xml.setAttribute("bugReports", 0);     // headless: never queue a report
 
@@ -211,7 +211,8 @@ int main(int argc, char* argv[])
                 "  --profile-card   show the profile browser's name card\n"
                 "  --settings       open the Settings panel\n"
                 "  --xy-touch       XY Morph pad held (puck, crosshair, readout)\n"
-                "  --drop-hint      a .nam file dragged over the window\n";
+                "  --drop-hint      a .nam file dragged over the window\n"
+                "  --eq             Graphic EQ overlay with a drawn curve (low cut, notch, air)\n";
             return 0;
         }
     }
@@ -222,7 +223,7 @@ int main(int argc, char* argv[])
     bool extreme = false;
     bool signal = false;
     float shapeValue = 0.0f;
-    bool hasShape = false, legacy = false, profileCard = false, settings = false, xyTouch = false, dropHint = false;
+    bool hasShape = false, legacy = false, profileCard = false, settings = false, xyTouch = false, dropHint = false, eq = false;
     juce::String profilePath;
     for (int i = 1; i < argc; ++i)
     {
@@ -239,6 +240,7 @@ int main(int argc, char* argv[])
         else if (t == "--settings")              settings  = true;
         else if (t == "--xy-touch")              xyTouch   = true;
         else if (t == "--drop-hint")             dropHint  = true;
+        else if (t == "--eq")                    eq        = true;
     }
 
     // Collapsed (scope folded away) is the other fold state. The harness drives it
@@ -264,6 +266,18 @@ int main(int argc, char* argv[])
             p->setValueNotifyingHost(p->convertTo0to1(v));
     };
     if (hasShape) setParam("shape", shapeValue);
+    if (eq)
+    {
+        // A curve that shows both ends and the middle: low cut, 1 kHz notch, air lift.
+        GraphicEqCurve::Bands target {};
+        for (int i = 0; i <= 3; ++i) target[(size_t) i] = -24.0f;
+        target[4] = -12.0f;
+        target[17] = -24.0f;
+        for (int i = 26; i <= 30; ++i) target[(size_t) i] = 6.0f;
+        for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
+            if (auto* p = proc.parameters.getParameter(PluginProcessor::eqBandParamId(i)))
+                p->setValueNotifyingHost(p->convertTo0to1(target[(size_t) i]));
+    }
     if (legacy)   { setParam("legacyFilter", 1.0f); setParam("filterMode", 1.0f); setParam("highPassFreq", 800.0f); }
 
     // The profile library lives in the scratch root too, so the card's position
@@ -297,7 +311,7 @@ int main(int argc, char* argv[])
         // Rewritten per scale: the editor applies windowScale from settings in its
         // constructor, so matching it to the size requested below keeps the two
         // from disagreeing.
-        writeScratchSettings(scratchRoot, collapsed, pct);
+        writeScratchSettings(scratchRoot, collapsed, pct, eq ? 2 : 0);
 
         juce::String name = juce::String(collapsed ? "collapsed-" : "scale-") + juce::String(pct);
         if (extreme)
@@ -318,6 +332,8 @@ int main(int argc, char* argv[])
             name += "-xy";
         if (dropHint)
             name += "-drop";
+        if (eq)
+            name += "-eq";
         allOk &= snapshot(proc, w, h, dir.getChildFile(name + ".png"), extreme, signal, profileCard, settings, xyTouch, dropHint);
     }
 
