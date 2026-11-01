@@ -7,8 +7,9 @@
   pad puck and readout; Sub Guard as one LR48 split around the drive; the 31-band graphic EQ
   (ISO 1/3 octave, -24..+12 dB, gains fitted to the drawing, also plays in true bypass).
 - Golden audio: 16 seeded cases, none with a profile, all with the EQ flat.
-- Verified 2026-11-01 (Linux, local, Debug) at `a7c0c6b`: `verify.sh` passes, 4429 assertions.
-  CI on that commit had not finished at hand-off (unverified). pluginval not run locally.
+- Verified 2026-11-01 (Linux, local, Debug) at `a7c0c6b`: `verify.sh` passes, 4429 assertions;
+  CI green on Windows, Linux and macOS for that commit. Since then only CI config and docs
+  changed. pluginval not run locally.
 
 ## Next
 1. Owner, one host pass on a Release build: draw on the EQ with the drive at zero (notch,
