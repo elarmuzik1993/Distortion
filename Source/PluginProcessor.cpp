@@ -883,6 +883,10 @@ void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 void PluginProcessor::releaseResources()
 {
     cancelPendingUpdate();
+    // As in prepareToPlay: the timer rebuilds the oversampler under this lock, and in a
+    // Linux VST3 it runs on the plugin's own message thread, not the host thread that
+    // calls this. Freed without the lock, the oversampler went mid-reset (#44).
+    const juce::ScopedLock callbackLockGuard(getCallbackLock());
     oversampling.reset();
     dryOversampling.reset();
     inputFilter.reset();

@@ -31,6 +31,7 @@ Full development history, newest first.
 - **Offline renders hear the NAM profile from the first sample.** A render started straight after opening a session played its opening through the built-in clip type while the profile was still loading.
 - **Profile imports are checked, and problems are reported.** A file that is not a usable `.nam` model stays out of the library, and every file skipped, or left playing from its original folder because the copy failed, is listed in a warning. Before, those errors were silent.
 - **No more thump when the drive comes back from zero.** With Distortion Amount below 0.5% and the compressor off, the plugin passes audio straight through, and the filters it skips kept whatever they held. Turning the drive back up replayed it: a loud bass from before came back as a thump at about -4 dB, even over silence. Those filters now restart clean.
+- **A rare crash on Linux is fixed.** If the host switched the plugin off just as it was rebuilding its oversampling (after a NAM profile loaded, or the Oversampling or Linear Phase setting changed), it could crash. Found by the plugin validator, about once in a thousand runs.
 
 ---
 

@@ -235,6 +235,7 @@ private:
     void testScopeDrainExcess();
     void testAtomicGainReduction();
     void testMultiInstanceIndependence();
+    void testReleaseWaitsForRebuild();
     void testPerInstanceRandomGenerators();
 };
 

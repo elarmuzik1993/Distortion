@@ -2853,6 +2853,41 @@ void ThreadSafetyTests::runTest()
 
     beginTest("Per-Instance Random Generators");
     testPerInstanceRandomGenerators();
+
+    beginTest("releaseResources waits for a rebuild holding the callback lock");
+    testReleaseWaitsForRebuild();
+}
+
+void ThreadSafetyTests::testReleaseWaitsForRebuild()
+{
+    // The timer rebuilds the oversampler under the callback lock on the plugin's message
+    // thread, which in a Linux VST3 is the plugin's own, not the host thread that calls
+    // releaseResources. pluginval caught the release freeing the oversampler while the
+    // rebuild was resetting it (#44). One thread here stands in for that rebuild.
+    PluginProcessor processor;
+    processor.setRateAndBufferSizeDetails(44100.0, 512);
+    processor.prepareToPlay(44100.0, 512);
+    expect(processor.oversampling != nullptr, "Prepared with an oversampler");
+
+    juce::WaitableEvent held, letGo;
+    std::thread rebuild([&] {
+        const juce::ScopedLock sl(processor.getCallbackLock());
+        held.signal();
+        letGo.wait(5000);
+    });
+    held.wait(5000);
+
+    std::atomic<bool> released { false };
+    std::thread host([&] { processor.releaseResources(); released.store(true); });
+    juce::Thread::sleep(100);
+    expect(! released.load(), "releaseResources waits while a rebuild holds the callback lock");
+    expect(processor.oversampling != nullptr, "The oversampler outlives the rebuild using it");
+
+    letGo.signal();
+    host.join();
+    rebuild.join();
+    expect(released.load(), "It completes once the rebuild lets go");
+    expect(processor.oversampling == nullptr, "And still frees the oversampler");
 }
 
 void ThreadSafetyTests::testScopeBufferAccess()
