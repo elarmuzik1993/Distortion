@@ -235,6 +235,7 @@ private:
     void testScopeDrainExcess();
     void testAtomicGainReduction();
     void testMultiInstanceIndependence();
+    void testReleaseWaitsForRebuild();
     void testPerInstanceRandomGenerators();
 };
 
@@ -488,6 +489,7 @@ private:
     void runReverseMidFadeTest(bool distorted);
     void runBoundaryChatterTests(bool distorted);
     void runLargeBufferSweepTest(bool distorted);
+    void runLeaveBypassTest();
 };
 
 /** F8: a state load (preset or session) resets every Sub Guard bank, so the first blocks

@@ -727,6 +727,9 @@ private:
     bool canRunProfileStage(int numChannels) const noexcept;
     // Keeps the profile's island, model and dry delays running through true bypass.
     void feedProfileWhileBypassed(const juce::AudioBuffer<float>& buffer) noexcept;
+    // Clears the recursive filters true bypass skips, so leaving it starts them cold
+    // instead of replaying what they held from before.
+    void clearFiltersSkippedByBypass() noexcept;
     // Ends a swap once the incoming profile has fully faded in.
     void retireOutgoingProfileIfFaded() noexcept;
     // Channel 1 sharing channel 0's model output while the input is mono.
