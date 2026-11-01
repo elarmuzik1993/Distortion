@@ -9,9 +9,9 @@
 - Leaving true bypass now starts the skipped filters cold (`clearFiltersSkippedByBypass`), and
   `releaseResources` takes the callback lock (#44, a Linux timer-thread race).
 - Golden audio: 16 seeded cases, none with a profile, all with the EQ flat.
-- Verified 2026-11-01 (Linux, local, Debug) at `d278e08`: `verify.sh` passes, 4438 assertions.
-  pluginval strictness 10 on the Release VST3 with CI's options: 3,000 runs under gdb, no
-  crash (before the lock fix about 1 in 600). CI for that commit not seen at hand-off.
+- Verified 2026-11-01 (Linux, local, Debug) at `b5daf66`: `verify.sh` passes, 4438 assertions;
+  CI green on Windows, Linux and macOS for that commit. pluginval strictness 10 on the Release
+  VST3 with CI's options: 3,000 runs under gdb, no crash (before the lock fix about 1 in 600).
 
 ## Next
 1. Owner, one host pass on a Release build: draw on the EQ with the drive at zero (notch,
