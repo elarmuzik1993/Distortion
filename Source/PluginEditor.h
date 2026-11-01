@@ -2248,6 +2248,28 @@ public:
             g.fillEllipse(x - r, y - r, 2.0f * r, 2.0f * r);
         }
 
+        // Cutoff markers: a ring on the curve at each active end filter's cutoff, named above.
+        for (const int end : { DSPConstants::EQ_HP_BAND, DSPConstants::EQ_LP_BAND })
+        {
+            const bool hp = end == DSPConstants::EQ_HP_BAND;
+            if (! GraphicEqCurve::edgeOn(hp, targets[(size_t) end], sampleRate()))
+                continue;
+            const double sr = sampleRate();
+            const double hz = GraphicEqCurve::edgeCutoffHz(hp, targets[(size_t) end], sr);
+            const float x = freqToX((float) hz, b);
+            const float db = (float) GraphicEqCurve::totalDb(gains, targets, hz, sr);
+            const float y = juce::jlimit(b.getY(), b.getBottom(), dbToY(db, b));
+            g.setColour(neon.withAlpha(0.9f * ca));
+            g.drawEllipse(x - 3.4f, y - 3.4f, 6.8f, 6.8f, 1.2f);
+
+            const juce::String num = hz < 1000.0 ? juce::String(juce::roundToInt(hz))
+                                                 : juce::String(hz / 1000.0, 1).trimCharactersAtEnd("0").trimCharactersAtEnd(".") + "k";
+            g.setFont(8.0f);
+            auto text = juce::Rectangle<float>(x - 20.0f, y - 10.0f - 5.0f, 40.0f, 10.0f)
+                            .constrainedWithin(b);
+            g.drawText((hp ? "HP " : "LP ") + num, text, juce::Justification::centred);
+        }
+
         // Power / bypass button (top-left): ring + top stroke. Lit neon when the
         // EQ is active, dim grey when bypassed.
         auto pb = powerButtonArea();
