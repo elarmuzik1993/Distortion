@@ -3856,16 +3856,16 @@ void PluginProcessor::prepareEqBands(const juce::dsp::ProcessSpec& baseSpec)
     eqFittedGains = eqFitter.fit(eqFittedFor);
 
     constexpr double twoPi = 6.283185307179586;
-    for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
+    for (int i = 0; i < DSPConstants::EQ_NUM_PEAKS; ++i)
     {
         auto& band = eqBand[i];
         // A peaking band at/above Nyquist is unstable (negative alpha puts the poles
         // on or outside the unit circle), so drop those bands at low base rates
         // rather than writing coefficients that would make the filter diverge.
-        band.usable = GraphicEqCurve::bandUsable(i, eqSampleRate);
-        const double w0 = twoPi * DSPConstants::EQ_FREQS[i] / eqSampleRate;
+        band.usable = GraphicEqCurve::peakUsable(i, eqSampleRate);
+        const double w0 = twoPi * GraphicEqCurve::peakFreq(i) / eqSampleRate;
         band.alpha = band.usable
-                   ? std::sin(w0) / (2.0 * GraphicEqCurve::bandQ(DSPConstants::EQ_FREQS[i], eqSampleRate))
+                   ? std::sin(w0) / (2.0 * GraphicEqCurve::bandQ(GraphicEqCurve::peakFreq(i), eqSampleRate))
                    : 0.0;
         band.c2 = -2.0 * std::cos(w0);
         band.clear();
@@ -3951,7 +3951,7 @@ void PluginProcessor::processGraphicEq(juce::AudioBuffer<float>& buffer)
     // stops; a band that starts again therefore starts from silence, not from
     // memory left over from its last use.
     bool anyRunning = false;
-    for (int i = 0; i < EQ_NUM_BANDS; ++i)
+    for (int i = 0; i < EQ_NUM_PEAKS; ++i)
     {
         auto& band = eqBand[i];
         const float target = eqFittedGains[(size_t) i];
@@ -3990,7 +3990,7 @@ void PluginProcessor::processGraphicEq(juce::AudioBuffer<float>& buffer)
     for (int start = 0; start < numSamples; start += EQ_SUBBLOCK)
     {
         const int len = juce::jmin(EQ_SUBBLOCK, numSamples - start);
-        for (int i = 0; i < EQ_NUM_BANDS; ++i)
+        for (int i = 0; i < EQ_NUM_PEAKS; ++i)
         {
             auto& band = eqBand[i];
             if (! band.running)

@@ -16,7 +16,10 @@
 // EQ_HP_BAND), so the curve never hooks back to 0 dB past the ends of the drawing.
 namespace DSPConstants
 {
-    constexpr int    EQ_NUM_BANDS = 31;
+    constexpr int    EQ_NUM_BANDS = 31;                       // dots (params) in the drawing
+    // The bank has a peak on every dot and one halfway (in log frequency) between
+    // neighbours: 61 peaks, 1/6 octave apart.
+    constexpr int    EQ_NUM_PEAKS = 2 * EQ_NUM_BANDS - 1;
     // The end dots are 12 dB/oct Butterworth filters. At 0 dB (or above) each is off;
     // dragging one down moves its cutoff in by an octave per EQ_EDGE_DB_PER_OCTAVE, so
     // at -24 dB the high-pass sits at 320 Hz and the low-pass at 1.25 kHz. They fade
@@ -33,12 +36,15 @@ namespace DSPConstants
     // neighbour at 0 dB next to a deep cut takes a band deeper than the cut itself.
     constexpr float  EQ_BAND_MIN_DB = -36.0f;
     constexpr float  EQ_BAND_MAX_DB =  18.0f;
-    // About 0.55 octave wide: wide enough that a drawn curve ripples ~1 dB between
-    // centres (3.5 left it visibly wavy; the fit's worst case was 2.8 dB), narrow enough
-    // that a 1/3-octave notch still gets close to its drawn depth.
-    // Near Nyquist each band is built with GraphicEqCurve::bandQ, which keeps this
+    // About 0.4 octave wide, measured against the peaks' 1/6-octave spacing. Chosen
+    // with the 61-peak bank in a numeric sweep: peaks this close, with four fit points
+    // per dot gap, cut the ringing around a steep jump from ~25 dB of excess wiggle (31
+    // peaks, Q 2.5) to ~7 dB, and the dot error beside a jump from 5 to under 1 dB,
+    // while a one-dot notch still reaches its depth. Narrower rings less but cannot
+    // reach a notch; wider smears the cuts.
+    // Near Nyquist each peak is built with GraphicEqCurve::bandQ, which keeps this
     // width in octaves.
-    constexpr float  EQ_Q = 2.5f;
+    constexpr float  EQ_Q = 3.5f;
     constexpr float  EQ_FLAT_EPS_DB = 0.05f;                  // Below this |gain|, treat as flat
     constexpr double EQ_GAIN_SMOOTH_TIME_S = 0.03;            // 30ms gain ramp (kills zipper on drag)
     constexpr int    EQ_SUBBLOCK = 32;                        // samples per coefficient update
@@ -76,7 +82,17 @@ namespace DSPConstants
 
 namespace GraphicEqCurve
 {
-    using Bands = std::array<float, DSPConstants::EQ_NUM_BANDS>;
+    using Bands = std::array<float, DSPConstants::EQ_NUM_BANDS>;       // the drawing: one level per dot
+    using Gains = std::array<float, DSPConstants::EQ_NUM_PEAKS>;       // the bank: one gain per peak
+
+    /** Centre of peak k: even k sit on a dot, odd k halfway (geometric mean) between two. */
+    inline float peakFreq(int k) noexcept
+    {
+        const float lo = DSPConstants::EQ_FREQS[k / 2];
+        if (k % 2 == 0)
+            return lo;
+        return (float) std::sqrt((double) lo * (double) DSPConstants::EQ_FREQS[k / 2 + 1]);
+    }
 
     /** The Q to build band `centre` with at sampleRate, so its bandwidth in octaves
         is EQ_Q's analog bandwidth at every centre. The bilinear transform narrows a
@@ -91,9 +107,9 @@ namespace GraphicEqCurve
         return 1.0 / (2.0 * std::sinh(halfBwLn * omega / std::sin(omega)));
     }
 
-    inline bool bandUsable(int band, double sampleRate) noexcept
+    inline bool peakUsable(int k, double sampleRate) noexcept
     {
-        return DSPConstants::EQ_FREQS[band] < sampleRate * DSPConstants::EQ_MAX_FREQ_RATIO;
+        return peakFreq(k) < sampleRate * DSPConstants::EQ_MAX_FREQ_RATIO;
     }
 
     inline bool isEdgeBand(int band) noexcept
@@ -214,44 +230,46 @@ namespace GraphicEqCurve
 
     // The bank's response (dB) at f, skipping the bands the processor drops at
     // this rate.
-    inline double responseDb(const Bands& gainsDb, double f,
+    inline double responseDb(const Gains& gainsDb, double f,
                              double sampleRate = DSPConstants::EQ_FIT_SAMPLE_RATE) noexcept
     {
         double sum = 0.0;
-        for (int m = 0; m < DSPConstants::EQ_NUM_BANDS; ++m)
-            if (gainsDb[(size_t) m] != 0.0f && bandUsable(m, sampleRate))
-                sum += peakDb(f, DSPConstants::EQ_FREQS[m], bandQ(DSPConstants::EQ_FREQS[m], sampleRate),
+        for (int m = 0; m < DSPConstants::EQ_NUM_PEAKS; ++m)
+            if (gainsDb[(size_t) m] != 0.0f && peakUsable(m, sampleRate))
+                sum += peakDb(f, peakFreq(m), bandQ(peakFreq(m), sampleRate),
                               gainsDb[(size_t) m], sampleRate);
         return sum;
     }
 
     /** What is heard (dB) at f: the peaking bank's fitted gains plus the end filters
         the drawing asks for. The editor draws this. */
-    inline double totalDb(const Bands& gainsDb, const Bands& drawnDb, double f,
+    inline double totalDb(const Gains& gainsDb, const Bands& drawnDb, double f,
                           double sampleRate = DSPConstants::EQ_FIT_SAMPLE_RATE) noexcept
     {
         return responseDb(gainsDb, f, sampleRate) + edgeDb(drawnDb, f, sampleRate);
     }
 
     /** Turns a drawn curve into band gains at one sample rate. prepare() builds the
-        solver (well under a millisecond; allocates its ~75 kB of tables the first
+        solver (about a millisecond; allocates its ~300 kB of tables the first
         time, so not for the audio thread); fit() is allocation-free and cheap (tens
         of microseconds), so the processor runs it on the audio thread whenever the
         drawing changes. fit() before any prepare() returns flat gains. */
     class Fitter
     {
     public:
-        static constexpr int N = DSPConstants::EQ_NUM_BANDS;
-        // The fit is checked at every centre and halfway between neighbours, so a
-        // broad shape cannot ripple unseen between centres.
-        static constexpr int G = 2 * N - 1;
+        static constexpr int N = DSPConstants::EQ_NUM_PEAKS;
+        // The fit is checked at every dot and at three points between neighbours (four
+        // per dot gap, every 1/12 octave), so a shape cannot ripple unseen between peaks.
+        static constexpr int GRID_PER_GAP = 4;
+        static constexpr int G = GRID_PER_GAP * (DSPConstants::EQ_NUM_BANDS - 1) + 1;
 
         static double gridFreq(int j) noexcept
         {
-            const int i = j / 2;
-            if (j % 2 == 0)
-                return DSPConstants::EQ_FREQS[i];
-            return std::sqrt((double) DSPConstants::EQ_FREQS[i] * DSPConstants::EQ_FREQS[i + 1]);
+            const int i = j / GRID_PER_GAP;
+            if (i >= DSPConstants::EQ_NUM_BANDS - 1)
+                return DSPConstants::EQ_FREQS[DSPConstants::EQ_NUM_BANDS - 1];
+            const double t = (double) (j % GRID_PER_GAP) / GRID_PER_GAP;
+            return DSPConstants::EQ_FREQS[i] * std::pow((double) DSPConstants::EQ_FREQS[i + 1] / DSPConstants::EQ_FREQS[i], t);
         }
 
         double sampleRate() const noexcept { return rate; }
@@ -276,7 +294,7 @@ namespace GraphicEqCurve
             // The end dots set the end filters, but the 20 Hz and 20 kHz peaks stay in
             // the bank: the fit uses them to hold the neighbouring level out to the ends.
             for (int m = 0; m < N; ++m)
-                usable[m] = bandUsable(m, rate);
+                usable[m] = peakUsable(m, rate);
             int firstPeak = N, lastPeak = -1;
             for (int m = 0; m < N; ++m)
                 if (usable[m])
@@ -288,16 +306,20 @@ namespace GraphicEqCurve
             {
                 // A grid point the bank can be heard at: below Nyquist, with a margin.
                 gridOn[j] = gridFreq(j) < rate * EQ_MAX_FREQ_RATIO;
-                // Centres and midpoints count the same: with bands this wide that
-                // keeps a wandering drawing within ~1 dB of its lines between dots.
-                // Past the outermost peaking bands no band can hold a level, so those
+                // Dots and the points between them count the same, which keeps a
+                // wandering drawing within ~1 dB of its lines between dots.
+                // Past the outermost peaks no peak can hold a level, so those
                 // points count for less; at full weight they pulled the last band
-                // ~1.7 dB past its dot (a 16 kHz boost at 44.1 kHz).
-                const bool outside = j < 2 * firstPeak || j > 2 * lastPeak;
+                // ~1.7 dB past its dot (a 16 kHz boost at 44.1 kHz). The margin keeps
+                // a grid point that sits on the outermost peak counted as inside.
+                const double fj = gridFreq(j);
+                const bool outside = firstPeak > lastPeak
+                                  || fj < peakFreq(firstPeak) * (1.0 - 1.0e-6)
+                                  || fj > peakFreq(lastPeak) * (1.0 + 1.0e-6);
                 weight[j] = gridOn[j] ? (outside ? 0.3 : 1.0) : 0.0;
                 for (int m = 0; m < N; ++m)
                 {
-                    terms[j][m] = usable[m] ? PeakTerms(gridFreq(j), EQ_FREQS[m], bandQ(EQ_FREQS[m], rate), rate)
+                    terms[j][m] = usable[m] ? PeakTerms(fj, peakFreq(m), bandQ(peakFreq(m), rate), rate)
                                             : PeakTerms();
                     // Column m of the Jacobian: band m's response per dB at the reference gain.
                     B[j][m] = usable[m] && gridOn[j] ? 10.0 * std::log10(terms[j][m].ratio(refA2)) / refDb : 0.0;
@@ -351,7 +373,7 @@ namespace GraphicEqCurve
             between centres. Levels are clamped to the drawing range. Bands the DSP
             drops at this rate stay at 0 dB, and a flat drawing gives exactly flat
             gains, so the bank stays bypassed. Call prepare() first. */
-        Bands fit(const Bands& drawnDb) const noexcept
+        Gains fit(const Bands& drawnDb) const noexcept
         {
             using namespace DSPConstants;
             // A param set to 0 dB can read back a hair off it: the range maps 0 to
@@ -365,7 +387,7 @@ namespace GraphicEqCurve
                 return (double) std::fmin(EQ_DRAW_MAX_DB, std::fmax(EQ_DRAW_MIN_DB, v));
             };
 
-            Bands gains {};
+            Gains gains {};
             if (t == nullptr)
                 return gains;
             const auto& usable = t->usable;
@@ -374,16 +396,17 @@ namespace GraphicEqCurve
             const auto& P = t->P;
             // The end dots set the end filters, not a level: the bank holds the
             // neighbouring dots' levels out to the ends.
-            double level[N];
-            for (int i = 0; i < N; ++i)
+            double level[EQ_NUM_BANDS];
+            for (int i = 0; i < EQ_NUM_BANDS; ++i)
                 level[i] = clampDb(drawnDb[(size_t) (i == EQ_HP_BAND ? EQ_HP_BAND + 1
                                                      : i == EQ_LP_BAND ? EQ_LP_BAND - 1 : i)]);
             double grid[G];
             bool flat = true;
             for (int j = 0; j < G; ++j)
             {
-                const int i = j / 2;
-                grid[j] = (j % 2 == 0) ? level[i] : 0.5 * (level[i] + level[i + 1]);
+                const int i = std::min(j / GRID_PER_GAP, EQ_NUM_BANDS - 2);
+                const double u = (double) (j - i * GRID_PER_GAP) / GRID_PER_GAP;
+                grid[j] = level[i] * (1.0 - u) + level[i + 1] * u;
                 flat = flat && grid[j] == 0.0;
             }
             if (flat)
@@ -437,7 +460,7 @@ namespace GraphicEqCurve
 
     /** fit() at a given rate, for callers off the audio thread (tests, tools). Keeps
         one prepared Fitter per thread, rebuilt when the rate changes. */
-    inline Bands fit(const Bands& drawnDb, double sampleRate = DSPConstants::EQ_FIT_SAMPLE_RATE)
+    inline Gains fit(const Bands& drawnDb, double sampleRate = DSPConstants::EQ_FIT_SAMPLE_RATE)
     {
         thread_local Fitter fitter;
         const double rate = sampleRate > 0.0 ? sampleRate : DSPConstants::EQ_FIT_SAMPLE_RATE;

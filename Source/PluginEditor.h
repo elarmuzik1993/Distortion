@@ -2292,7 +2292,7 @@ public:
 
 private:
     Bands targets { };   // the drawn dots (dB), as the params hold them
-    Bands gains { };     // the band gains the processor fits from them
+    GraphicEqCurve::Gains gains { };     // the peak gains the processor fits from them
     double fittedRate = 0.0;
     std::array<bool, kNumBands> inGesture { };
     juce::Path curve;

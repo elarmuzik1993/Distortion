@@ -57,4 +57,4 @@
   `bugReports="0"`, so it sends nothing and recalls no profile. Kill the standalone by PID.
 - Host bypass freezes the island, delay lines and Sub Guard splitter; IIR ring after a gap.
 - Importing many large captures at once briefly blocks the UI (vetting runs on that thread).
-- Graphic EQ: a -24 dB plateau ripples ~3 dB between centres.
+- Graphic EQ: a -24 dB plateau ripples ~0.1 dB between centres; steep jumps (36 dB) still ring up to ~8.6 dB of excess wiggle (was 24.5 dB).

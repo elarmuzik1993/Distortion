@@ -5038,7 +5038,7 @@ void GraphicEqTests::runTest()
             target[(size_t) band] = db;
         return GraphicEqCurve::fit(target);
     };
-    const auto respAt = [](const Bands& g, double hz) { return GraphicEqCurve::responseDb(g, hz); };
+    const auto respAt = [](const GraphicEqCurve::Gains& g, double hz) { return GraphicEqCurve::responseDb(g, hz); };
 
     beginTest("Fit: a flat drawing gives exactly flat gains");
     {
@@ -5105,8 +5105,8 @@ void GraphicEqTests::runTest()
                 hi = std::max(hi, r);
             }
             logMessage(juce::String::formatted("plateau %.0f dB: %.2f .. %.2f", level, lo, hi));
-            expect(lo > level - 3.5 && hi < level + 3.5,
-                   "Plateau at " + juce::String(level) + " dB ripples more than 3.5 dB");
+            expect(lo > level - 2.0 && hi < level + 2.0,
+                   "Plateau at " + juce::String(level) + " dB ripples more than 2 dB");
         }
     }
 
@@ -5136,7 +5136,68 @@ void GraphicEqTests::runTest()
                 }
         }
         logMessage(juce::String::formatted("wandering drawing: worst deviation %.2f dB", worst));
-        expect(worst < 2.0, "A wandering drawing ripples " + juce::String(worst) + " dB from its lines");
+        expect(worst < 1.0, "A wandering drawing ripples " + juce::String(worst) + " dB from its lines");
+    }
+
+    beginTest("Fit: steep jumps do not ring");
+    {
+        // 30 seeded drawings of plateaus 8 dots long at random levels, so every 8th dot
+        // jumps (up to 36 dB). The 31-peak bank rang around each jump (excess wiggle up to 25 dB).
+        std::mt19937 rng(2);
+        double worstWiggle = 0.0, worstDot = 0.0;
+        std::vector<Bands> drawings;
+        for (int trial = 0; trial < 30; ++trial)
+        {
+            Bands d {};
+            double v = 0.0;
+            for (int i = 1; i < 30; ++i)
+            {
+                if (i % 8 == 1)
+                    v = std::uniform_real_distribution<>(-24.0, 12.0)(rng);
+                d[(size_t) i] = (float) (std::round(v * 100.0) / 100.0);
+            }
+            drawings.push_back(d);
+            const auto g = GraphicEqCurve::fit(d);
+            // Total variation of the response against the straight lines, dots 1..29,
+            // 16 samples per gap: ringing adds up-and-down travel the lines do not have.
+            double tvResponse = 0.0, tvLines = 0.0;
+            double prevR = 0.0, prevL = 0.0;
+            bool first = true;
+            for (int i = 1; i < 29; ++i)
+                for (int k = (i == 1 ? 0 : 1); k <= 16; ++k)
+                {
+                    const double t = k / 16.0;
+                    const double hz = DSPConstants::EQ_FREQS[i] * std::pow((double) DSPConstants::EQ_FREQS[i + 1] / DSPConstants::EQ_FREQS[i], t);
+                    const double r = respAt(g, hz);
+                    const double l = d[(size_t) i] * (1.0 - t) + d[(size_t) i + 1] * t;
+                    if (! first)
+                    {
+                        tvResponse += std::abs(r - prevR);
+                        tvLines += std::abs(l - prevL);
+                    }
+                    first = false;
+                    prevR = r;
+                    prevL = l;
+                }
+            worstWiggle = std::max(worstWiggle, tvResponse - tvLines);
+            for (int i = 1; i < 30; ++i)
+                worstDot = std::max(worstDot, std::abs(respAt(g, DSPConstants::EQ_FREQS[i]) - (double) d[(size_t) i]));
+        }
+        // Cost of one fit, logged for the record (no assert: it depends on the machine).
+        const auto t0 = juce::Time::getHighResolutionTicks();
+        float sink = 0.0f;
+        for (int n = 0; n < 200; ++n)
+        {
+            auto d = drawings[(size_t) (n % (int) drawings.size())];
+            d[1] = (float) n * 0.01f - 1.0f;   // defeat any caching
+            sink += GraphicEqCurve::fit(d)[30];
+        }
+        const double us = juce::Time::highResolutionTicksToSeconds(juce::Time::getHighResolutionTicks() - t0) * 1.0e6 / 200.0;
+        logMessage(juce::String::formatted("steep jumps: worst wiggle %.2f dB, worst dot %.2f dB, fit %.1f us (%.3f)",
+                                           worstWiggle, worstDot, us, (double) sink));
+        // The 31-peak bank measured 24.5 dB here, the 61-peak bank ~8.6 dB.
+        expect(worstWiggle < 9.5, "Steep jumps ring: excess wiggle " + juce::String(worstWiggle) + " dB");
+        expect(worstDot < 1.5, "A dot next to a jump is missed by " + juce::String(worstDot) + " dB");
     }
 
     beginTest("Fit: an air lift holds at 44.1 kHz, where the 20 kHz band drops out");
@@ -5145,7 +5206,7 @@ void GraphicEqTests::runTest()
         for (int i = 26; i < DSPConstants::EQ_NUM_BANDS; ++i)   // 8 kHz up
             target[(size_t) i] = 6.0f;
         const auto g = GraphicEqCurve::fit(target, 44100.0);
-        expectEquals(g[30], 0.0f, "A band the DSP drops at 44.1 kHz must stay at 0 dB");
+        expectEquals(g[60], 0.0f, "A band the DSP drops at 44.1 kHz must stay at 0 dB");
         for (double hz : { 8000.0, 9000.0, 10000.0, 12500.0, 16000.0 })
             expectWithinAbsoluteError(GraphicEqCurve::responseDb(g, hz, 44100.0), 6.0, 1.5,
                                       "Air lift at " + juce::String(hz) + " Hz, 44.1 kHz");
@@ -5157,7 +5218,7 @@ void GraphicEqTests::runTest()
         bool finite = true;
         for (float v : low)
             finite = finite && std::isfinite(v);
-        expect(finite && low[27] == 0.0f, "22.05 kHz fit must be finite and leave dropped bands flat");
+        expect(finite && low[54] == 0.0f, "22.05 kHz fit must be finite and leave dropped bands flat");
     }
 
     beginTest("Fit: gains stay inside the band param range");
@@ -5392,14 +5453,14 @@ void GraphicEqTests::runTest()
                                                           { 630.0, "middle" } };
         for (const auto& pt : points)
         {
-            const double model = GraphicEqCurve::totalDb(Bands {}, ends, pt.first, sr);
+            const double model = GraphicEqCurve::totalDb(GraphicEqCurve::Gains {}, ends, pt.first, sr);
             const double heard = heardDb(ends, pt.first, sr);
             logMessage(juce::String::formatted("end filters at %.0f Hz (%s): heard %.2f, model %.2f",
                                                pt.first, pt.second, heard, model));
             expectWithinAbsoluteError(heard, model, 0.5, juce::String("End filters: DSP and model disagree, ") + pt.second);
         }
-        expect(GraphicEqCurve::totalDb(Bands {}, ends, 160.0, sr) < -9.0, "The high-pass barely cuts an octave below");
-        expect(GraphicEqCurve::totalDb(Bands {}, ends, 2500.0, sr) < -9.0, "The low-pass barely cuts an octave above");
+        expect(GraphicEqCurve::totalDb(GraphicEqCurve::Gains {}, ends, 160.0, sr) < -9.0, "The high-pass barely cuts an octave below");
+        expect(GraphicEqCurve::totalDb(GraphicEqCurve::Gains {}, ends, 2500.0, sr) < -9.0, "The low-pass barely cuts an octave above");
 
         // The curve holds the inner level out past the ends: no hook back to 0 dB.
         Bands lifted {};
