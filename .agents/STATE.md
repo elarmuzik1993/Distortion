@@ -2,7 +2,7 @@
 
 ## Now
 - `main` is v2.4.0, untagged (last release v2.3.0): NAM profiles with a library browser,
-  drag-and-drop import, capture calibration (`input_level_dbu` vs 12 dBu) and EXTREME's +12 dB
+  drag-and-drop import, capture calibration (`input_level_dbu` vs 12 dBu) and EXTREME's +9 dB
   push; Shape with the Shape / Legacy switch; four-pill clip column; XY Morph pad feedback; Sub
   Guard as one LR48 split around the drive; the 31-band graphic EQ. `CHANGELOG.md` has the v2.4
   section; ten entries once listed as unreleased shipped in v2.3.0 and sit under v2.3.
@@ -33,8 +33,9 @@
 ## Decisions
 - Graphic EQ fits band gains to the drawing (owner, 2026-10-25). New param IDs: v2.3 curves
   migrate (state v4), v2.3 automation of the old 12 bands does not.
-- EXTREME pushes a profile's input x4; captures follow their `input_level_dbu` against 12 dBu
-  (owner, 2026-10-22). Sub Guard's sound change has no version gate.
+- EXTREME pushes clip types and profiles alike, +9 dB (owner, 2026-11-01; was +12 dB, too
+  hot); captures follow their `input_level_dbu` against 12 dBu (owner, 2026-10-22). Sub
+  Guard's sound change has no version gate.
 - Profiles live in Sledge's library; sessions fall back by content fingerprint, never by name.
 - `legacyFilter` is a session param; state v3 turns it on for v2.3 states that used the filter.
 - Clip column can't widen (texture cutouts registered to the knobs).

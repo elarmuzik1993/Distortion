@@ -3189,7 +3189,7 @@ void PluginProcessor::applyProfileChunk(float* const* channels, int numChannels,
         // Same bypass threshold as applyDistortionStage. The model keeps running
         // below it so its state stays continuous when the amount comes back up.
         mix[i] = c.distortionParam < 0.5f ? 0.0f : c.mix;
-        // EXTREME pushes the profile as it pushes a clip type: the same x4 (+12 dB).
+        // EXTREME pushes the profile as it pushes a clip type: the same EXTREME_DRIVE_MULT (+9 dB).
         const float inputGain = c.gain * c.push
             * juce::Decibels::decibelsToGain(profileInputGainDb(c.distortionParam));
         for (size_t ch = 0; ch < static_cast<size_t>(numChannels); ++ch)
