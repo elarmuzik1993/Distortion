@@ -3856,16 +3856,16 @@ void PluginProcessor::prepareEqBands(const juce::dsp::ProcessSpec& baseSpec)
     eqFittedGains = eqFitter.fit(eqFittedFor);
 
     constexpr double twoPi = 6.283185307179586;
-    for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
+    for (int i = 0; i < DSPConstants::EQ_NUM_PEAKS; ++i)
     {
         auto& band = eqBand[i];
         // A peaking band at/above Nyquist is unstable (negative alpha puts the poles
         // on or outside the unit circle), so drop those bands at low base rates
         // rather than writing coefficients that would make the filter diverge.
-        band.usable = GraphicEqCurve::bandUsable(i, eqSampleRate);
-        const double w0 = twoPi * DSPConstants::EQ_FREQS[i] / eqSampleRate;
+        band.usable = GraphicEqCurve::peakUsable(i, eqSampleRate);
+        const double w0 = twoPi * GraphicEqCurve::peakFreq(i) / eqSampleRate;
         band.alpha = band.usable
-                   ? std::sin(w0) / (2.0 * GraphicEqCurve::bandQ(DSPConstants::EQ_FREQS[i], eqSampleRate))
+                   ? std::sin(w0) / (2.0 * GraphicEqCurve::bandQ(GraphicEqCurve::peakFreq(i), eqSampleRate))
                    : 0.0;
         band.c2 = -2.0 * std::cos(w0);
         band.clear();
@@ -3876,6 +3876,54 @@ void PluginProcessor::prepareEqBands(const juce::dsp::ProcessSpec& baseSpec)
         band.setGainDb(g);
         band.running = band.usable && std::abs(g) > DSPConstants::EQ_FLAT_EPS_DB;
         band.idleSamples = 0;
+    }
+
+    for (auto& edge : eqEdge)
+    {
+        edge.log2Hz.reset(eqSampleRate, DSPConstants::EQ_GAIN_SMOOTH_TIME_S);
+        edge.weight.reset(eqSampleRate, DSPConstants::EQ_GAIN_SMOOTH_TIME_S);
+        edge.running = false;
+        edge.appliedHz = 0.0;
+        edge.clear();
+    }
+    updateEqEdgeTargets(eqFittedFor, true);
+}
+
+void PluginProcessor::updateEqEdgeTargets(const GraphicEqCurve::Bands& drawn, bool snap) noexcept
+{
+    using namespace DSPConstants;
+    for (int k = 0; k < 2; ++k)
+    {
+        const bool hp = k == 0;
+        auto& edge = eqEdge[k];
+        const float dot = drawn[(size_t) (hp ? EQ_HP_BAND : EQ_LP_BAND)];
+        if (GraphicEqCurve::edgeOn(hp, dot, eqSampleRate))
+        {
+            const double target = std::log2(GraphicEqCurve::edgeCutoffHz(hp, dot, eqSampleRate));
+            if (! edge.running || snap)
+            {
+                // Starts from silence at its cutoff and fades in (snap: settled).
+                edge.clear();
+                edge.log2Hz.setCurrentAndTargetValue(target);
+                edge.weight.setCurrentAndTargetValue(snap ? 1.0f : 0.0f);
+                edge.running = true;
+            }
+            else
+            {
+                edge.log2Hz.setTargetValue(target);
+            }
+            edge.weight.setTargetValue(1.0f);
+        }
+        else if (snap)
+        {
+            edge.weight.setCurrentAndTargetValue(0.0f);
+            edge.running = false;
+            edge.clear();
+        }
+        else
+        {
+            edge.weight.setTargetValue(0.0f);   // fades out at its last cutoff, then stops
+        }
     }
 }
 
@@ -3895,6 +3943,7 @@ void PluginProcessor::processGraphicEq(juce::AudioBuffer<float>& buffer)
     {
         eqFittedFor = drawn;
         eqFittedGains = eqFitter.fit(drawn);
+        updateEqEdgeTargets(drawn, false);
     }
 
     // Which bands run this block. A band runs while its target or ramp is off 0 dB,
@@ -3902,7 +3951,7 @@ void PluginProcessor::processGraphicEq(juce::AudioBuffer<float>& buffer)
     // stops; a band that starts again therefore starts from silence, not from
     // memory left over from its last use.
     bool anyRunning = false;
-    for (int i = 0; i < EQ_NUM_BANDS; ++i)
+    for (int i = 0; i < EQ_NUM_PEAKS; ++i)
     {
         auto& band = eqBand[i];
         const float target = eqFittedGains[(size_t) i];
@@ -3926,6 +3975,8 @@ void PluginProcessor::processGraphicEq(juce::AudioBuffer<float>& buffer)
         }
         anyRunning = anyRunning || band.running;
     }
+    for (const auto& edge : eqEdge)
+        anyRunning = anyRunning || edge.running;
 
     // Whole-bank bypass while flat — zero CPU and bit-transparent for a fresh
     // instance or a flattened curve.
@@ -3939,7 +3990,7 @@ void PluginProcessor::processGraphicEq(juce::AudioBuffer<float>& buffer)
     for (int start = 0; start < numSamples; start += EQ_SUBBLOCK)
     {
         const int len = juce::jmin(EQ_SUBBLOCK, numSamples - start);
-        for (int i = 0; i < EQ_NUM_BANDS; ++i)
+        for (int i = 0; i < EQ_NUM_PEAKS; ++i)
         {
             auto& band = eqBand[i];
             if (! band.running)
@@ -3967,6 +4018,49 @@ void PluginProcessor::processGraphicEq(juce::AudioBuffer<float>& buffer)
                 }
                 band.s1[ch] = s1;
                 band.s2[ch] = s2;
+            }
+        }
+
+        for (int k = 0; k < 2; ++k)
+        {
+            auto& edge = eqEdge[k];
+            if (! edge.running)
+                continue;
+
+            const double l2 = edge.log2Hz.isSmoothing() ? edge.log2Hz.skip(len) : edge.log2Hz.getTargetValue();
+            const double hz = std::exp2(l2);
+            if (hz != edge.appliedHz)
+            {
+                GraphicEqCurve::edgeCoeffs(k == 0, hz, eqSampleRate, edge.c);
+                edge.appliedHz = hz;
+            }
+
+            float w[EQ_SUBBLOCK];
+            for (int n = 0; n < len; ++n)
+                w[n] = edge.weight.getNextValue();
+
+            const double b0 = edge.c[0], b1 = edge.c[1], b2 = edge.c[2], a1 = edge.c[3], a2 = edge.c[4];
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                float* x = data[ch] + start;
+                double s1 = edge.s1[ch], s2 = edge.s2[ch];
+                for (int n = 0; n < len; ++n)
+                {
+                    const double in = x[n];
+                    const double out = b0 * in + s1;
+                    s1 = b1 * in - a1 * out + s2;
+                    s2 = b2 * in - a2 * out;
+                    x[n] = (float) (in + (double) w[n] * (out - in));
+                }
+                edge.s1[ch] = s1;
+                edge.s2[ch] = s2;
+            }
+
+            // Faded fully out: the output is the input, so it stops without a step.
+            if (edge.weight.getTargetValue() == 0.0f && ! edge.weight.isSmoothing())
+            {
+                edge.running = false;
+                edge.clear();
             }
         }
     }

@@ -268,12 +268,15 @@ int main(int argc, char* argv[])
     if (hasShape) setParam("shape", shapeValue);
     if (eq)
     {
-        // A curve that shows both ends and the middle: low cut, 1 kHz notch, air lift.
+        // A curve that shows both ends and the middle: high-pass (80 Hz), low cut, 1 kHz notch,
+        // air lift, low-pass (10 kHz); the end dots show their cutoff markers.
         GraphicEqCurve::Bands target {};
-        for (int i = 0; i <= 3; ++i) target[(size_t) i] = -24.0f;
+        target[0] = -12.0f;
+        for (int i = 1; i <= 3; ++i) target[(size_t) i] = -24.0f;
         target[4] = -12.0f;
         target[17] = -24.0f;
-        for (int i = 26; i <= 30; ++i) target[(size_t) i] = 6.0f;
+        for (int i = 26; i <= 29; ++i) target[(size_t) i] = 6.0f;
+        target[30] = -6.0f;
         for (int i = 0; i < DSPConstants::EQ_NUM_BANDS; ++i)
             if (auto* p = proc.parameters.getParameter(PluginProcessor::eqBandParamId(i)))
                 p->setValueNotifyingHost(p->convertTo0to1(target[(size_t) i]));

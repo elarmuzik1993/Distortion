@@ -454,13 +454,30 @@ private:
         void setGainDb(float db) noexcept;
         void clear() noexcept { s1[0] = s1[1] = s2[0] = s2[1] = 0.0; }
     };
-    EqBand eqBand[DSPConstants::EQ_NUM_BANDS];
+    EqBand eqBand[DSPConstants::EQ_NUM_PEAKS];
+    // The end dots' filters: [0] the high-pass (dot 0), [1] the low-pass (dot 30).
+    // Output is dry + weight x (filtered - dry), so a weight of 0 is exactly the
+    // input and the filter can stop without a step. The cutoff glides in log
+    // frequency; both follow 30 ms ramps.
+    struct EqEdge
+    {
+        double c[5] = { 1.0, 0.0, 0.0, 0.0, 0.0 };  // b0 b1 b2 a1 a2
+        double s1[2] = {}, s2[2] = {};
+        double appliedHz = 0.0;
+        juce::SmoothedValue<double> log2Hz;          // cutoff, log2(Hz)
+        juce::SmoothedValue<float> weight;           // 0 = dry, 1 = filtered
+        bool running = false;
+
+        void clear() noexcept { s1[0] = s1[1] = s2[0] = s2[1] = 0.0; }
+    };
+    EqEdge eqEdge[2];
+    void updateEqEdgeTargets(const GraphicEqCurve::Bands& drawn, bool snap) noexcept;
     GraphicEqCurve::Fitter eqFitter;
     GraphicEqCurve::Bands eqFittedFor {};          // the drawing eqFitter last fitted
-    GraphicEqCurve::Bands eqFittedGains {};        // ...and its band gains
+    GraphicEqCurve::Gains eqFittedGains {};        // ...and its peak gains
     std::atomic<float>* eqBandParam[DSPConstants::EQ_NUM_BANDS] = {};  // eqThird0..30: drawn level (dB)
     std::atomic<float>* eqEnabledParam = nullptr;   // EQ master bypass (1 = active, 0 = bypassed)
-    juce::SmoothedValue<float> eqGainSmoothed[DSPConstants::EQ_NUM_BANDS];
+    juce::SmoothedValue<float> eqGainSmoothed[DSPConstants::EQ_NUM_PEAKS];
     double eqSampleRate = 44100.0;                                     // base rate for coeff writes
     int eqIdleHoldSamples = 0;                                         // EQ_IDLE_HOLD_S at this rate
 
