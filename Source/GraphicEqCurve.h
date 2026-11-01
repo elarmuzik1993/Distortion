@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <memory>
@@ -11,9 +12,20 @@
 // drawing; overlapping peaks would otherwise pile up past what was drawn. The
 // processor fits on the audio thread whenever the drawing changes, and the editor
 // runs the same fit to draw what is heard.
+// The two end dots are not peaks: dot 0 is a high-pass and dot 30 a low-pass (see
+// EQ_HP_BAND), so the curve never hooks back to 0 dB past the ends of the drawing.
 namespace DSPConstants
 {
     constexpr int    EQ_NUM_BANDS = 31;
+    // The end dots are 12 dB/oct Butterworth filters. At 0 dB (or above) each is off;
+    // dragging one down moves its cutoff in by an octave per EQ_EDGE_DB_PER_OCTAVE, so
+    // at -24 dB the high-pass sits at 320 Hz and the low-pass at 1.25 kHz. They fade
+    // in and out over EQ_GAIN_SMOOTH_TIME_S (a dry/filtered blend), so switching one
+    // on or off cannot click, and an off filter is exactly transparent.
+    constexpr int    EQ_HP_BAND = 0;
+    constexpr int    EQ_LP_BAND = EQ_NUM_BANDS - 1;
+    constexpr double EQ_EDGE_DB_PER_OCTAVE = 6.0;
+    constexpr double EQ_EDGE_Q = 0.70710678118654752;
     // A drawn cut reaches -24 dB, a boost +12 dB...
     constexpr float  EQ_DRAW_MIN_DB = -24.0f;
     constexpr float  EQ_DRAW_MAX_DB =  12.0f;
@@ -21,11 +33,12 @@ namespace DSPConstants
     // neighbour at 0 dB next to a deep cut takes a band deeper than the cut itself.
     constexpr float  EQ_BAND_MIN_DB = -36.0f;
     constexpr float  EQ_BAND_MAX_DB =  18.0f;
-    // About 0.4 octave wide: narrow enough for a 1/3-octave notch to reach -24 dB,
-    // wide enough that a broad plateau ripples no more than ~3.5 dB between centres.
+    // About 0.55 octave wide: wide enough that a drawn curve ripples ~1 dB between
+    // centres (3.5 left it visibly wavy; the fit's worst case was 2.8 dB), narrow enough
+    // that a 1/3-octave notch still gets close to its drawn depth.
     // Near Nyquist each band is built with GraphicEqCurve::bandQ, which keeps this
     // width in octaves.
-    constexpr float  EQ_Q = 3.5f;
+    constexpr float  EQ_Q = 2.5f;
     constexpr float  EQ_FLAT_EPS_DB = 0.05f;                  // Below this |gain|, treat as flat
     constexpr double EQ_GAIN_SMOOTH_TIME_S = 0.03;            // 30ms gain ramp (kills zipper on drag)
     constexpr int    EQ_SUBBLOCK = 32;                        // samples per coefficient update
@@ -83,6 +96,89 @@ namespace GraphicEqCurve
         return DSPConstants::EQ_FREQS[band] < sampleRate * DSPConstants::EQ_MAX_FREQ_RATIO;
     }
 
+    inline bool isEdgeBand(int band) noexcept
+    {
+        return band == DSPConstants::EQ_HP_BAND || band == DSPConstants::EQ_LP_BAND;
+    }
+
+    // --- The end dots: high-pass (dot 0) and low-pass (dot 30) ---------------------
+
+    /** Where an end filter rests when off, and the furthest out it can go: 20 Hz for
+        the high-pass; 20 kHz for the low-pass, or EQ_MAX_FREQ_RATIO x rate if lower. */
+    inline double edgeRestHz(bool highPass, double sampleRate) noexcept
+    {
+        using namespace DSPConstants;
+        return highPass ? (double) EQ_FREQS[EQ_HP_BAND]
+                        : std::fmin((double) EQ_FREQS[EQ_LP_BAND], sampleRate * EQ_MAX_FREQ_RATIO);
+    }
+
+    /** The cutoff an end dot asks for: an octave in per EQ_EDGE_DB_PER_OCTAVE below
+        0 dB, from 20 Hz up (high-pass) or 20 kHz down (low-pass). */
+    inline double edgeCutoffHz(bool highPass, float dotDb, double sampleRate) noexcept
+    {
+        using namespace DSPConstants;
+        const double d = std::fmax((double) EQ_DRAW_MIN_DB, std::fmin(0.0, (double) dotDb));
+        const double octaves = -d / EQ_EDGE_DB_PER_OCTAVE;
+        if (highPass)
+            return EQ_FREQS[EQ_HP_BAND] * std::exp2(octaves);
+        return std::fmin(edgeRestHz(false, sampleRate), EQ_FREQS[EQ_LP_BAND] * std::exp2(-octaves));
+    }
+
+    /** True while an end dot's filter plays: the dot is below 0 dB (by more than half
+        a param step) and, for the low-pass, its cutoff is below where it rests. */
+    inline bool edgeOn(bool highPass, float dotDb, double sampleRate) noexcept
+    {
+        if (! (dotDb < -0.005f))
+            return false;
+        return highPass || edgeCutoffHz(false, dotDb, sampleRate) < edgeRestHz(false, sampleRate);
+    }
+
+    /** RBJ Butterworth high- or low-pass, normalised by a0: { b0, b1, b2, a1, a2 }.
+        The DSP and the model both build the end filters with this. */
+    inline void edgeCoeffs(bool highPass, double cutoffHz, double sampleRate, double (&c)[5]) noexcept
+    {
+        const double w0 = 6.283185307179586 * cutoffHz / sampleRate;
+        const double cw = std::cos(w0);
+        const double alpha = std::sin(w0) / (2.0 * DSPConstants::EQ_EDGE_Q);
+        const double a0inv = 1.0 / (1.0 + alpha);
+        const double bEdge = highPass ? 0.5 * (1.0 + cw) : 0.5 * (1.0 - cw);
+        c[0] = bEdge * a0inv;
+        c[1] = (highPass ? -2.0 : 2.0) * bEdge * a0inv;
+        c[2] = c[0];
+        c[3] = -2.0 * cw * a0inv;
+        c[4] = (1.0 - alpha) * a0inv;
+    }
+
+    // Magnitude (dB) of a normalised biquad at f.
+    inline double biquadDb(const double (&c)[5], double f, double sampleRate) noexcept
+    {
+        const double w = 6.283185307179586 * f / sampleRate;
+        const double c1 = std::cos(w), s1 = std::sin(w), c2 = std::cos(2.0 * w), s2 = std::sin(2.0 * w);
+        const double nr = c[0] + c[1] * c1 + c[2] * c2, ni = -(c[1] * s1 + c[2] * s2);
+        const double dr = 1.0 + c[3] * c1 + c[4] * c2, di = -(c[3] * s1 + c[4] * s2);
+        return 10.0 * std::log10((nr * nr + ni * ni) / (dr * dr + di * di) + 1.0e-300);
+    }
+
+    /** The end filters' response (dB) at f for a drawing, as the DSP plays it once
+        settled. */
+    inline double edgeDb(const std::array<float, DSPConstants::EQ_NUM_BANDS>& drawnDb, double f,
+                         double sampleRate) noexcept
+    {
+        using namespace DSPConstants;
+        double sum = 0.0;
+        for (const bool hp : { true, false })
+        {
+            const float dot = drawnDb[(size_t) (hp ? EQ_HP_BAND : EQ_LP_BAND)];
+            if (edgeOn(hp, dot, sampleRate))
+            {
+                double c[5];
+                edgeCoeffs(hp, edgeCutoffHz(hp, dot, sampleRate), sampleRate, c);
+                sum += biquadDb(c, f, sampleRate);
+            }
+        }
+        return sum;
+    }
+
     // An RBJ peaking biquad's |H(f)|^2 is (K + L A^2) / (K + L / A^2), with A^2 the
     // linear gain, K = |1 - 2cos(w0) z^-1 + z^-2|^2 = 4 (cos w - cos w0)^2 and
     // L = 4 alpha^2 sin^2 w, which depend only on f, the centre, Q and the rate.
@@ -129,6 +225,14 @@ namespace GraphicEqCurve
         return sum;
     }
 
+    /** What is heard (dB) at f: the peaking bank's fitted gains plus the end filters
+        the drawing asks for. The editor draws this. */
+    inline double totalDb(const Bands& gainsDb, const Bands& drawnDb, double f,
+                          double sampleRate = DSPConstants::EQ_FIT_SAMPLE_RATE) noexcept
+    {
+        return responseDb(gainsDb, f, sampleRate) + edgeDb(drawnDb, f, sampleRate);
+    }
+
     /** Turns a drawn curve into band gains at one sample rate. prepare() builds the
         solver (well under a millisecond; allocates its ~75 kB of tables the first
         time, so not for the audio thread); fit() is allocation-free and cheap (tens
@@ -169,18 +273,28 @@ namespace GraphicEqCurve
             constexpr double lambda = 0.02;   // keeps the solve from trading huge opposite gains
             const double refA2 = std::pow(10.0, refDb / 20.0);
 
+            // The end dots set the end filters, but the 20 Hz and 20 kHz peaks stay in
+            // the bank: the fit uses them to hold the neighbouring level out to the ends.
             for (int m = 0; m < N; ++m)
                 usable[m] = bandUsable(m, rate);
+            int firstPeak = N, lastPeak = -1;
+            for (int m = 0; m < N; ++m)
+                if (usable[m])
+                {
+                    firstPeak = std::min(firstPeak, m);
+                    lastPeak = m;
+                }
             for (int j = 0; j < G; ++j)
             {
                 // A grid point the bank can be heard at: below Nyquist, with a margin.
                 gridOn[j] = gridFreq(j) < rate * EQ_MAX_FREQ_RATIO;
-                // Midpoints count for less than centres: between two very different
-                // dots (a steep cut) no bank of peaks can pass through the halfway
-                // level, and an equal weight there pulls the cut past the dots. 0.3
-                // keeps a one-octave cut within ~1.5 dB of its dots and a broad
-                // plateau within ~3.5 dB between them.
-                weight[j] = gridOn[j] ? (j % 2 == 0 ? 1.0 : 0.3) : 0.0;
+                // Centres and midpoints count the same: with bands this wide that
+                // keeps a wandering drawing within ~1 dB of its lines between dots.
+                // Past the outermost peaking bands no band can hold a level, so those
+                // points count for less; at full weight they pulled the last band
+                // ~1.7 dB past its dot (a 16 kHz boost at 44.1 kHz).
+                const bool outside = j < 2 * firstPeak || j > 2 * lastPeak;
+                weight[j] = gridOn[j] ? (outside ? 0.3 : 1.0) : 0.0;
                 for (int m = 0; m < N; ++m)
                 {
                     terms[j][m] = usable[m] ? PeakTerms(gridFreq(j), EQ_FREQS[m], bandQ(EQ_FREQS[m], rate), rate)
@@ -258,13 +372,18 @@ namespace GraphicEqCurve
             const auto& gridOn = t->gridOn;
             const auto& terms = t->terms;
             const auto& P = t->P;
+            // The end dots set the end filters, not a level: the bank holds the
+            // neighbouring dots' levels out to the ends.
+            double level[N];
+            for (int i = 0; i < N; ++i)
+                level[i] = clampDb(drawnDb[(size_t) (i == EQ_HP_BAND ? EQ_HP_BAND + 1
+                                                     : i == EQ_LP_BAND ? EQ_LP_BAND - 1 : i)]);
             double grid[G];
             bool flat = true;
             for (int j = 0; j < G; ++j)
             {
                 const int i = j / 2;
-                grid[j] = (j % 2 == 0) ? clampDb(drawnDb[(size_t) i])
-                                       : 0.5 * (clampDb(drawnDb[(size_t) i]) + clampDb(drawnDb[(size_t) i + 1]));
+                grid[j] = (j % 2 == 0) ? level[i] : 0.5 * (level[i] + level[i + 1]);
                 flat = flat && grid[j] == 0.0;
             }
             if (flat)
@@ -344,6 +463,10 @@ namespace GraphicEqCurve
                                   legacyGainsDb[m], EQ_FIT_SAMPLE_RATE);
             drawn[(size_t) k] = std::round((float) std::fmin(EQ_DRAW_MAX_DB, std::fmax(EQ_DRAW_MIN_DB, sum)) * 100.0f) / 100.0f;
         }
+        // v2.3 had no end filters: leave both off. The bank holds dots 1 and 29 out
+        // to the ends, which is close to what the old curve did there.
+        drawn[(size_t) EQ_HP_BAND] = 0.0f;
+        drawn[(size_t) EQ_LP_BAND] = 0.0f;
         return drawn;
     }
 }

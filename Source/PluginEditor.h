@@ -2265,7 +2265,22 @@ public:
         // Label, to the right of the power button; the band under the mouse and
         // its drawn level follow it.
         juce::String label = bypassed ? "GRAPHIC EQ  (BYPASSED)" : "GRAPHIC EQ";
-        if (hoverBand >= 0)
+        if (hoverBand >= 0 && GraphicEqCurve::isEdgeBand(hoverBand))
+        {
+            const bool hp = hoverBand == DSPConstants::EQ_HP_BAND;
+            const float dot = targets[(size_t) hoverBand];
+            label << "   " << (hp ? "HIGH PASS  " : "LOW PASS  ");
+            if (GraphicEqCurve::edgeOn(hp, dot, sampleRate()))
+            {
+                const double hz = GraphicEqCurve::edgeCutoffHz(hp, dot, sampleRate());
+                label << (hz >= 1000.0 ? juce::String(hz / 1000.0, 2) + " kHz" : juce::String(juce::roundToInt(hz)) + " Hz");
+            }
+            else
+            {
+                label << "OFF";
+            }
+        }
+        else if (hoverBand >= 0)
             label << "   " << PluginProcessor::eqBandName(hoverBand) << "  "
                   << juce::String(targets[(size_t) hoverBand], 1) << " dB";
         g.setColour(neon.withAlpha(0.55f));
@@ -2355,7 +2370,7 @@ private:
             const float x = b.getX() + b.getWidth() * (float) s / (float) steps;
             const float u = (x - b.getX()) / b.getWidth() * (float) kNumBands - 0.5f;
             const double hz = 1000.0 * std::pow(2.0, (u - kRefBand) / 3.0);
-            const float db = hz < sr * 0.5 ? (float) GraphicEqCurve::responseDb(gains, hz, sr) : 0.0f;
+            const float db = hz < sr * 0.5 ? (float) GraphicEqCurve::totalDb(gains, targets, hz, sr) : 0.0f;
             const float y = juce::jlimit(b.getY(), b.getBottom(), dbToY(db, b));
             if (s == 0) curve.startNewSubPath(x, y);
             else        curve.lineTo(x, y);
@@ -2378,7 +2393,9 @@ private:
     {
         // The params step in 0.01 dB; snapping here keeps the dot equal to the
         // param, so mirroring it back is not seen as an outside change.
-        db = std::round(juce::jlimit(DSPConstants::EQ_DRAW_MIN_DB, DSPConstants::EQ_DRAW_MAX_DB, db) * 100.0f) / 100.0f;
+        // The end dots are the high- and low-pass: 0 dB is off, so they never go above it.
+        const float maxDb = GraphicEqCurve::isEdgeBand(i) ? 0.0f : DSPConstants::EQ_DRAW_MAX_DB;
+        db = std::round(juce::jlimit(DSPConstants::EQ_DRAW_MIN_DB, maxDb, db) * 100.0f) / 100.0f;
         if (db == targets[(size_t) i])
             return;
         if (! inGesture[(size_t) i])

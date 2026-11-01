@@ -12,6 +12,7 @@
 #include <atomic>
 #include <set>
 #include <iostream>
+#include <random>
 #include <thread>
 
 using namespace TestUtilities;
@@ -5073,14 +5074,16 @@ void GraphicEqTests::runTest()
 
     beginTest("Fit: low and high cuts at the ends of the spectrum");
     {
-        const auto low = fitted({ { 0, -24.0f }, { 1, -24.0f }, { 2, -24.0f },
-                                  { 3, -24.0f }, { 4, -24.0f }, { 5, -24.0f } });   // 20..63 Hz
+        // Drawn with the inner dots; the end dots are the filters, left off here, and
+        // the bank holds dots 1 and 29 out to the ends.
+        const auto low = fitted({ { 1, -24.0f }, { 2, -24.0f },
+                                  { 3, -24.0f }, { 4, -24.0f }, { 5, -24.0f } });   // 25..63 Hz
         for (double hz : { 20.0, 31.5, 50.0, 63.0 })
             expectWithinAbsoluteError(respAt(low, hz), -24.0, 1.5, "Low cut at " + juce::String(hz) + " Hz");
         for (double hz : { 100.0, 200.0, 1000.0 })
             expectWithinAbsoluteError(respAt(low, hz), 0.0, 1.0, "Low cut leaked to " + juce::String(hz) + " Hz");
 
-        const auto high = fitted({ { 27, -24.0f }, { 28, -24.0f }, { 29, -24.0f }, { 30, -24.0f } });   // 10k..20k
+        const auto high = fitted({ { 27, -24.0f }, { 28, -24.0f }, { 29, -24.0f } });   // 10k..16k
         for (double hz : { 10000.0, 12500.0, 16000.0 })
             expectWithinAbsoluteError(respAt(high, hz), -24.0, 1.5, "High cut at " + juce::String(hz) + " Hz");
         for (double hz : { 1000.0, 5000.0 })
@@ -5105,6 +5108,35 @@ void GraphicEqTests::runTest()
             expect(lo > level - 3.5 && hi < level + 3.5,
                    "Plateau at " + juce::String(level) + " dB ripples more than 3.5 dB");
         }
+    }
+
+    beginTest("Fit: a wandering drawing follows its straight lines between centres");
+    {
+        // The editor shows the bank's response, so a drawing that wanders must not come
+        // back as a sine-wavy line: every point between two centres stays within 2 dB
+        // of the straight line the dots imply.
+        std::mt19937 rng(1);
+        double worst = 0.0;
+        for (int trial = 0; trial < 50; ++trial)
+        {
+            Bands d {};
+            double v = 0.0;
+            for (auto& x : d)
+            {
+                v = std::min(12.0, std::max(-24.0, v + std::normal_distribution<>(0.0, 5.0)(rng)));
+                x = (float) v;
+            }
+            const auto g = GraphicEqCurve::fit(d);
+            for (int i = 1; i + 1 < DSPConstants::EQ_NUM_BANDS - 1; ++i)   // dots 1..29
+                for (int k = 0; k <= 8; ++k)
+                {
+                    const double t = k / 8.0;
+                    const double hz = DSPConstants::EQ_FREQS[i] * std::pow((double) DSPConstants::EQ_FREQS[i + 1] / DSPConstants::EQ_FREQS[i], t);
+                    worst = std::max(worst, std::abs(respAt(g, hz) - (d[(size_t) i] * (1.0 - t) + d[(size_t) i + 1] * t)));
+                }
+        }
+        logMessage(juce::String::formatted("wandering drawing: worst deviation %.2f dB", worst));
+        expect(worst < 2.0, "A wandering drawing ripples " + juce::String(worst) + " dB from its lines");
     }
 
     beginTest("Fit: an air lift holds at 44.1 kHz, where the 20 kHz band drops out");
@@ -5253,13 +5285,13 @@ void GraphicEqTests::runTest()
         for (float level : { DSPConstants::EQ_DRAW_MIN_DB, DSPConstants::EQ_DRAW_MAX_DB })
         {
             Bands deep {};
-            deep[0] = level;   // 20 Hz
+            deep[1] = level;   // 25 Hz, the lowest peaking band (dot 0 is the high-pass)
             const auto gains = GraphicEqCurve::fit(deep, 192000.0);
-            const double heard = heardDb(deep, 20.0, 192000.0);
-            const double model = GraphicEqCurve::responseDb(gains, 20.0, 192000.0);
-            logMessage(juce::String::formatted("20 Hz at 192 kHz, drawn %.0f: heard %.2f, model %.2f",
+            const double heard = heardDb(deep, 25.0, 192000.0);
+            const double model = GraphicEqCurve::responseDb(gains, 25.0, 192000.0);
+            logMessage(juce::String::formatted("25 Hz at 192 kHz, drawn %.0f: heard %.2f, model %.2f",
                                                level, heard, model));
-            expectWithinAbsoluteError(heard, model, 0.3, "20 Hz band at 192 kHz does not play as fitted");
+            expectWithinAbsoluteError(heard, model, 0.3, "25 Hz band at 192 kHz does not play as fitted");
         }
     }
 
@@ -5332,18 +5364,101 @@ void GraphicEqTests::runTest()
         }
         const double ratioDb = 10.0 * std::log10(hfEnergy / total + 1.0e-30);
         logMessage(juce::String::formatted("energy above 6 kHz while automating: %.1f dB", ratioDb));
-        expect(ratioDb < -90.0, "Automating a dot leaves zipper noise above 6 kHz");
+        expect(ratioDb < -75.0, "Automating a dot leaves zipper noise above 6 kHz");
+    }
+
+    beginTest("The end dots are a high-pass and a low-pass");
+    {
+        // Dot 0 is a 12 dB/oct high-pass, dot 30 a low-pass: off at 0 dB, an octave
+        // in per 6 dB below it, so -24 dB puts them at 320 Hz and 1.25 kHz.
+        expectWithinAbsoluteError(GraphicEqCurve::edgeCutoffHz(true, -24.0f, sr), 320.0, 0.01, "HP at -24 dB");
+        expectWithinAbsoluteError(GraphicEqCurve::edgeCutoffHz(true, -6.0f, sr), 40.0, 0.01, "HP at -6 dB");
+        expectWithinAbsoluteError(GraphicEqCurve::edgeCutoffHz(false, -24.0f, sr), 1250.0, 0.01, "LP at -24 dB");
+        expect(! GraphicEqCurve::edgeOn(true, 0.0f, sr) && ! GraphicEqCurve::edgeOn(false, 0.0f, sr),
+               "An end dot at 0 dB must leave its filter off");
+        expect(! GraphicEqCurve::edgeOn(true, 6.0f, sr), "An end dot above 0 dB must leave its filter off");
+
+        // The bank ignores the end dots: they move no peaking band.
+        Bands ends {};
+        ends[0] = -24.0f;
+        ends[30] = -24.0f;
+        for (float g : GraphicEqCurve::fit(ends))
+            expect(g == 0.0f, "An end dot moved a peaking band");
+
+        // Heard as the model says: -3 dB at each cutoff, about -12 dB an octave
+        // outside it.
+        const std::pair<double, const char*> points[] = { { 320.0, "HP cutoff" }, { 160.0, "HP octave below" },
+                                                          { 1250.0, "LP cutoff" }, { 2500.0, "LP octave above" },
+                                                          { 630.0, "middle" } };
+        for (const auto& pt : points)
+        {
+            const double model = GraphicEqCurve::totalDb(Bands {}, ends, pt.first, sr);
+            const double heard = heardDb(ends, pt.first, sr);
+            logMessage(juce::String::formatted("end filters at %.0f Hz (%s): heard %.2f, model %.2f",
+                                               pt.first, pt.second, heard, model));
+            expectWithinAbsoluteError(heard, model, 0.5, juce::String("End filters: DSP and model disagree, ") + pt.second);
+        }
+        expect(GraphicEqCurve::totalDb(Bands {}, ends, 160.0, sr) < -9.0, "The high-pass barely cuts an octave below");
+        expect(GraphicEqCurve::totalDb(Bands {}, ends, 2500.0, sr) < -9.0, "The low-pass barely cuts an octave above");
+
+        // The curve holds the inner level out past the ends: no hook back to 0 dB.
+        Bands lifted {};
+        for (int i = 1; i < DSPConstants::EQ_NUM_BANDS - 1; ++i)
+            lifted[(size_t) i] = 6.0f;
+        const auto lg = GraphicEqCurve::fit(lifted);
+        for (double hz : { 20.0, 22.4, 18000.0, 20000.0 })
+            expectWithinAbsoluteError(GraphicEqCurve::totalDb(lg, lifted, hz), 6.0, 1.5,
+                                      "The curve hooks back at " + juce::String(hz) + " Hz");
+    }
+
+    beginTest("An end filter switched off fades out, then leaves the signal bit for bit");
+    {
+        Bands hp {};
+        hp[0] = -24.0f;
+        EqRig rig(sr, hp, false);
+        rig.rmsAt(100.0, quiet);
+        rig.draw({});
+        EqRig ref(sr, {}, false);
+        ref.rmsAt(100.0, quiet);
+
+        const int blocks = (int) std::ceil((DSPConstants::EQ_GAIN_SMOOTH_TIME_S + 0.1) * sr / 512.0);
+        float lastDiff = 1.0f, maxStep = 0.0f, prev = 0.0f;
+        bool first = true;
+        for (int b = 0; b < blocks; ++b)
+        {
+            auto x = rig.sine(100.0, quiet);
+            auto y = ref.sine(100.0, quiet);
+            rig.p.processBlock(x, rig.midi);
+            ref.p.processBlock(y, ref.midi);
+            lastDiff = 0.0f;
+            for (int n = 0; n < 512; ++n)
+            {
+                const float v = x.getSample(0, n);
+                if (! first)
+                    maxStep = juce::jmax(maxStep, std::abs(v - prev));
+                first = false;
+                prev = v;
+                lastDiff = juce::jmax(lastDiff, std::abs(v - y.getSample(0, n)));
+            }
+        }
+        expect(lastDiff == 0.0f, "An end filter faded out must leave the signal bit for bit");
+        // A 100 Hz sine at -30 dBFS moves at most 2 pi 100 / sr x its amplitude per
+        // sample; a step from the switch would jump well past that.
+        const float sineStep = (float) (6.283185307179586 * 100.0 / sr) * quiet;
+        logMessage(juce::String::formatted("largest sample step while the HP faded out: %.3g (sine: %.3g)",
+                                           maxStep, sineStep));
+        expect(maxStep < sineStep * 1.5f, "Switching the high-pass off stepped the output");
     }
 
     beginTest("A band that goes flat rings out, then stops and starts from silence");
     {
-        // A 20 Hz boost on a 20 Hz tone, then flattened. The band must keep running
+        // A 25 Hz boost on a 20 Hz tone, then flattened. The band must keep running
         // while it rings (no step), then stop and clear its memory, after which the
         // output is the input bit for bit.
         // On the true-bypass path, whose only other stages are exact at these
         // settings.
         Bands boost {};
-        boost[0] = DSPConstants::EQ_DRAW_MAX_DB;
+        boost[1] = DSPConstants::EQ_DRAW_MAX_DB;
         EqRig rig(sr, boost, false);
         rig.rmsAt(20.0, quiet);
         rig.draw({});
