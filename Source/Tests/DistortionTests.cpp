@@ -8828,7 +8828,7 @@ void NamProfileTests::runTest()
                "getInputGain reports the trim");
     }
 
-    beginTest("EXTREME pushes a profile's input 12 dB, as it does a clip type's drive");
+    beginTest("EXTREME pushes a profile's input 9 dB, as it does a clip type's drive");
     {
         // An identity model at a level well under the tamer and the soft clipper,
         // so the push is all that differs between the two renders.
@@ -8844,8 +8844,17 @@ void NamProfileTests::runTest()
             const auto out = renderThrough(processor, sineAt(1000.0, 48000.0, 0.5, 0.005f));
             return toneAmplitude(out, 9600, 9600, 1000.0, 48000.0);
         };
-        expectWithinAbsoluteError(toDb(render(true) / render(false)), 20.0 * std::log10(4.0), 0.1,
+        expectWithinAbsoluteError(toDb(render(true) / render(false)), (double) DSPConstants::EXTREME_DRIVE_DB, 0.1,
                                   "EXTREME on vs off");
+    }
+
+    beginTest("EXTREME's multiplier is its dB push");
+    {
+        expectWithinAbsoluteError(20.0 * std::log10((double) DSPConstants::EXTREME_DRIVE_MULT),
+                                  (double) DSPConstants::EXTREME_DRIVE_DB, 1.0e-4,
+                                  "EXTREME_DRIVE_MULT matches EXTREME_DRIVE_DB");
+        expectWithinAbsoluteError((double) DSPConstants::EXTREME_DRIVE_DB, 9.0, 1.0e-9,
+                                  "EXTREME pushes +9 dB");
     }
 
     beginTest("Sub Guard stays flat through its crossover with a profile loaded");

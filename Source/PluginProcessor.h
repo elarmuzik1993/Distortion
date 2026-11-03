@@ -79,7 +79,10 @@ namespace DSPConstants
     constexpr float PRE_COMP_ATTACK_TIME_S = 0.001f;         // 1ms attack (catches transients)
     constexpr float PRE_COMP_RELEASE_TIME_S = 0.050f;        // 50ms release (preserves punch)
     constexpr float PRE_COMP_THRESHOLD_DB = -12.0f;          // -12dB threshold
-    constexpr float EXTREME_DRIVE_MULT = 4.0f;               // EXTREME: drive x4 (+12 dB), clip types and profiles alike
+    // EXTREME: drive +9 dB (x2.818), clip types and profiles alike. Was +12 dB (x4)
+    // until a listening pass found it too hot.
+    constexpr float EXTREME_DRIVE_DB = 9.0f;
+    constexpr float EXTREME_DRIVE_MULT = 2.8183829f;         // 10^(EXTREME_DRIVE_DB / 20)
     constexpr float PRE_COMP_RATIO = 2.5f;                   // 2.5:1 ratio (light compression)
     constexpr float PRE_COMP_KNEE_DB = 6.0f;                 // 6dB soft knee
 
