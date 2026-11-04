@@ -20,7 +20,7 @@ quick=0
 bad() { echo "FAIL: $*" >&2; fail=1; }
 
 # Static checks, a few seconds, no network.
-for f in scripts/*.sh installer/macos/*.sh; do
+for f in scripts/*.sh installer/macos/*.sh installer/linux/*.sh; do
   [ -f "$f" ] && { bash -n "$f" 2>/dev/null || bad "$f has a shell syntax error"; }
 done
 py=""

@@ -54,8 +54,35 @@ stage_component() {
     local root="$WORK/root-$subdir"
     mkdir -p "$root"
     cp -R "$bundle" "$root/"
+    # Make the bundle NON-relocatable. pkgbuild's default lets Installer.app
+    # "relocate" an upgrade onto any other copy of the same bundle id it finds
+    # (a build folder, an old Downloads copy), updating that one and leaving
+    # the plugin missing from the system folder. With this plist the bundle is
+    # always written to --install-location, replacing the old version in place.
+    local plist="$WORK/component-$subdir.plist"
+    cat > "$plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+    <dict>
+        <key>RootRelativeBundlePath</key>
+        <string>$(basename "$bundle")</string>
+        <key>BundleIsRelocatable</key>
+        <false/>
+        <key>BundleIsVersionChecked</key>
+        <false/>
+        <key>BundleHasStrictIdentifier</key>
+        <true/>
+        <key>BundleOverwriteAction</key>
+        <string>upgrade</string>
+    </dict>
+</array>
+</plist>
+PLIST
     pkgbuild \
         --root "$root" \
+        --component-plist "$plist" \
         --identifier "$PKG_ID_BASE.$idsuffix" \
         --version "$VERSION" \
         --install-location "$location" \
