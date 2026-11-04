@@ -423,11 +423,17 @@ jobs:
         cp -R "artifact/Linux/Sledge Distortion.vst3" "artifact/Linux/$root/"
         cp LICENSE "artifact/Linux/$root/LICENSE.txt"
         cp THIRD-PARTY-NOTICES.md "artifact/Linux/$root/THIRD-PARTY-NOTICES.md"
+        # Install helpers (installer/linux): keep the executable bit.
+        install -m 755 installer/linux/install.sh installer/linux/uninstall.sh "artifact/Linux/$root/"
+        install -m 644 installer/linux/README.txt "artifact/Linux/$root/README.txt"
         tar -C artifact/Linux -czf "SledgeDistortion-$VER-Linux.tar.gz" "$root"
         # Enforced in CI, not on a checklist - see the Windows ZIP step.
         tar tzf "SledgeDistortion-$VER-Linux.tar.gz" > tarlist.txt
         for f in "$root/LICENSE.txt" \
                  "$root/THIRD-PARTY-NOTICES.md" \
+                 "$root/install.sh" \
+                 "$root/uninstall.sh" \
+                 "$root/README.txt" \
                  "$root/Sledge Distortion.vst3/Contents/Resources/LICENSE" \
                  "$root/Sledge Distortion.vst3/Contents/Resources/THIRD-PARTY-NOTICES.md"; do
           grep -qF -- "$f" tarlist.txt || { echo "::error::missing from Linux tarball: $f"; exit 1; }

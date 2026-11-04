@@ -255,7 +255,7 @@ Cracked-glass / diamond-plate artwork behind the editor. `Resources/ui_texture.p
 - `Source/Diagnostics/`: bug-reporting subsystem (`diag` namespace) — sink, store, composer, sender, transport. See "Diagnostics / Bug Reporting" above.
 - `Source/Tools/`: headless console tools — `RenderHarness` (audition; `--signal 808|bassnote`, `--shape <v>`, `--preset <name>`; the drive's noise is seeded, `--seed <n>` default 1, so renders repeat byte for byte), `SoakHarness` (stress), `UiSnapshot` (editor screenshots).
 - `Resources/`: embedded binary data — `ui_texture.png` / `ui_texture_extreme.png` (see "UI Texture" below), logo, Orbitron fonts.
-- `installer/`: Inno Setup script for the Windows installer.
+- `installer/`: Inno Setup script (Windows), `macos/` (pkg build), `linux/` (install.sh, uninstall.sh and README.txt shipped in the tarball).
 - `library/`: Shared utility code.
 - `scripts/`: Python fix scripts and build utilities.
 - `docs/`: Extra documentation, safety checklists, DAW QA matrix.

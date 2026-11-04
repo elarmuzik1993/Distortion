@@ -199,6 +199,65 @@ begin
   end;
 end;
 
+function GetPreviousVersion(): String;
+begin
+  Result := '';
+  if RegQueryStringValue(HKLM, '{#MyAppUninstallKey}', 'DisplayVersion', Result) then
+    Exit;
+  if RegQueryStringValue(HKCU, '{#MyAppUninstallKey}', 'DisplayVersion', Result) then
+    Exit;
+  Result := '';
+end;
+
+function InitializeSetup(): Boolean;
+var
+  Prev: String;
+  PrevPacked, NewPacked: Int64;
+begin
+  Result := True;
+  Prev := GetPreviousVersion();
+  if (Prev = '') or not StrToVersion(Prev, PrevPacked) or
+     not StrToVersion('{#MyAppVersion}', NewPacked) then
+    exit;
+
+  { A newer build is installed. Replacing it with this older one is allowed
+    (someone may be rolling back on purpose) but never silent. A silent run
+    (/SILENT, scripted installs) keeps the default and does not downgrade. }
+  if ComparePackedVersion(PrevPacked, NewPacked) > 0 then
+    Result := SuppressibleMsgBox(
+      'A newer version of Sledge Distortion (' + Prev + ') is already installed.'#13#10
+        + 'This installer is version {#MyAppVersion}.'#13#10#13#10
+        + 'Install the older version over it?',
+      mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDNO) = IDYES;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  DataDir: String;
+begin
+  if CurUninstallStep <> usPostUninstall then
+    exit;
+
+  { Ask only on an interactive uninstall. Setup's own upgrade path runs this
+    uninstaller with /VERYSILENT, and an upgrade must never touch user data. }
+  if UninstallSilent() then
+    exit;
+
+  DataDir := ExpandConstant('{userappdata}\Monolit Beatz\Sledge Distortion');
+  if not DirExists(DataDir) then
+    exit;
+
+  if MsgBox(
+       'Also delete your Sledge Distortion presets, settings and imported NAM profiles?'#13#10#13#10
+         + DataDir + #13#10#13#10
+         + 'Choose No to keep them (recommended if you may reinstall).',
+       mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
+  begin
+    DelTree(DataDir, True, True, True);
+    RemoveDir(ExpandConstant('{userappdata}\Monolit Beatz'));  { only if now empty }
+  end;
+end;
+
 procedure InitializeWizard();
 begin
   PreviousUninstallerPath := GetPreviousUninstallerPath();

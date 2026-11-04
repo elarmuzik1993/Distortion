@@ -90,16 +90,18 @@ natively on both Apple Silicon and Intel.
 ## Linux
 
 1. Download `SledgeDistortion-<version>-Linux.tar.gz`.
-2. Unpack it, then move the plugin into your VST3 folder:
+2. Unpack it and run the installer script:
    ```bash
-   mkdir -p ~/.vst3
    tar -xzf SledgeDistortion-*-Linux.tar.gz
-   mv SledgeDistortion-*-Linux/"Sledge Distortion.vst3" ~/.vst3/
+   cd SledgeDistortion-*-Linux
+   ./install.sh                # for you:      ~/.vst3
+   sudo ./install.sh --system  # for everyone: /usr/lib/vst3
    ```
-   The archive unpacks into a single `SledgeDistortion-<version>-Linux/` folder,
-   so extract it first and move the bundle across — extracting straight into
-   `~/.vst3` would bury the plugin a level too deep for some hosts and leave the
-   licence files loose in your plugin folder.
+   `./install.sh --dir PATH` installs into any other folder your host scans.
+   Running it again upgrades in place. Prefer to do it by hand? Copy
+   `Sledge Distortion.vst3` into `~/.vst3`; extract the archive first rather than
+   straight into `~/.vst3`, which would bury the plugin a level too deep for some
+   hosts and leave the licence files loose in your plugin folder.
 3. Rescan plugins in your DAW. Done.
 
 The folder you unpacked also holds `LICENSE.txt` and `THIRD-PARTY-NOTICES.md`.
@@ -141,7 +143,10 @@ it against the matching line:
 
 Delete `Sledge Distortion.vst3` (and on macOS the `.component`) from the folders
 listed above. Windows installer users can also uninstall from
-**Settings → Apps**.
+**Settings → Apps**; it asks whether to delete your presets, settings and NAM
+profiles too (default: keep). On Linux, run `./uninstall.sh` from the unpacked
+folder (add `--system` or `--dir PATH` to match how you installed, and `--purge`
+to delete presets, settings and profiles as well).
 
 ---
 
