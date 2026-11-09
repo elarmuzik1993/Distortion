@@ -373,6 +373,20 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addAndMakeVisible(profileNextButton);
     profilePrevButton.onClick = [this]() { stepProfile(-1); };
     profileNextButton.onClick = [this]() { stepProfile(1); };
+    // CLIP / NAM: flips which engine plays. With no profile to play, it opens the
+    // profile menu so one can be loaded.
+    addAndMakeVisible(profileEngineSwitch);
+    profileEngineSwitch.onClick = [this]()
+    {
+        const auto status = audioProcessor.getProfileStatus();
+        if (status.name.isEmpty() && ! status.loading)
+        {
+            showProfileMenu();
+            return;
+        }
+        audioProcessor.setProfileEnabled(! audioProcessor.isProfileEnabled());
+        updateProfileIndicator();
+    };
 
     // Setup preset selector
     addAndMakeVisible(presetSelector);
@@ -1315,7 +1329,7 @@ void PluginEditor::resized()
 
     // Clip-type column: clip type, EXTREME, BOOST and PROFILE as four matching
     // pills the full column wide, the stack on the knobs either side (3 px below
-    // their centre, set by eye). The label slot below stays empty. The profile
+    // their centre, set by eye). The CLIP / NAM switch takes the label slot. The profile
     // arrows sit over PROFILE's ends, not in the gaps beside it, where the left
     // one ran into the Distortion Amount label.
     const int pillH = S(14);
@@ -1328,6 +1342,7 @@ void PluginEditor::resized()
         pillY += pillH + pillGap;
     }
     clipTypeLabel.setBounds(currentX, rowY + knobSize + lockInset, clipTypeColumnWidth, labelHeight);
+    profileEngineSwitch.setBounds(clipTypeLabel.getBounds());
     clipTypeLock.setBounds(clipTypeComboBox.getRight() - S(4) - S(12),
                            clipTypeComboBox.getY() + (pillH - S(12)) / 2, S(12), S(12));
     const int arrowW = ClipColumnLookAndFeel::endZoneWidth(pillH);
@@ -1819,25 +1834,31 @@ void PluginEditor::updateProfileIndicator()
 {
     const auto status = audioProcessor.getProfileStatus();
     const bool loaded = status.name.isNotEmpty();
+    const bool available = loaded || status.loading;
+    // The CLIP / NAM switch: a loaded profile plays only while it is on NAM.
+    const bool plays = loaded && audioProcessor.isProfileEnabled();
+    const bool switchOnNam = available && audioProcessor.isProfileEnabled();
     const bool needsAttention = status.error.isNotEmpty();
 
-    const juce::String state = juce::String(int(loaded)) + "|" + juce::String(int(needsAttention));
+    const juce::String state = juce::String(int(plays)) + "|" + juce::String(int(needsAttention))
+                             + "|" + juce::String(int(switchOnNam)) + "|" + juce::String(int(available));
     if (state == shownProfileState)
         return;
     shownProfileState = state;
 
-    // The pill always reads PROFILE and lights up once a profile has actually
-    // loaded; the card names it.
+    // The pill always reads PROFILE and lights up while a loaded profile is the
+    // one playing; the card names it.
     const auto accent = needsAttention ? juce::Colour(0xFFFFAA00) : juce::Colour(0xFFFF0044);
     profileButton.setColour(juce::TextButton::buttonOnColourId, accent);
     profileButton.setColour(juce::TextButton::textColourOffId, accent);
-    profileButton.setToggleState(loaded, juce::dontSendNotification);
+    profileButton.setToggleState(plays, juce::dontSendNotification);
     profilePrevButton.repaint();   // the arrows take the pill's ink
     profileNextButton.repaint();
+    profileEngineSwitch.setState(switchOnNam, available, accent);
 
     // The profile replaces the clip type, so the clip-type controls step back.
-    clipTypeComboBox.setEnabled(! loaded);
-    clipTypeComboBox.setAlpha(loaded ? 0.4f : 1.0f);
+    clipTypeComboBox.setEnabled(! plays);
+    clipTypeComboBox.setAlpha(plays ? 0.4f : 1.0f);
 }
 
 void PluginEditor::updateMonoIndicator()

@@ -17,6 +17,7 @@
       DistortionUiSnapshot --signal --out shots   # scope shows a waveform
       DistortionUiSnapshot --profile drive.nam    # a NAM profile loaded
       DistortionUiSnapshot --profile drive.nam --profile-card   # the browser's name card
+      DistortionUiSnapshot --profile drive.nam --engine-clip    # profile held, switch on CLIP
 
   ==============================================================================
 */
@@ -209,6 +210,7 @@ int main(int argc, char* argv[])
                 "  --legacy         Legacy Filter mode, Low Pass at 800 Hz (the knob slot shows the filter)\n"
                 "  --profile <f>    load a NAM profile (copied into a scratch library)\n"
                 "  --profile-card   show the profile browser's name card\n"
+                "  --engine-clip    with --profile: the CLIP / NAM switch on CLIP (profile parked)\n"
                 "  --settings       open the Settings panel\n"
                 "  --xy-touch       XY Morph pad held (puck, crosshair, readout)\n"
                 "  --drop-hint      a .nam file dragged over the window\n"
@@ -223,7 +225,7 @@ int main(int argc, char* argv[])
     bool extreme = false;
     bool signal = false;
     float shapeValue = 0.0f;
-    bool hasShape = false, legacy = false, profileCard = false, settings = false, xyTouch = false, dropHint = false, eq = false;
+    bool hasShape = false, legacy = false, profileCard = false, engineClip = false, settings = false, xyTouch = false, dropHint = false, eq = false;
     juce::String profilePath;
     for (int i = 1; i < argc; ++i)
     {
@@ -237,6 +239,7 @@ int main(int argc, char* argv[])
         else if (t == "--shape" && i + 1 < argc) { shapeValue = juce::String(argv[++i]).getFloatValue(); hasShape = true; }
         else if (t == "--legacy")                legacy    = true;
         else if (t == "--profile-card")          profileCard = true;
+        else if (t == "--engine-clip")           engineClip = true;
         else if (t == "--settings")              settings  = true;
         else if (t == "--xy-touch")              xyTouch   = true;
         else if (t == "--drop-hint")             dropHint  = true;
@@ -299,6 +302,8 @@ int main(int argc, char* argv[])
         std::cout << "Profile failed to load: " << proc.getProfileStatus().error << "\n";
         return 1;
     }
+    if (engineClip)
+        proc.setProfileEnabled(false);
 
     const int scales[] = { 70, 80, 90, 100 };
     bool allOk = true;
@@ -327,6 +332,8 @@ int main(int argc, char* argv[])
             name += "-legacy";
         if (profilePath.isNotEmpty())
             name += "-profile";
+        if (engineClip)
+            name += "-clip";
         if (profileCard)
             name += "-card";
         if (settings)

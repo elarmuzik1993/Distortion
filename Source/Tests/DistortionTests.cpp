@@ -7996,6 +7996,132 @@ void NamProfileTests::runTest()
         expect(processor.retiredProfile.load() == nullptr, "The replaced profile was freed");
     }
 
+    beginTest("The CLIP / NAM switch parks the profile and brings it back without reloading");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        expect(processor.loadProfileBlocking(namTestModel("wavenet.nam")), "Loaded");
+        expect(settle(processor), "Into profile mode");
+        auto* held = processor.activeProfile;
+        const int latencyWithProfile = processor.getLatencySamples();
+        const int reads = processor.profileFilesRead.load();
+
+        processor.setProfileEnabled(false);
+        expect(! processor.isProfileEnabled(), "The switch reads CLIP");
+        expect(processor.duckRequested.load(), "Leaving profile mode asks for a duck");
+        expect(settle(processor), "Switched to the clip type");
+        expect(! processor.profileMode && processor.activeProfile == nullptr, "No profile runs");
+        expect(processor.parkedProfile == held, "The profile is held, not freed");
+        expect(processor.oversamplingFactor > 1, "The user's oversampling setting is back");
+        expect(processor.isProfileLoaded(), "Still reported loaded, so the switch can go back");
+        expectEquals(processor.getLatencySamples(), latencyWithProfile, "The reported latency does not move");
+        juce::AudioBuffer<float> clipOut;
+        expect(processSine(processor, 8, &clipOut) > 1.0e-4f, "The clip type plays");
+        expect(! containsInvalidSamples(clipOut), "Clip output is finite");
+
+        processor.setProfileEnabled(true);
+        expect(settle(processor), "Back to the profile");
+        expect(processor.profileMode && processor.activeProfile == held, "The same profile runs again");
+        expect(processor.parkedProfile == nullptr, "Nothing parked");
+        expectEquals(static_cast<int>(processor.oversamplingFactor), 1);
+        expectEquals(processor.profileFilesRead.load(), reads, "The file is not read again");
+        expectEquals(processor.getLatencySamples(), latencyWithProfile, "The reported latency does not move");
+        juce::AudioBuffer<float> namOut;
+        expect(processSine(processor, 8, &namOut) > 1.0e-4f, "The profile plays");
+        expect(! containsInvalidSamples(namOut), "Profile output is finite");
+
+        // Flipping again before the first flip has gone through still ends right.
+        processor.setProfileEnabled(false);
+        processor.setProfileEnabled(true);
+        processor.setProfileEnabled(false);
+        expect(settle(processor), "Rapid flips settle");
+        expect(! processor.profileMode && processor.parkedProfile == held, "Ends parked, as last asked");
+    }
+
+    beginTest("A profile parked across a host rate change comes back prepared for the new rate");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor, 48000.0);
+        processor.loadProfileBlocking(namTestModel("wavenet.nam"));
+        expect(settle(processor), "Loaded");
+        processor.setProfileEnabled(false);
+        expect(settle(processor), "Parked");
+
+        prepareForProfileTest(processor, 44100.0);   // the host moves while it is parked
+        expect(processor.parkedProfile != nullptr, "Still held after the host prepared again");
+
+        processor.setProfileEnabled(true);
+        expect(settle(processor), "Back to the profile");
+        expect(processor.profileMode && processor.activeProfile != nullptr, "The profile runs");
+        expectWithinAbsoluteError(processor.activeProfile->getPreparedSampleRate(), 44100.0, 0.5,
+                                  "Re-prepared for the host's new rate");
+        juce::AudioBuffer<float> out;
+        expect(processSine(processor, 8, &out) > 1.0e-4f, "It plays");
+        expect(! containsInvalidSamples(out), "Output is finite");
+    }
+
+    beginTest("Loading or clearing turns the switch back to NAM");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        processor.loadProfileBlocking(namTestModel("wavenet.nam"));
+        settle(processor);
+        processor.setProfileEnabled(false);
+        settle(processor);
+
+        expect(processor.loadProfileBlocking(namTestModel("wavenet.nam")), "Loaded again");
+        expect(processor.isProfileEnabled(), "A load turns the switch on");
+        expect(processor.parkedProfile == nullptr, "The parked profile is superseded");
+        expect(settle(processor), "Installed");
+        expect(processor.profileMode, "The new load plays");
+
+        processor.setProfileEnabled(false);
+        settle(processor);
+        processor.clearProfile();
+        expect(processor.isProfileEnabled(), "A clear leaves the switch on NAM for the next load");
+        expect(processor.parkedProfile == nullptr, "A clear frees the parked profile");
+        expect(settle(processor), "Cleared");
+        expect(! processor.isProfileLoaded() && ! processor.profileMode, "Nothing loaded");
+    }
+
+    beginTest("A session remembers the switch, outside the parameter tree");
+    {
+        juce::MemoryBlock off, on;
+        {
+            PluginProcessor processor;
+            prepareForProfileTest(processor);
+            processor.loadProfileBlocking(namTestModel("wavenet.nam"));
+            settle(processor);
+            processor.getStateInformation(on);
+            processor.setProfileEnabled(false);
+            settle(processor);
+            processor.getStateInformation(off);
+        }
+        const auto attributeIn = [](const juce::MemoryBlock& block)
+        {
+            auto xml = juce::AudioProcessor::getXmlFromBinary(block.getData(), static_cast<int>(block.getSize()));
+            return xml != nullptr && xml->hasAttribute(PluginProcessor::profileEnabledAttribute);
+        };
+        expect(! attributeIn(on), "Left out while on, so untouched sessions save as before");
+        expect(attributeIn(off), "Saved while off");
+
+        PluginProcessor restored;
+        prepareForProfileTest(restored);
+        restored.setStateInformation(off.getData(), static_cast<int>(off.getSize()));
+        expect(waitForProfileLoad(restored), "Restore finished loading");
+        expect(settle(restored), "Installed");
+        expect(! restored.isProfileEnabled(), "Restored on CLIP");
+        expect(restored.isProfileLoaded() && restored.parkedProfile != nullptr, "The profile is held for the switch");
+        expect(! restored.profileMode, "The clip type plays");
+        expect(! restored.parameters.state.hasProperty(PluginProcessor::profileEnabledAttribute),
+               "The switch stays out of the parameter tree, so presets never move it");
+
+        restored.setStateInformation(on.getData(), static_cast<int>(on.getSize()));
+        expect(restored.isProfileEnabled(), "A session saved on NAM turns it back on");
+        expect(settle(restored), "Installed");
+        expect(restored.profileMode, "The profile plays");
+    }
+
    #if defined (DISTORTION_RT_GUARD) && DISTORTION_RT_GUARD
     beginTest("No allocation while a profile runs or while one is swapped in");
     {

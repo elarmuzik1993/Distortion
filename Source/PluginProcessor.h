@@ -342,6 +342,16 @@ public:
     // tests. Returns false and records the error on failure.
     bool loadProfileBlocking(const juce::File& file, const juce::String& fingerprint = {});
     void clearProfile();
+    // The CLIP / NAM switch: whether a loaded profile plays or the clip type does.
+    // Off, the profile is parked (held, never run, so it costs no CPU) and the
+    // chain goes back to the clip type and the user's oversampling through a duck.
+    // On, the parked profile is re-prepared on the loader thread, so it starts
+    // from rest rather than replaying the state it held, then installed with a
+    // duck. Any load turns it back on; a clear too. Saved with the session
+    // (namProfileEnabled), never in the parameter tree, so presets don't move it.
+    // Message thread or a host thread.
+    void setProfileEnabled(bool shouldPlay);
+    bool isProfileEnabled() const noexcept { return profileEnabled.load(); }
     ProfileStatus getProfileStatus() const;
     bool isProfileLoaded() const;
     // True when no profile switch is in flight: nothing staged or pending, no
@@ -351,6 +361,7 @@ public:
 
     static constexpr const char* profilePathAttribute = "namProfilePath";
     static constexpr const char* profileFingerprintAttribute = "namProfileFingerprint";
+    static constexpr const char* profileEnabledAttribute = "namProfileEnabled";
 
     // The library the editor browses and imports into, and where a session whose
     // profile file is missing looks for it by content. ProfileLibrary::defaultRoot()
@@ -795,6 +806,9 @@ private:
     std::atomic<bool> profileModeInstalled { false };   // profileMode, for the message thread
     std::atomic<int> installedIslandDelay { 0 };        // the active profile's island delay, likewise
     std::atomic<bool> clearRequested { false };         // the next rebuild installs no profile
+    std::atomic<bool> profileEnabled { true };          // the CLIP / NAM switch; written under profileStatusLock
+    NamProfile* parkedProfile = nullptr;                // switched off: held, never run; under profileStatusLock
+    std::atomic<int> parkedIslandDelay { 0 };           // its island delay, kept in the reported latency
     std::atomic<bool> pendingNeedsDuck { false };       // the audio thread couldn't blend into pendingProfile
     std::atomic<int> profileRequestId { 0 };            // newer loads and clears supersede older ones
     std::atomic<double> profileHostSampleRate { 0.0 };
