@@ -66,6 +66,12 @@ public:
     // Whether a dragged path could hold a profile: a .nam file or a folder.
     static bool mayHoldProfiles(const juce::String& path);
 
+    // What the CLIP / NAM switch loads when it goes to NAM with nothing loaded:
+    // the profile this instance last cleared, else the last one chosen in an
+    // editor (settings' lastProfile), whichever is first an existing file. An
+    // invalid File when neither is, and the switch opens the profile menu instead.
+    static juce::File profileToResume(const juce::String& lastCleared, const juce::String& lastChosen);
+
     // Identifies a profile's content independently of where it lives: its size
     // and a 64-bit FNV-1a hash of its bytes, "<size>-<hash>". Empty if unreadable.
     static juce::String fingerprint(const juce::File& file);

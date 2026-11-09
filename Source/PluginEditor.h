@@ -2712,6 +2712,65 @@ private:
 };
 
 //==============================================================================
+// The CLIP / NAM switch in the empty label slot under the clip column: which
+// engine plays, the clip type or the loaded profile. Two halves in one track,
+// the playing one filled. With no profile loaded NAM is greyed and a click opens
+// the profile menu instead (the editor decides; this only draws).
+class ProfileEngineSwitch : public juce::Button
+{
+public:
+    ProfileEngineSwitch() : juce::Button("Engine") { setTooltip("CLIP / NAM: play the clip type or the loaded profile"); }
+
+    // nam: the profile plays. available: a profile is loaded (or loading).
+    void setState(bool nam, bool available, juce::Colour accent)
+    {
+        if (nam == namPlays && available == profileAvailable && accent == accentColour)
+            return;
+        namPlays = nam;
+        profileAvailable = available;
+        accentColour = accent;
+        repaint();
+    }
+
+    void paintButton(juce::Graphics& g, bool highlighted, bool down) override
+    {
+        const auto b = getLocalBounds().toFloat();
+        const float h = juce::jmin(b.getHeight(), juce::jmax(9.0f, b.getWidth() * 0.26f));
+        const auto track = b.withSizeKeepingCentre(b.getWidth(), h).reduced(0.5f);
+        const float radius = track.getHeight() * 0.5f;
+
+        g.setColour(juce::Colour(0xFF1A1A1A));
+        g.fillRoundedRectangle(track, radius);
+
+        const auto left = track.withWidth(track.getWidth() * 0.5f);
+        const auto right = track.withLeft(left.getRight());
+        const auto thumb = (namPlays ? right : left).reduced(1.0f);
+        g.setColour(accentColour.withMultipliedBrightness(down ? 1.2f : (highlighted ? 1.1f : 1.0f)));
+        g.fillRoundedRectangle(thumb, thumb.getHeight() * 0.5f);
+
+        g.setColour(accentColour.withAlpha(highlighted || down ? 1.0f : 0.8f));
+        g.drawRoundedRectangle(track, radius, 1.0f);
+
+        g.setFont(juce::Font(track.getHeight() * 0.62f, juce::Font::bold));
+        const auto ink = [&](bool playing, bool usable)
+        {
+            if (playing)
+                return juce::Colours::white;
+            return accentColour.withAlpha(usable ? 0.75f : 0.3f);
+        };
+        g.setColour(ink(! namPlays, true));
+        g.drawFittedText("CLIP", left.toNearestInt(), juce::Justification::centred, 1, 0.7f);
+        g.setColour(ink(namPlays, profileAvailable));
+        g.drawFittedText("NAM", right.toNearestInt(), juce::Justification::centred, 1, 0.7f);
+    }
+
+private:
+    bool namPlays = false;
+    bool profileAvailable = false;
+    juce::Colour accentColour { 0xFFFF0044 };
+};
+
+//==============================================================================
 // The card that names the profile while you step through the library: over the
 // scope when it is showing, otherwise a bubble above the PROFILE pill. Purely a
 // display; it never takes the mouse, so the XY pad and the EQ keep working
@@ -3004,12 +3063,13 @@ private:
 
     // NAM profile (prototype). The last pill in the clip-type column; opens a menu
     // to load, browse or clear a .nam profile, which replaces the clip type.
-    // Always reads PROFILE: lit while one is loaded, amber when it needs attention.
+    // Always reads PROFILE: lit while a loaded one plays, amber when it needs attention.
     // The arrows over its two ends step through the profile library, and the card
     // names what each step loads.
     juce::TextButton profileButton;
     ProfileArrowButton profilePrevButton { false, profileButton };
     ProfileArrowButton profileNextButton { true, profileButton };
+    ProfileEngineSwitch profileEngineSwitch;   // CLIP / NAM, under the column
     ProfileCard profileCard;
     juce::File profileCardFile;       // the profile the card names; its status line follows that load
     juce::File profileImportFolder;   // where "Load profile..." opens: the folder last imported from

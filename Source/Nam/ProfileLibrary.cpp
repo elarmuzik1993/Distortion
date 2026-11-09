@@ -151,6 +151,14 @@ bool ProfileLibrary::mayHoldProfiles(const juce::String& path)
     return item.isDirectory() || item.hasFileExtension("nam");
 }
 
+juce::File ProfileLibrary::profileToResume(const juce::String& lastCleared, const juce::String& lastChosen)
+{
+    for (const auto& path : { lastCleared, lastChosen })
+        if (juce::File::isAbsolutePath(path) && juce::File(path).existsAsFile())
+            return juce::File(path);
+    return {};
+}
+
 juce::String ProfileLibrary::fingerprint(const juce::File& file)
 {
     juce::FileInputStream in(file);

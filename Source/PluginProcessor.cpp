@@ -243,6 +243,8 @@ PluginProcessor::~PluginProcessor()
     incomingProfile = nullptr;
     delete activeProfile;
     activeProfile = nullptr;
+    delete parkedProfile;
+    parkedProfile = nullptr;
 }
 
 //==============================================================================
@@ -1237,7 +1239,9 @@ void PluginProcessor::updateLatencyPlan(double sampleRate, int hostBlockSize)
     const int pathLatency = profileMode ? islandDelay : builtInLatency;
     // A model trained at another rate can need more than the reserve; the host then
     // sees the larger figure while that profile is loaded.
-    reservedLatency = juce::jmax(reserve, pathLatency);
+    // A parked profile (the switch on CLIP) keeps its figure, so flipping the
+    // switch never moves the latency the host compensates for.
+    reservedLatency = juce::jmax(reserve, pathLatency, parkedIslandDelay.load(std::memory_order_acquire));
     outputPadDelay = reservedLatency - pathLatency;
 
     juce::dsp::ProcessSpec baseSpec;
@@ -2125,6 +2129,9 @@ void PluginProcessor::getStateInformation(juce::MemoryBlock& destData)
     state.setProperty(profilePathAttribute, status.path, nullptr);
     if (status.path.isNotEmpty() && status.fingerprint.isNotEmpty())
         state.setProperty(profileFingerprintAttribute, status.fingerprint, nullptr);
+    // Written only when off, so a session that never touched the switch is unchanged.
+    if (status.path.isNotEmpty() && ! isProfileEnabled())
+        state.setProperty(profileEnabledAttribute, false, nullptr);
     std::unique_ptr<juce::XmlElement> xml(state.createXml());
     copyXmlToBinary(*xml, destData);
 }
@@ -2141,10 +2148,12 @@ void PluginProcessor::setStateInformation(const void* data, int sizeInBytes)
         profileIntentKnown.store(true);   // the session decides, not the startup profile
         const juce::String profilePath = xmlState->getStringAttribute(profilePathAttribute);
         const juce::String fingerprint = xmlState->getStringAttribute(profileFingerprintAttribute);
+        const bool profileShouldPlay = xmlState->getBoolAttribute(profileEnabledAttribute, true);
         // The path belongs to the session, not the parameters: left in the tree, it
         // would be copied into every user preset saved from here on.
         parameters.state.removeProperty(profilePathAttribute, nullptr);
         parameters.state.removeProperty(profileFingerprintAttribute, nullptr);
+        parameters.state.removeProperty(profileEnabledAttribute, nullptr);
         const auto current = getProfileStatus();
         // Loaded or on its way: a host restoring the same state twice keeps it. A
         // path whose last load failed is tried again, since the file may be back.
@@ -2165,6 +2174,8 @@ void PluginProcessor::setStateInformation(const void* data, int sizeInBytes)
                 clearProfile();
             loadProfileAsync(juce::File(profilePath), fingerprint);
         }
+        // After the load above, which turns the switch on: the session decides.
+        setProfileEnabled(profileShouldPlay);
 
         // Signal audio thread to reset state (thread-safe handoff)
         stateNeedsReset.store(true, std::memory_order_release);
@@ -2282,6 +2293,11 @@ int PluginProcessor::beginProfileRequest(const juce::File& file, const juce::Str
     profileStatus.fingerprint = fingerprint;   // kept for the next save if the load fails
     profileStatus.error = {};
     profileStatus.loading = true;
+    // Choosing a profile means hearing it: the switch goes to NAM, and a parked
+    // one is superseded.
+    profileEnabled.store(true);
+    delete parkedProfile;
+    parkedProfile = nullptr;
     return ++profileRequestId;
 }
 
@@ -2383,17 +2399,79 @@ void PluginProcessor::clearProfile()
     profileIntentKnown.store(true);
     const juce::ScopedLock sl(profileStatusLock);
     ++profileRequestId;   // an in-flight load must not stage after this
+    if (profileStatus.path.isNotEmpty())
+        lastClearedProfilePath = profileStatus.path;   // the switch can bring it back
     profileStatus = {};
     delete stagedProfile.exchange(nullptr, std::memory_order_acq_rel);
     delete pendingProfile.exchange(nullptr, std::memory_order_acq_rel);
+    // Nothing loaded: the switch rests on NAM, so the next load plays.
+    profileEnabled.store(true);
+    const bool hadParked = parkedProfile != nullptr;
+    delete parkedProfile;
+    parkedProfile = nullptr;
 
     // Leaving profile mode rebuilds the oversampler, so it goes through a duck.
-    // With no profile installed there is nothing left to undo.
-    if (profileModeInstalled.load(std::memory_order_acquire))
+    // A parked profile needs the rebuild too, to drop its share of the latency.
+    // With no profile installed or parked there is nothing left to undo.
+    if (profileModeInstalled.load(std::memory_order_acquire) || hadParked)
     {
         clearRequested.store(true, std::memory_order_release);
         requestDuck();
     }
+}
+
+juce::String PluginProcessor::getLastClearedProfile() const
+{
+    const juce::ScopedLock sl(profileStatusLock);
+    return lastClearedProfilePath;
+}
+
+void PluginProcessor::setProfileEnabled(bool shouldPlay)
+{
+    std::unique_ptr<NamProfile> wake;
+    {
+        const juce::ScopedLock sl(profileStatusLock);
+        if (profileEnabled.exchange(shouldPlay) == shouldPlay)
+            return;
+        if (shouldPlay)
+        {
+            wake.reset(parkedProfile);
+            parkedProfile = nullptr;
+        }
+    }
+
+    if (! shouldPlay)
+    {
+        // The next rebuild parks it. A load still on its way is parked when it lands.
+        if (profileModeInstalled.load(std::memory_order_acquire))
+            requestDuck();
+        return;
+    }
+
+    // Nothing parked: a load on its way, or none at all, plays as it lands.
+    if (wake == nullptr)
+        return;
+    // prepare() resets and prewarms the models, so what they held when the profile
+    // was parked is never heard. That is too long for the message thread, so it
+    // runs on the loader, as refreshStagedProfile does; restageProfile then drops
+    // it if a load or a clear came in meanwhile. parkedIslandDelay keeps its value
+    // until the rebuild installs it, so the reported latency never dips between.
+    const double rate = profileHostSampleRate.load();
+    const int block = profileHostBlockSize.load();
+    if (rate <= 0.0 || block <= 0)
+    {
+        // Not prepared yet: prepareToPlay brings it up with the rest.
+        restageProfile(wake.release(), rate, true);
+        return;
+    }
+    ++stagedRefreshesInFlight;
+    auto owned = std::make_shared<std::unique_ptr<NamProfile>>(std::move(wake));
+    getProfileLoader().addJob([this, owned, rate, block]
+    {
+        const bool usable = (*owned)->prepare(rate, block);
+        restageProfile(owned->release(), rate, usable);
+        --stagedRefreshesInFlight;
+    });
 }
 
 PluginProcessor::ProfileStatus PluginProcessor::getProfileStatus() const
@@ -2537,7 +2615,7 @@ void PluginProcessor::routeStagedProfile()
         return;
 
     const bool ready = isPreparedForHost(*staged);
-    if (ready && profileModeInstalled.load(std::memory_order_acquire)
+    if (ready && profileModeInstalled.load(std::memory_order_acquire) && profileEnabled.load()
         && staged->getLatencySamples() == installedIslandDelay.load(std::memory_order_acquire))
     {
         // Same island delay: the audio thread blends into it. A target it hasn't
@@ -2696,6 +2774,19 @@ void PluginProcessor::installRequestedProfile(std::vector<NamProfile*>& toFree)
             toFree.push_back(activeProfile);
         activeProfile = next;
     }
+
+    // The switch on CLIP: the profile is parked, out of the audio thread's reach,
+    // and the chain goes back to the clip type.
+    if (! profileEnabled.load() && activeProfile != nullptr)
+    {
+        if (parkedProfile != nullptr)
+            toFree.push_back(parkedProfile);
+        parkedProfile = activeProfile;
+        activeProfile = nullptr;
+    }
+    parkedIslandDelay.store(parkedProfile != nullptr && parkedProfile->isPrepared()
+                                ? parkedProfile->getLatencySamples() : 0,
+                            std::memory_order_release);
 
     profileMode = activeProfile != nullptr && activeProfile->isPrepared()
                && activeProfile->getNumChannels() > 0;
