@@ -352,6 +352,9 @@ public:
     // Message thread or a host thread.
     void setProfileEnabled(bool shouldPlay);
     bool isProfileEnabled() const noexcept { return profileEnabled.load(); }
+    // The path of the profile the last clear dropped (empty if none), so the
+    // switch can bring it back: see ProfileLibrary::profileToResume.
+    juce::String getLastClearedProfile() const;
     ProfileStatus getProfileStatus() const;
     bool isProfileLoaded() const;
     // True when no profile switch is in flight: nothing staged or pending, no
@@ -835,6 +838,7 @@ private:
     float profileRightStep = 1.0f;       // weight change per sample, set in prepareToPlay
     mutable juce::CriticalSection profileStatusLock;
     ProfileStatus profileStatus;
+    juce::String lastClearedProfilePath;                // under profileStatusLock
     juce::File profileLibraryRoot;                      // under profileStatusLock
     juce::File startupProfile;                          // set before the first prepareToPlay
     std::atomic<bool> profileIntentKnown { false };     // a session, load or clear came first

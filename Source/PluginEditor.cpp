@@ -373,15 +373,23 @@ PluginEditor::PluginEditor(PluginProcessor& p)
     addAndMakeVisible(profileNextButton);
     profilePrevButton.onClick = [this]() { stepProfile(-1); };
     profileNextButton.onClick = [this]() { stepProfile(1); };
-    // CLIP / NAM: flips which engine plays. With no profile to play, it opens the
-    // profile menu so one can be loaded.
+    // CLIP / NAM: flips which engine plays. With nothing loaded, NAM brings back
+    // the last profile (the one last cleared here, else the last one chosen in an
+    // editor); with neither on disk, it opens the profile menu.
     addAndMakeVisible(profileEngineSwitch);
     profileEngineSwitch.onClick = [this]()
     {
         const auto status = audioProcessor.getProfileStatus();
         if (status.name.isEmpty() && ! status.loading)
         {
-            showProfileMenu();
+            juce::String lastChosen;
+            if (auto xml = juce::parseXML(getSettingsFile()))
+                lastChosen = xml->getStringAttribute("lastProfile");
+            const auto resume = ProfileLibrary::profileToResume(audioProcessor.getLastClearedProfile(), lastChosen);
+            if (resume.existsAsFile())
+                loadLibraryProfile(resume, 0);
+            else
+                showProfileMenu();
             return;
         }
         audioProcessor.setProfileEnabled(! audioProcessor.isProfileEnabled());

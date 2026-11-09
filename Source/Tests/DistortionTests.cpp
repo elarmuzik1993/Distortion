@@ -8084,6 +8084,21 @@ void NamProfileTests::runTest()
         expect(! processor.isProfileLoaded() && ! processor.profileMode, "Nothing loaded");
     }
 
+    beginTest("A clear remembers the profile it dropped, for the switch to bring back");
+    {
+        PluginProcessor processor;
+        prepareForProfileTest(processor);
+        expect(processor.getLastClearedProfile().isEmpty(), "Nothing cleared yet");
+        const auto model = namTestModel("wavenet.nam");
+        processor.loadProfileBlocking(model);
+        settle(processor);
+        processor.clearProfile();
+        expectEquals(processor.getLastClearedProfile(), model.getFullPathName());
+        processor.clearProfile();   // clearing nothing keeps what was remembered
+        expectEquals(processor.getLastClearedProfile(), model.getFullPathName());
+        settle(processor);
+    }
+
     beginTest("A session remembers the switch, outside the parameter tree");
     {
         juce::MemoryBlock off, on;
@@ -9684,6 +9699,24 @@ void ProfileLibraryTests::runTest()
         expect(ProfileLibrary::mayHoldProfiles(loose.getFullPathName()), "A .nam file");
         expect(ProfileLibrary::mayHoldProfiles(scratch.dir.getFullPathName()), "A folder");
         expect(! ProfileLibrary::mayHoldProfiles(notes.getFullPathName()), "Not a text file");
+    }
+
+    beginTest("The CLIP / NAM switch resumes the last cleared profile, else the last chosen one");
+    {
+        ScratchFolder scratch("sledge-resume");
+        const auto cleared = scratch.write("cleared.nam", "c");
+        const auto chosen = scratch.write("chosen.nam", "k");
+        const auto gone = scratch.dir.getChildFile("gone.nam").getFullPathName();
+
+        expect(ProfileLibrary::profileToResume(cleared.getFullPathName(), chosen.getFullPathName()) == cleared,
+               "The profile cleared here comes first");
+        expect(ProfileLibrary::profileToResume(gone, chosen.getFullPathName()) == chosen,
+               "A cleared file that is gone falls back to the last chosen one");
+        expect(ProfileLibrary::profileToResume({}, chosen.getFullPathName()) == chosen,
+               "Nothing cleared: the last chosen one");
+        expect(ProfileLibrary::profileToResume(gone, "relative.nam") == juce::File(),
+               "Neither on disk: none, so the switch opens the menu");
+        expect(ProfileLibrary::profileToResume({}, {}) == juce::File(), "Nothing known: none");
     }
 
     beginTest("Steps wrap at both ends and start from an end outside the library");

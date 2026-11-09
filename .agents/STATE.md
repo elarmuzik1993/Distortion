@@ -11,8 +11,8 @@
   `PluginProcessor::setProfileEnabled`): on CLIP the profile is parked (held, not run), on NAM
   it is re-prepared on the loader thread and ducked back in, with no file read. Session
   attribute `namProfileEnabled`, outside the parameter tree, not automatable. With no profile
-  loaded, a click opens the profile menu.
-- Verified 2026-11-09 (Linux, Debug): `verify.sh` passes, 4576 assertions; switch checked with
+  loaded, NAM loads the last profile (last cleared, else settings' `lastProfile`), else the menu.
+- Verified 2026-11-09 (Linux, Debug): `verify.sh` passes, 4584 assertions; switch checked with
   `DistortionUiSnapshot` (100% and 70% folded, NAM / CLIP / no profile).
 
 ## Next
@@ -31,13 +31,13 @@
 6. Release: after 1-5, tag `v2.4.0` on `main` (CI builds and attaches every asset). Owner: ASIO
    standalone pass first. `RELEASE_CHECKLIST.md` is gitignored and only on the Windows machine.
 7. Sub Guard follow-ups: warm switch-on only proven at distMix 0; NAM-mode `g` leads by D.
-8. Marketing: three demo clips (808, NAM bass DI with Sub Guard on/off, the drawn EQ).
-9. Small: Legacy switch may click; XY Y-axis hints show in Legacy though the axis is silent.
+8. Marketing: demo clips (808, NAM bass DI, drawn EQ). Small: Legacy switch may click.
 
 ## Decisions
 - CLIP / NAM switch (owner, 2026-11-09): in the label slot under PROFILE, not automatable, no
   profile -> open the menu. Parked rather than kept running: no CPU while on CLIP, and
-  re-prepare on return so stale model state is never heard. Presets never move it.
+  re-prepare on return so stale model state is never heard. Presets never move it. Nothing
+  loaded: NAM resumes the last profile, the menu only when there is none (owner, 2026-11-09).
 - Graphic EQ fits peak gains to the drawing (owner, 2026-10-25); end dots are HP/LP filters.
   New param IDs: v2.3 curves migrate (state v4, end filters off), old automation does not.
 - EXTREME pushes clip types and profiles alike, +9 dB (owner, 2026-11-01; +12 was too hot);

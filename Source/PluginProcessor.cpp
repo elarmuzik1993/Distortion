@@ -2399,6 +2399,8 @@ void PluginProcessor::clearProfile()
     profileIntentKnown.store(true);
     const juce::ScopedLock sl(profileStatusLock);
     ++profileRequestId;   // an in-flight load must not stage after this
+    if (profileStatus.path.isNotEmpty())
+        lastClearedProfilePath = profileStatus.path;   // the switch can bring it back
     profileStatus = {};
     delete stagedProfile.exchange(nullptr, std::memory_order_acq_rel);
     delete pendingProfile.exchange(nullptr, std::memory_order_acq_rel);
@@ -2416,6 +2418,12 @@ void PluginProcessor::clearProfile()
         clearRequested.store(true, std::memory_order_release);
         requestDuck();
     }
+}
+
+juce::String PluginProcessor::getLastClearedProfile() const
+{
+    const juce::ScopedLock sl(profileStatusLock);
+    return lastClearedProfilePath;
 }
 
 void PluginProcessor::setProfileEnabled(bool shouldPlay)
