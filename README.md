@@ -35,10 +35,11 @@ by **[Monolit Beatz](https://monolitbeatz.com)**
 ---
 
 Sledge is a free, GPL-licensed distortion plugin built on [JUCE](https://juce.com).
-Seven clip characters from tube warmth to outright destruction, an LA2A-style
-optical compressor, tempo-syncable LFO routing, and a 31-band graphic EQ you
-*draw* with the mouse — all in front of an oscilloscope that shows you what you
-just did to the waveform.
+Seven clip characters from tube warmth to outright destruction, or your own
+[Neural Amp Modeler](https://www.neuralampmodeler.com) captures (prototype), an
+LA2A-style optical compressor, tempo-syncable LFO routing, and a 31-band graphic
+EQ you *draw* with the mouse — all in front of an oscilloscope that shows you
+what you just did to the waveform.
 
 It runs as **VST3** on Windows, macOS and Linux, plus **AU** and a **standalone
 app** on macOS.
@@ -78,12 +79,29 @@ x86_64).
 Tape Saturation, Transformer Saturation, Diode Clipper, Decimator), polyphase IIR
 oversampling at Off/2×/4×, a steep 8th-order Sub Guard crossover split around
 the drive (up to 200 Hz) that keeps your low end out of the distortion, parallel
-Dist Mix, and true bypass below 0.5% drive.
+Dist Mix, and true bypass below 0.5% drive. The clip-type column also carries
+**EXTREME**, which pushes the drive a further 9 dB (and cracks the glass
+artwork), and **BOOST**, a clean lift and pre-emphasis in front of the drive.
+A new instance starts at 20% Distortion Amount, so it does something audible
+straight away.
+
+**NAM profiles (prototype)** — load your own `.nam` amp and pedal captures in
+place of the clip types. The **PROFILE** button's arrows step through your
+profile library, wrapping at the ends, and a card over the scope names each one
+as it loads. A **CLIP / NAM** switch flips between the clip types and the loaded
+profile in one click, with no reload and no click in the audio. You can drag
+`.nam` files, or whole folders of them, straight onto the window; they are
+copied into a Profiles folder next to your presets, so a project keeps working
+if you move or delete the original download. Models run at the rate they were
+trained at inside a resampler, so they sound the same at 44.1, 96 or 192 kHz,
+captures that record their interface level are trimmed to match, and new
+instances reopen your last profile (switch that off in Settings > Recall Profile).
 
 **Free-draw graphic EQ** — draw a magnitude response directly on the scope and it
 becomes a 31-band, 1/3-octave EQ (20 Hz–20 kHz, cuts to −24 dB, boosts to +12 dB)
 at the output stage. The bands are fitted so what you hear follows what you drew, down
-to a single-band notch or a steep low or high cut. Fully
+to a single-band notch or a steep low or high cut. The first and last dots are a
+high-pass and a low-pass: drag one down to move its cutoff in. Fully
 automatable, saved with presets, bit-transparent while flat, and one power button
 mutes it click-free so you can A/B the curve you drew.
 
@@ -106,7 +124,10 @@ that used the old filter open with it on, so they sound as they did.
 **Oscilloscope** — zero-crossing triggered so the waveform doesn't drift,
 anti-alias decimated, and fed by a lock-free SPSC queue that never touches the
 audio thread. One selector decides which overlay owns the surface: Off, XY Morph,
-or the graphic EQ.
+or the graphic EQ. The **XY Morph** pad shows what it is doing: a puck with
+crosshairs, a short trail and a live readout of drive and Shape while you drag.
+Switch the scope off and the window folds down to a compact strip with just the
+controls.
 
 **LFO modulation** — 5 waveforms (sine, triangle, square, saw, random S&H) into 5
 destinations (distortion amount, tone filter, Shape, dist mix, output gain),
@@ -122,7 +143,7 @@ dBFS output ceiling as the last gain stage, a phase-coherent Linear Phase Dry
 path with no comb filtering at partial mix, and latency reported to the host for
 PDC — re-imposed on the bypass path so toggling causes no timing jump.
 
-16 factory presets. 3100+ test assertions, and every build is validated with
+16 factory presets. 4500+ test assertions, and every build is validated with
 `pluginval` at strictness 10 on Windows and Linux, plus `auval` on macOS.
 
 See [`CHANGELOG.md`](CHANGELOG.md) for what changed in each release.
@@ -153,7 +174,8 @@ Source/
 ├── FactoryPresets.h         # Factory bank (single source of truth)
 ├── Diagnostics/             # Anonymous bug reporting + usage ping (opt-out)
 ├── Tools/                   # Headless harnesses: render, soak, UI snapshot
-└── Tests/                   # 3125+ assertions
+├── Nam/                     # NAM profile playback + profile library
+└── Tests/                   # 4500+ assertions
 ```
 
 ## Contributing
