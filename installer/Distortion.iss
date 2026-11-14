@@ -286,35 +286,29 @@ var
 begin
   Result := '';
 
-  if (PreviousUninstallerPath <> '') and PreviousInstallPage.Values[0] then
+  { Silent upgrades rely on [InstallDelete] to purge the old VST3 bundle.
+    Do not start the detached uninstaller or block the installation. }
+  if (PreviousUninstallerPath <> '') and (not WizardSilent()) and
+     PreviousInstallPage.Values[0] then
   begin
     UninstallerExe := ExtractExecutablePath(PreviousUninstallerPath);
 
-    if not Exec(
+    if Exec(
       UninstallerExe,
-      '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART',
-      '',
-      SW_SHOW,
+      '/VERYSILENT /NORESTART',
+      ExtractFileDir(UninstallerExe),
+      SW_HIDE,
       ewWaitUntilTerminated,
       ResultCode) then
     begin
-      Result := 'Setup could not start the previous uninstaller. Please uninstall the existing version manually, then run Setup again.';
-      exit;
+      { Inno's launcher can detach the real uninstaller. Wait briefly for it
+        to remove itself, then continue: [InstallDelete] owns bundle cleanup. }
+      Tries := 0;
+      while FileExists(UninstallerExe) and (Tries < 20) do
+      begin
+        Sleep(250);
+        Tries := Tries + 1;
+      end;
     end;
-
-    { The exit code above only covers the launcher: Inno uninstallers copy
-      themselves to temp, spawn the real (second-phase) uninstall and return
-      immediately. Racing ahead here lets that detached phase delete files
-      the new install just copied. The second phase removes the original
-      uninstaller exe as its final act, so wait for that (30 s cap). }
-    Tries := 0;
-    while FileExists(UninstallerExe) and (Tries < 120) do
-    begin
-      Sleep(250);
-      Tries := Tries + 1;
-    end;
-
-    if FileExists(UninstallerExe) then
-      Result := 'The previous uninstaller did not complete successfully. Please uninstall the existing version manually, then run Setup again.';
   end;
 end;
