@@ -14,9 +14,21 @@ by **[Monolit Beatz](https://monolitbeatz.com)**
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-343a40)
 ![Formats](https://img.shields.io/badge/formats-VST3%20%7C%20AU%20%7C%20Standalone-343a40)
 
-<img src="docs/images/scale-100-extreme-signal.png" alt="Sledge Distortion plugin interface" width="880">
+<img src="docs/images/interface-eq-lfo-compression.png" alt="Sledge Distortion plugin interface with the graphic EQ drawn over the oscilloscope, plus the LFO and compression panels open" width="880">
 
-<sub>Shown with the "EXTREME" mode enabled</sub>
+<sub>The graphic EQ curve drawn over the oscilloscope, with the LFO and compression panels open</sub>
+
+<br><br>
+
+<img src="docs/images/interface-compact.png" alt="Sledge Distortion in its compact view: oscilloscope and the main control row" width="880">
+
+<sub>Compact view: just the oscilloscope and the main controls</sub>
+
+<br><br>
+
+<img src="docs/images/in-fl-studio.png" alt="Sledge Distortion running as an insert effect in FL Studio" width="880">
+
+<sub>Running as an insert in FL Studio</sub>
 
 </div>
 
