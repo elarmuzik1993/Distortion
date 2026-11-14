@@ -85,7 +85,7 @@ artwork), and **BOOST**, a clean lift and pre-emphasis in front of the drive.
 A new instance starts at 20% Distortion Amount, so it does something audible
 straight away.
 
-**NAM profiles (prototype)** — load your own `.nam` amp and pedal captures in
+**NAM profiles** — load your own `.nam` amp and pedal captures in
 place of the clip types. The **PROFILE** button's arrows step through your
 profile library, wrapping at the ends, and a card over the scope names each one
 as it loads. A **CLIP / NAM** switch flips between the clip types and the loaded
