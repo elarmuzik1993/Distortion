@@ -6,9 +6,8 @@
   push; Shape with the Shape / Legacy switch; four-pill clip column; XY Morph pad feedback;
   Sub Guard as one LR48 split around the drive; the graphic EQ (31 drawn dots driving 61 fitted
   peaks, dot 0 / dot 30 a 12 dB/oct HP / LP). `CHANGELOG.md` has v2.4.
-- Windows installer: silent installs (`/SILENT`, `/VERYSILENT`) skip the previous uninstaller;
-  `[InstallDelete]` removes the old bundle. Interactive upgrades still offer to uninstall first
-  and wait at most 5 s for it (see Known issues).
+- Windows installer: silent installs skip the previous uninstaller (`[InstallDelete]` removes
+  the old bundle); interactive upgrades still offer it and wait at most 5 s (Known issues).
 - `README.md`, `CHANGELOG.md` and `AGENTS.md` match `main`; NAM is still "prototype" (Next 4).
 - Verified 2026-11-14 (Windows): `bash scripts/verify.sh` passes, 4584 assertions.
 
