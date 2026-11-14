@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="Resources/Logo%20Title.png" alt="Monolit Beatz" width="380">
+<img src="docs/images/logo.png" alt="Monolit Beatz" width="380">
 
 # Sledge Distortion
 
