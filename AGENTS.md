@@ -147,7 +147,7 @@ Steps 13–15 live inside `applyAutoGainAndISP`; 16–17 are in `processBlock` p
 
 ## Build & Test
 - **Framework**: JUCE UnitTest runner.
-- **Coverage**: 3800+ assertions (100% PASS RATE).
+- **Coverage**: 4500+ assertions (100% PASS RATE).
 - **Categories**: DSP, Compression, LFO, ProcessBlock, ThreadSafety, SampleRate (44.1k-192k), GraphicEq (sweeps 22.05k-192k to cover the Nyquist band-drop), State I/O, FactoryPresets, Diagnostics, Settings Persistence, NAM Profile, Profile Library, Profile Card Animation, XY Pad Feedback.
 - **Golden Audio**: `GoldenAudioTests` renders 16 fixed cases (seeded noise, a synthetic 50 Hz sub + 1000/1037 Hz mids, 44.1 kHz, 512-sample blocks, 1 s warm-up, 0.5 s captured) and compares each with `Resources/TestAudio/golden_<case>_44100.wav` (32-bit float stereo; CMake passes the folder in as `DISTORTION_TEST_AUDIO_DIR`; not BinaryData). Limit: max abs sample error −90 dBFS (looser per case where float IIRs at 4x amplify rounding: Clean Boost −66, Shape −80, compression −85), set ~13 dB above what a GCC FMA build measured, so cross-compiler rounding passes and a one-step knob change fails. A missing reference fails. Regenerate: `DISTORTION_GOLDEN_GENERATE=1 build/DistortionTests_artefacts/Debug/DistortionTests Golden`. **A PR that changes the sound regenerates them and says why in its description.** Cases pin every parameter explicitly (`goldenBaseline()`; a new parameter fails until pinned there), never factory presets, so re-voicing presets never touches them.
 - **Host validation**: CI gates on `pluginval --strictness-level 10` (Windows + Linux; xvfb on Linux).

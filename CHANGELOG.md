@@ -34,6 +34,7 @@ Full development history, newest first.
 - **Profile imports are checked, and problems are reported.** A file that is not a usable `.nam` model stays out of the library, and every file skipped, or left playing from its original folder because the copy failed, is listed in a warning. Before, those errors were silent.
 - **No more thump when the drive comes back from zero.** With Distortion Amount below 0.5% and the compressor off, the plugin passes audio straight through, and the filters it skips kept whatever they held. Turning the drive back up replayed it: a loud bass from before came back as a thump at about -4 dB, even over silence. Those filters now restart clean.
 - **A rare crash on Linux is fixed.** If the host switched the plugin off just as it was rebuilding its oversampling (after a NAM profile loaded, or the Oversampling or Linear Phase setting changed), it could crash. Found by the plugin validator, about once in a thousand runs.
+- **Silent Windows upgrades no longer wait on the old uninstaller.** A `/SILENT` or `/VERYSILENT` install over an existing version no longer starts the previous uninstaller; the installer's own cleanup removes the old VST3 bundle before the new one is copied in. An interactive upgrade still offers to uninstall the previous version first, but now waits at most 5 seconds for it to finish and then carries on instead of stopping with an error.
 
 ---
 
