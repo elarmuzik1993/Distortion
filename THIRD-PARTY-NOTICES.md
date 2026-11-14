@@ -860,7 +860,7 @@ Copyright © 2026 Boris Miscenco, distributed under the GNU General Public
 License v3 as part of this project.
 
 **Logo design.** The Monolit Beatz logo was created with the help of the designer
-Boris Danylchuk ([Dannic Studio](https://www.instagram.com/dannicstudio)).
+Borys Danylchuk ([Dannic Studio](https://www.instagram.com/dannicstudio)).
 
 **Trademarks.** "Sledge Distortion", "Monolit Beatz" and the Monolit Beatz logo
 are trademarks of Boris Miscenco. The artwork above is licensed under the GPL v3
