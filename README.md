@@ -36,7 +36,7 @@ by **[Monolit Beatz](https://monolitbeatz.com)**
 
 Sledge is a free, GPL-licensed distortion plugin built on [JUCE](https://juce.com).
 Seven clip characters from tube warmth to outright destruction, or your own
-[Neural Amp Modeler](https://www.neuralampmodeler.com) captures (prototype), an
+[Neural Amp Modeler](https://www.neuralampmodeler.com) captures , an
 LA2A-style optical compressor, tempo-syncable LFO routing, and a 31-band graphic
 EQ you *draw* with the mouse — all in front of an oscilloscope that shows you
 what you just did to the waveform.
