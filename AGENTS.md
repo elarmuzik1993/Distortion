@@ -1,12 +1,7 @@
 # Sledge Distortion — Source of Truth (AGENTS.md)
 
-<!-- Shared by every coding agent; no CLAUDE.md needed. The Obsidian line names the vault project
-     folder (exists only locally). Scaffolded by /workflow:kit. Keep the state import below. -->
-
-Obsidian: [[Monolit Distortion]]
-
-**External Documentation:**
-- **Projects HUB:** [[03 Projects/Projects HUB]]
+<!-- Shared by every coding agent; no CLAUDE.md needed.
+     Scaffolded by /workflow:kit. Keep the state import below. -->
 
 ## Current state
 
