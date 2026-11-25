@@ -57,7 +57,7 @@
 - **CI/CD**: GitHub Actions for automated Windows/Linux/macOS release artifacts. **Windows, Linux and macOS (`macos-15`) all run on every push/PR that changes more than docs**; only the `release` job is gated, to `v*` tags. A `changes` job skips the three builds when a push or PR touches only Markdown, `docs/` or `.agents/` (`THIRD-PARTY-NOTICES.md` excepted, since it is packaged); it is a job-level `if:`, not workflow `paths-ignore`, so skipped builds still report success to required checks, and anything uncertain (tags, manual runs, new branches, a missing base commit) builds. Artifacts: dev runs upload only the Windows ZIP, macOS ZIP and Linux tarball, kept 7 days; the installers upload on tags only (the `release` job is their sole consumer, and they are still built every run so packaging stays tested); tag artifacts keep 30 days. A `concurrency` group cancels superseded PR runs. Pushes to `main` and `develop` each get their own group, keyed by commit, so none is cancelled or replaced. A branch push builds only when its own diff holds code, so with a shared group a docs-only push right after a merge (a STATE.md hand-off) cancelled the merge's build and then skipped its own, leaving the merged code unbuilt on `main`. macOS was once tag-and-dispatch-only because those runners bill at 10× minutes (Linux 1×, Windows 2×), but that multiplier only applies to *metered* minutes and standard runners are free on public repos — the gate cost coverage and saved nothing. It matters because macOS is the only job building the universal binary (arm64 + x86_64) and running `auval`, and the platform most exposed to SDK drift, so a release tag used to be the first thing to exercise that path. It is now covered before merge. **macOS 15 SDK**: GitHub retired `macos-14` (the job was cancelled before starting, "configuration not supported"), and Xcode 16 makes JUCE 7.0.12's `CGWindowListCreateImage` a hard error. `cmake/PatchJuce.cmake`, the JUCE `FetchContent` `PATCH_COMMAND`, makes that one native-window snapshot return an empty image against a macOS 15+ SDK (Sledge never calls it); it fails the configure if its anchors move, so a JUCE bump has to revisit it. A `JUCE_PATH` or `../JUCE` checkout is not patched.
 
 ## Build System
-### CMake (Linux/Mac/Windows - Recommended)
+### CMake (Linux/Mac/Windows)
 ```bash
 mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Debug
@@ -76,11 +76,6 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
 cmake --build build --target Distortion_VST3 Distortion_AU Distortion_Standalone -j
 ```
 Artefacts land in `build/Distortion_artefacts/<Config>/{VST3,AU,Standalone}/`. Local install dirs: VST3 → `~/Library/Audio/Plug-Ins/VST3`, AU → `~/Library/Audio/Plug-Ins/Components`. The `.pkg` installer is built by `installer/macos/build_pkg.sh` (see Release & Packaging).
-
-### Projucer (Windows VS2022)
-- Edit settings via `Distortion.jucer`.
-- Build solution in `Builds/VisualStudio2022/Distortion.sln`.
-- Test Runner: `Builds/VisualStudio2022_Tests/x64/Debug/ConsoleApp/DistortionTests.exe`.
 
 ### VST3 moduleinfo.json Fix
 JUCE generates invalid JSON manifests. A post-build script fixes them:
@@ -257,4 +252,3 @@ Cracked-glass / diamond-plate artwork behind the editor. `Resources/ui_texture.p
 - `scripts/`: Python fix scripts and build utilities.
 - `docs/`: Extra documentation, safety checklists, DAW QA matrix.
 - `RELEASE_CHECKLIST.md`: gated Definition-of-Done for cutting a release.
-- `Distortion.jucer`: Projucer project file.

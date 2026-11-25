@@ -65,8 +65,10 @@ Windows 10 installs. If you use the plain ZIP instead, install
 
 > **Builds are currently unsigned.** On Windows, SmartScreen shows an
 > "unrecognised app" warning — **More info → Run anyway**, or use the ZIP, which
-> avoids the prompt entirely. On macOS, right-click the `.pkg` → **Open**, then
-> clear the quarantine flag — [`INSTALL.md`](INSTALL.md) has the exact commands.
+> avoids the prompt entirely. On macOS, open the `.pkg` once through **System
+> Settings → Privacy & Security → Open Anyway** (right-click → **Open** before
+> macOS 15), then clear the quarantine flag. [`INSTALL.md`](INSTALL.md) has the
+> exact steps.
 > Code-signing is wired into CI and switches on when the certificates exist.
 
 Requires 64-bit Windows 10+, macOS 11+, or a Linux distro with ALSA. ARM64

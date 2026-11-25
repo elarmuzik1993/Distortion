@@ -57,9 +57,14 @@ emulation).
 The macOS build is **unsigned**, so macOS quarantines it on download. Clear the
 quarantine flag once and it loads normally.
 
-1. Open `SledgeDistortion-<version>-macOS.pkg`. Because it's unsigned,
-   **right-click the `.pkg` → Open** (double-clicking will be blocked), then
-   confirm. Installs to:
+1. Open `SledgeDistortion-<version>-macOS.pkg`. Because it's unsigned, macOS
+   blocks the first double-click:
+   - **macOS 15 (Sequoia) and later:** click **Done**, open **System Settings →
+     Privacy & Security**, scroll down to the message about the `.pkg` and click
+     **Open Anyway**, then confirm with your password.
+   - **macOS 11–14:** **right-click the `.pkg` → Open**, then confirm.
+
+   It installs to:
    - VST3 → `/Library/Audio/Plug-Ins/VST3`
    - AU → `/Library/Audio/Plug-Ins/Components`
    - Standalone → `/Applications`
