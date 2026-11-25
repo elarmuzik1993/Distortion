@@ -5,10 +5,8 @@
   drop, `input_level_dbu` calibration vs 12 dBu, CLIP / NAM switch), EXTREME +9 dB, Shape with
   the Shape / Legacy switch, Sub Guard as one LR48 split, the graphic EQ (31 dots, 61 fitted
   peaks, end dots HP / LP). `README.md`, `CHANGELOG.md` and `AGENTS.md` match `main`.
-- CI macOS runs on `macos-15` (`macos-14` is retired); JUCE 7.0.12 is patched at fetch time for
-  the macOS 15 SDK (`cmake/PatchJuce.cmake`). On 2026-11-25 all three builds passed, macOS
-  with unit tests, pluginval 10 and auval: the first macOS build since 2026-11-09.
-- Verified 2026-11-25 (Windows): `bash scripts/verify.sh` passes, 4584 assertions.
+- CI macOS runs on `macos-15`, JUCE patched for its SDK (`cmake/PatchJuce.cmake`). 2026-11-25:
+  all three builds pass (macOS: tests, pluginval 10, auval); Windows `verify.sh` 4584 assertions.
 
 ## Next
 0. Branch `chore/repo-housekeeping` (EQ grid bypass dim #37, dead locals, STATE trim) has only
@@ -36,8 +34,7 @@
 - Merge once all three builds pass. Manual dispatch is refused (403): merge `main` in and push.
 
 ## Known issues
-- A `JUCE_PATH` or `../JUCE` checkout is not patched: a local Mac build on Xcode 16 needs the
-  fetched JUCE (or the same patch applied by hand).
+- A `JUCE_PATH` / `../JUCE` checkout is unpatched: a Mac on Xcode 16 needs the fetched JUCE.
 - No test proves a re-enabled profile starts from rest; it rests on `prepare()`.
 - Crossing the true-bypass threshold (drive 0.5%) jumps up to ~1.7x peak (phase mismatch).
 - EQ refit ~97 µs per block on the audio thread while a dot moves; 36 dB jumps ring ~8.6 dB.
