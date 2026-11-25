@@ -19,7 +19,9 @@
 4. Owner: Sub Guard listening (808, bass, preset changes while playing); re-voice Hard Clip,
    808 Safe, Vocal Warmth, EXTREME, Bass Driver, Lo-Fi Crush, Diode Bite at 100-150 Hz; rename
    PRESERVE/CONTROL/AGGRO; measure Release CPU.
-5. macOS without paying: ad-hoc sign bundles when no Developer ID, upload the `.pkg` every run.
+5. Owner, website downloads: Windows exe + zip and the Linux tarball are ready; the macOS
+   `.pkg` after a real-Mac install (Next 2). Add the GPL source link, checksums, the user guide.
+6. macOS without paying: ad-hoc sign bundles when no Developer ID, upload the `.pkg` every run.
 
 ## Decisions
 - v2.5.0 ships before the owner's listening and host checks (owner, 2026-11-25): they are
@@ -34,8 +36,7 @@
   name as a branch); put the CHANGELOG section atop the generated release notes.
 
 ## Known issues
-- v2.4.0 sessions with EQ dot 0 or 30 below 0 dB now hear a HP / LP (state stays v4, no
-  migration); stated in the v2.5 changelog.
+- v2.4.0 sessions with EQ dot 0 or 30 below 0 dB hear a HP / LP now (no migration; in changelog).
 - A `JUCE_PATH` / `../JUCE` checkout is unpatched: a Mac on Xcode 16 needs the fetched JUCE.
 - No test proves a re-enabled profile starts from rest; it rests on `prepare()`.
 - Crossing the true-bypass threshold (drive 0.5%) jumps up to ~1.7x peak (phase mismatch).
