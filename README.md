@@ -146,9 +146,11 @@ path with no comb filtering at partial mix, and latency reported to the host for
 PDC — re-imposed on the bypass path so toggling causes no timing jump.
 
 16 factory presets. 4500+ test assertions, and every build is validated with
-`pluginval` at strictness 10 on Windows and Linux, plus `auval` on macOS.
+`pluginval` at strictness 10 on Windows, macOS and Linux, plus `auval` on macOS.
 
-See [`CHANGELOG.md`](CHANGELOG.md) for what changed in each release.
+New to Sledge? The [User Guide](docs/USER_GUIDE.md) explains every control in plain
+terms, with a quick start. See [`CHANGELOG.md`](CHANGELOG.md) for what changed in each
+release.
 
 ## Build from source
 
