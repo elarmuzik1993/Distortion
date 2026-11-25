@@ -4,7 +4,7 @@
 - v2.5.0 released 2026-11-25 (tag `v2.5.0`, six assets; notes = `CHANGELOG.md` v2.5): CLIP /
   NAM switch, EQ with 61 fitted peaks and HP / LP end dots, EXTREME +9 dB, Linux install
   scripts, installer guards. v2.4.0 (2026-11-03): NAM profiles, Shape, Sub Guard, 31-dot EQ.
-  `README.md`, `INSTALL.md`, `CHANGELOG.md` and `AGENTS.md` match `main`.
+  `README.md`, `INSTALL.md`, `docs/USER_GUIDE.md`, `CHANGELOG.md` and `AGENTS.md` match `main`.
 - CI macOS runs on `macos-15`, JUCE patched for its SDK (`cmake/PatchJuce.cmake`). 2026-11-25:
   all three builds pass (macOS: tests, pluginval 10, auval); Windows `verify.sh` 4584 assertions.
 
@@ -13,7 +13,8 @@
    EXTREME +9 dB on clip types and NAM; EQ end dots (HP/LP sweep, all -24 dB = band-pass).
 2. Owner, one Release host pass: EQ at zero drive, v2.3 sessions (drawn curve, Legacy Filter),
    `.nam` drag and drop, XY pad, profile browser, the installers incl. an interactive upgrade,
-   the unsigned macOS `.pkg` via Open Anyway on macOS 15; an ASIO standalone pass.
+   the unsigned macOS `.pkg` via Open Anyway on macOS 15 (does the Standalone app also need
+   the `xattr` step? INSTALL.md only clears the VST3 and AU); an ASIO standalone pass.
 3. Owner: NAM calibrated files; 12 dBu as a setting?; then drop "prototype" or label it beta.
 4. Owner: Sub Guard listening (808, bass, preset changes while playing); re-voice Hard Clip,
    808 Safe, Vocal Warmth, EXTREME, Bass Driver, Lo-Fi Crush, Diode Bite at 100-150 Hz; rename

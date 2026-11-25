@@ -10,7 +10,8 @@ Sledge Distortion is a **VST3** plugin on every platform, plus **AU** and a
 > so it shows a caution prompt. Every release is built in public on GitHub
 > Actions from the source in this repo, and each download has a matching
 > **SHA256** checksum, so you can confirm the file arrived intact. The steps
-> below get you past the prompt in a few seconds.
+> below get you past the prompt in a few seconds. Source code and releases:
+> <https://github.com/elarmuzik1993/Distortion>.
 
 ---
 
@@ -155,5 +156,8 @@ to delete presets, settings and profiles as well).
 
 ---
 
+**Next:** the [User Guide](docs/USER_GUIDE.md) explains every control, with a quick start.
+
 Trouble? Found a bug? Sledge has a built-in **Report a Bug** button in its
-Settings panel (anonymous, opt-out) — or open an issue on the repo.
+Settings panel (anonymous, opt-out) — or open an issue at
+<https://github.com/elarmuzik1993/Distortion/issues>.
