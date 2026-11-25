@@ -38,8 +38,7 @@
 ## Known issues
 - v2.4.0 sessions with EQ dot 0 or 30 below 0 dB hear a HP / LP now (no migration; in changelog).
 - A `JUCE_PATH` / `../JUCE` checkout is unpatched: a Mac on Xcode 16 needs the fetched JUCE.
-- No test proves a re-enabled profile starts from rest; it rests on `prepare()`.
-- Crossing the true-bypass threshold (drive 0.5%) jumps up to ~1.7x peak (phase mismatch).
+- No test proves a re-enabled profile starts from rest. Crossing drive 0.5% jumps ~1.7x peak.
 - EQ refit ~97 µs per block while a dot moves; 36 dB jumps ring ~8.6 dB.
 - `verify.sh` never builds the editor (use `DistortionUiSnapshot`). Legacy switch may click.
 - Host bypass freezes the island, delay lines and Sub Guard splitter; IIR ring after a gap.
