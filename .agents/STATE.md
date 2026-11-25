@@ -1,16 +1,14 @@
 # State
 
 ## Now
-- `main` is v2.5.0 (`CHANGELOG.md` v2.5; last release v2.4.0, tagged 2026-11-03): CLIP / NAM
-  switch, EQ with 61 fitted peaks and HP / LP end dots, EXTREME +9 dB, Linux install scripts,
-  installer guards. v2.4 brought NAM profiles, Shape, Sub Guard's LR48 split, the 31-dot EQ.
+- v2.5.0 released 2026-11-25 (tag `v2.5.0`, six assets; notes = `CHANGELOG.md` v2.5): CLIP /
+  NAM switch, EQ with 61 fitted peaks and HP / LP end dots, EXTREME +9 dB, Linux install
+  scripts, installer guards. v2.4.0 (2026-11-03): NAM profiles, Shape, Sub Guard, 31-dot EQ.
   `README.md`, `INSTALL.md`, `CHANGELOG.md` and `AGENTS.md` match `main`.
 - CI macOS runs on `macos-15`, JUCE patched for its SDK (`cmake/PatchJuce.cmake`). 2026-11-25:
   all three builds pass (macOS: tests, pluginval 10, auval); Windows `verify.sh` 4584 assertions.
 
 ## Next
-0. Tag `v2.5.0` on `main` and push the tag; CI's `release` job attaches every asset. Check the
-   GitHub Release has all six (Windows exe + zip, macOS pkg + zip, Linux tarball, SHA256SUMS).
 1. Owner, post-release listening: CLIP / NAM flip on a bass with a large capture (no click);
    EXTREME +9 dB on clip types and NAM; EQ end dots (HP/LP sweep, all -24 dB = band-pass).
 2. Owner, one Release host pass: EQ at zero drive, v2.3 sessions (drawn curve, Legacy Filter),
@@ -30,6 +28,9 @@
   profile and NAM re-prepares it; with nothing loaded NAM resumes the last profile.
 - Graphic EQ fits peaks to the drawing; v2.3 curves migrate (state v4). EXTREME +9 dB (owner).
 - Merge once all three builds pass. Manual dispatch is refused (403): merge `main` in and push.
+- Releases: bump CMake + `installer/Distortion.iss`, new CHANGELOG section (never edit a shipped
+  one), merge, then `git push origin refs/tags/vX.Y.Z` (the workflow hook reads a bare tag
+  name as a branch); put the CHANGELOG section atop the generated release notes.
 
 ## Known issues
 - v2.4.0 sessions with EQ dot 0 or 30 below 0 dB now hear a HP / LP (state stays v4, no
