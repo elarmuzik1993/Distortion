@@ -2201,10 +2201,11 @@ public:
         // Whole curve dims when the EQ is bypassed (curve stays visible/editable).
         const float ca = bypassed ? 0.30f : 1.0f;
 
-        // dB grid: 0 dB emphasised, every 6 dB faint.
+        // dB grid: 0 dB emphasised, every 6 dB faint. It dims with the curve, so a bypassed EQ
+        // never draws its graticule brighter than its own curve.
         for (float db = DSPConstants::EQ_DRAW_MAX_DB - 6.0f; db > DSPConstants::EQ_DRAW_MIN_DB; db -= 6.0f)
         {
-            g.setColour(juce::Colours::white.withAlpha(db == 0.0f ? 0.14f : 0.05f));
+            g.setColour(juce::Colours::white.withAlpha((db == 0.0f ? 0.14f : 0.05f) * ca));
             g.drawHorizontalLine(juce::roundToInt(dbToY(db, b)), b.getX(), b.getRight());
         }
 
@@ -2215,7 +2216,7 @@ public:
                                         { 2000.0f, "2k" }, { 5000.0f, "5k" }, { 10000.0f, "10k" } })
         {
             const float x = freqToX(hz, b);
-            g.setColour(juce::Colours::white.withAlpha(0.04f));
+            g.setColour(juce::Colours::white.withAlpha(0.04f * ca));
             g.drawVerticalLine(juce::roundToInt(x), b.getY(), b.getBottom());
             g.setColour(juce::Colours::white.withAlpha(0.28f));
             g.drawText(text, juce::Rectangle<float>(x - 16.0f, b.getBottom() - 12.0f, 32.0f, 10.0f),
