@@ -462,8 +462,10 @@ jobs:
     # binary (arm64 + x86_64) and the only one running auval, and none of that
     # was exercised until a release tag - so a tag was the first thing to test
     # the macOS path, which is the failure mode RELEASE_CHECKLIST.md exists to
-    # avoid. It is also the platform most exposed to SDK drift, since pinned
-    # JUCE 7.0.12 uses APIs that newer macOS SDKs have removed.
+    # avoid. It is also the platform most exposed to SDK drift: pinned JUCE
+    # 7.0.12 calls an API the macOS 15 SDK removed, patched at fetch time by
+    # cmake/PatchJuce.cmake. GitHub retired macos-14 (jobs were cancelled
+    # before starting), hence macos-15.
     runs-on: macos-15
 
     # Apple Developer ID signing + notarization creds (set as repo secrets to
