@@ -464,7 +464,7 @@ jobs:
     # the macOS path, which is the failure mode RELEASE_CHECKLIST.md exists to
     # avoid. It is also the platform most exposed to SDK drift, since pinned
     # JUCE 7.0.12 uses APIs that newer macOS SDKs have removed.
-    runs-on: macos-14
+    runs-on: macos-15
 
     # Apple Developer ID signing + notarization creds (set as repo secrets to
     # activate). When unset these are empty strings and every sign/notarize step
