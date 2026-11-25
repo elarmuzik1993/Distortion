@@ -44,6 +44,10 @@ else()
         GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
         GIT_TAG 7.0.12
         GIT_SHALLOW TRUE
+        # JUCE 7.0.12 calls an API the macOS 15 SDK removed; see cmake/PatchJuce.cmake.
+        # A JUCE_PATH or ../JUCE checkout is not patched.
+        PATCH_COMMAND ${CMAKE_COMMAND} -DJUCE_SOURCE_DIR=<SOURCE_DIR>
+                      -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/PatchJuce.cmake
     )
     FetchContent_MakeAvailable(JUCE)
 endif()
