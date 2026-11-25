@@ -7,10 +7,9 @@
   peaks, end dots HP / LP). `README.md`, `CHANGELOG.md` and `AGENTS.md` match `main`.
 - CI macOS runs on `macos-15`, JUCE patched for its SDK (`cmake/PatchJuce.cmake`). 2026-11-25:
   all three builds pass (macOS: tests, pluginval 10, auval); Windows `verify.sh` 4584 assertions.
+- The graphic EQ's grid lines dim with a bypassed curve (#37); labels keep full strength.
 
 ## Next
-0. Branch `chore/repo-housekeeping` (EQ grid bypass dim #37, dead locals, STATE trim) has only
-   a cancelled macOS check: merge `main` into it, push, and keep `main`'s STATE.md on conflict.
 1. Owner, listening: CLIP / NAM flip on a bass with a large capture (short fade, no click);
    EXTREME +9 dB on clip types and NAM; EQ end dots (HP/LP sweep, all -24 dB = band-pass).
 2. Owner, one Release host pass: EQ at zero drive, a v2.3 session with a drawn curve and one

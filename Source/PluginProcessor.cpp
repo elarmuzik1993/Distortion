@@ -1813,9 +1813,6 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
     // NOTE: Pre-highpass filter is now applied BEFORE upsampling (see above)
 
-    const size_t numSamples = pb_oversampledBlock.getNumSamples();
-    const size_t numChannels = pb_oversampledBlock.getNumChannels();
-
     // Sub Guard split, then the drive input's chain (tamer, auto-gain reference, Clean
     // Boost, drive): full range with Sub Guard off, the high band with it on.
     if (!applySubGuardSplit())
