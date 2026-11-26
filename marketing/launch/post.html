@@ -65,17 +65,18 @@
     transform: translate(-50%, -50%) rotateX(16deg) rotateY(-12deg) rotateZ(3deg);
     transform-style: preserve-3d;
   }
-  .slab {
-    position: absolute; inset: 0; border-radius: 14px;
-    background: linear-gradient(160deg, #6a1527 0%, #2a0a12 45%, #0c0507 100%);
-    border: 1px solid rgba(255,40,90,.55);
-  }
-  .slab.back { box-shadow: 0 40px 90px rgba(0,0,0,.85), 0 0 110px rgba(255,0,68,.35); }
+  /* Each layer's colour is set in the script below: a red-lit lip at the front
+     fading to near black at the back, so the side reads as a shaded body. */
+  .slab { position: absolute; inset: 0; border-radius: 10px; }
+  .slab.back { box-shadow: 0 40px 90px rgba(0,0,0,.85), 0 0 110px rgba(255,0,68,.30); }
   .screen {
-    position: absolute; inset: 0; border-radius: 14px; overflow: hidden;
-    transform: translateZ(1px);
-    border: 2px solid rgba(255,0,68,.85);
-    box-shadow: 0 0 0 1px #000, inset 0 0 30px rgba(0,0,0,.6);
+    position: absolute; inset: 0; border-radius: 10px; overflow: hidden;
+    transform: translateZ(.5px);
+    border: 1.5px solid #ff0044;
+    box-shadow:
+      0 0 0 1px rgba(255,150,175,.35),        /* bevel catch-light outside the frame */
+      inset 0 1px 0 rgba(255,255,255,.28),    /* top edge highlight */
+      inset 0 0 24px rgba(0,0,0,.55);
   }
   .screen img { display: block; width: 100%; height: 100%; }
   .screen::after {          /* glass sheen across the face */
@@ -135,13 +136,19 @@
     while (size > 60 && Math.max(...[...h.querySelectorAll("span")].map(e => e.offsetWidth)) > 960) {
       h.style.fontSize = (size -= 2) + "px";
     }
-    // Build the slab's thickness: 1.5 px layers stepping back 36 px.
+    // Build the slab's thickness: 1 px layers stepping back DEPTH px, shaded
+    // from a bright lip through a red-lit body to near black at the back.
     const device = document.getElementById("device");
-    const DEPTH = 58, STEP = 1.5;
+    const DEPTH = 58, STEP = 1, LIP = 3;
+    const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
+    const LIP_RGB = [255, 60, 105], FRONT = [176, 22, 58], BACK = [58, 10, 22];
     for (let z = STEP; z <= DEPTH; z += STEP) {
       const s = document.createElement("div");
       s.className = "slab" + (z + STEP > DEPTH ? " back" : "");
       s.style.transform = `translateZ(${-z}px)`;
+      const t = Math.pow((z - LIP) / (DEPTH - LIP), 0.7);
+      const rgb = z <= LIP ? mix(LIP_RGB, FRONT, (z - STEP) / LIP) : mix(FRONT, BACK, t);
+      s.style.background = `rgb(${rgb.join(",")})`;
       device.insertBefore(s, device.firstChild);
     }
   </script>
