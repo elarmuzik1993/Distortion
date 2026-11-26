@@ -15,6 +15,7 @@
       DistortionUiSnapshot --out shots
       DistortionUiSnapshot --scale 70 --out shots
       DistortionUiSnapshot --signal --out shots   # scope shows a waveform
+      DistortionUiSnapshot --scale 100 --pixel-scale 3   # 2880x1692, for print and marketing
       DistortionUiSnapshot --profile drive.nam    # a NAM profile loaded
       DistortionUiSnapshot --profile drive.nam --profile-card   # the browser's name card
       DistortionUiSnapshot --profile drive.nam --engine-clip    # profile held, switch on CLIP
@@ -109,7 +110,8 @@ void feedScope(PluginProcessor& proc)
 
 bool snapshot(PluginProcessor& proc, int width, int height, const juce::File& out,
               bool extreme = false, bool withSignal = false, bool profileCard = false,
-              bool settings = false, bool xyTouch = false, bool dropHint = false)
+              bool settings = false, bool xyTouch = false, bool dropHint = false,
+              int pixelScale = 1)
 {
     PluginEditor editor(proc);
     editor.setSize(width, height);
@@ -170,9 +172,14 @@ bool snapshot(PluginProcessor& proc, int width, int height, const juce::File& ou
     }
 
     // Lay out and paint synchronously into an offscreen image.
-    juce::Image image(juce::Image::ARGB, width, height, true);
+    // The editor keeps its logical size; --pixel-scale paints it through a
+    // transform into a larger image, as a high-DPI display would. Text, knobs
+    // and curves are vector, so they stay sharp; the texture art is resampled.
+    juce::Image image(juce::Image::ARGB, width * pixelScale, height * pixelScale, true);
     {
         juce::Graphics g(image);
+        g.addTransform(juce::AffineTransform::scale((float) pixelScale));
+        g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
         editor.paintEntireComponent(g, true);
     }
 
@@ -183,7 +190,7 @@ bool snapshot(PluginProcessor& proc, int width, int height, const juce::File& ou
         return false;
 
     const bool ok = png.writeImageToStream(image, *stream);
-    std::cout << "  " << out.getFileName() << "  " << width << "x" << height
+    std::cout << "  " << out.getFileName() << "  " << image.getWidth() << "x" << image.getHeight()
               << (ok ? "  ok" : "  FAILED") << "\n";
     return ok;
 }
@@ -214,7 +221,8 @@ int main(int argc, char* argv[])
                 "  --settings       open the Settings panel\n"
                 "  --xy-touch       XY Morph pad held (puck, crosshair, readout)\n"
                 "  --drop-hint      a .nam file dragged over the window\n"
-                "  --eq             Graphic EQ overlay with a drawn curve (low cut, notch, air)\n";
+                "  --eq             Graphic EQ overlay with a drawn curve (low cut, notch, air)\n"
+                "  --pixel-scale <n> paint at n times the pixel density (1-4, default 1)\n";
             return 0;
         }
     }
@@ -226,6 +234,7 @@ int main(int argc, char* argv[])
     bool signal = false;
     float shapeValue = 0.0f;
     bool hasShape = false, legacy = false, profileCard = false, engineClip = false, settings = false, xyTouch = false, dropHint = false, eq = false;
+    int pixelScale = 1;
     juce::String profilePath;
     for (int i = 1; i < argc; ++i)
     {
@@ -244,6 +253,8 @@ int main(int argc, char* argv[])
         else if (t == "--xy-touch")              xyTouch   = true;
         else if (t == "--drop-hint")             dropHint  = true;
         else if (t == "--eq")                    eq        = true;
+        else if (t == "--pixel-scale" && i + 1 < argc)
+            pixelScale = juce::jlimit(1, 4, juce::String(argv[++i]).getIntValue());
     }
 
     // Collapsed (scope folded away) is the other fold state. The harness drives it
@@ -344,7 +355,9 @@ int main(int argc, char* argv[])
             name += "-drop";
         if (eq)
             name += "-eq";
-        allOk &= snapshot(proc, w, h, dir.getChildFile(name + ".png"), extreme, signal, profileCard, settings, xyTouch, dropHint);
+        if (pixelScale > 1)
+            name += "@" + juce::String(pixelScale) + "x";
+        allOk &= snapshot(proc, w, h, dir.getChildFile(name + ".png"), extreme, signal, profileCard, settings, xyTouch, dropHint, pixelScale);
     }
 
     scratchRoot.deleteRecursively();
