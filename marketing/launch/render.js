@@ -3,7 +3,9 @@
 //   sledge-launch-feed.png / -story.png               1080 px wide, ready to post
 // Then: python3 marketing/launch/make-pdf.py packs the 3x images into one PDF.
 //
-// The plugin screenshot (assets/ui.png) is the editor painted at 3x pixel density:
+// The plugin screenshot (assets/ui.png) is docs/images/interface-eq-lfo-compression.png
+// cropped to the plugin's frame (1200x705, version stamp hidden). For a sharper
+// one, the editor can be painted at 3x pixel density instead:
 //   build/DistortionUiSnapshot_artefacts/Release/DistortionUiSnapshot \
 //     --scale 100 --eq --signal --pixel-scale 3 --marketing --out <dir>
 // Chromium rasterizes the tilted (3D) screen below the page's density, which
