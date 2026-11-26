@@ -7,7 +7,7 @@ re-render with `node marketing/launch/render.js`.
 
 ## Caption (organic post)
 
-Distort the 808. Keep the sub. 🔴
+Hit it with the Sledge. 🔨🔴
 
 Sledge Distortion is out, and it's free.
 
@@ -24,7 +24,7 @@ Free download: link in bio 🔗
 
 ## Ad version (Meta Ads Manager)
 
-- **Primary text:** Distort the 808. Keep the sub. Sledge Distortion is a free plugin with Sub
+- **Primary text:** Hit it with the Sledge. Sledge Distortion is a free plugin with Sub
   Guard, a draw-on-the-scope EQ and NAM capture support. VST3 / AU for Windows, macOS and Linux.
 - **Headline:** Sledge Distortion: Free Download
 - **Button:** Download
