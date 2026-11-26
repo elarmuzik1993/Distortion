@@ -106,8 +106,8 @@
 <body>
   <div class="canvas">
     <img class="logo" src="assets/logo.png" alt="Monolit Beatz">
-    <div class="kicker">808 · BASS · GUITAR · NAM</div>
-    <h1>Distort the 808.<br><span class="hot">Keep the sub.</span></h1>
+    <div class="kicker" id="kicker">808 · BASS · GUITAR · NAM</div>
+    <h1 id="headline"><span id="l1">Distort the 808.</span><br><span class="hot" id="l2">Keep the sub.</span></h1>
     <p class="sub"><b>Sledge Distortion</b> · VST3 / AU · Win · Mac · Linux</p>
 
     <div class="stage">
@@ -123,6 +123,18 @@
   </div>
   <script>
     if (location.hash === "#story") document.body.classList.add("story");
+    // Headline variants: post.html?k=KICKER&l1=LINE1&l2=LINE2 (used by variants.js).
+    const q = new URLSearchParams(location.search);
+    for (const id of ["kicker", "l1", "l2"]) {
+      const key = id === "kicker" ? "k" : id;
+      if (q.has(key)) document.getElementById(id).textContent = q.get(key);
+    }
+    // Shrink the headline until its longest line fits the canvas.
+    const h = document.getElementById("headline");
+    let size = 104;
+    while (size > 60 && Math.max(...[...h.querySelectorAll("span")].map(e => e.offsetWidth)) > 960) {
+      h.style.fontSize = (size -= 2) + "px";
+    }
     // Build the slab's thickness: 1.5 px layers stepping back 36 px.
     const device = document.getElementById("device");
     const DEPTH = 58, STEP = 1.5;
