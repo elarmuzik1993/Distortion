@@ -3,11 +3,9 @@
 //   sledge-launch-feed.png / -story.png               1080 px wide, ready to post
 // Then: python3 marketing/launch/make-pdf.py packs the 3x images into one PDF.
 //
-// The plugin screenshot (assets/ui.png) is docs/images/interface-eq-lfo-compression.png
-// cropped to the plugin's frame (1200x705, version stamp hidden). For a sharper
-// one, the editor can be painted at 3x pixel density instead:
-//   build/DistortionUiSnapshot_artefacts/Release/DistortionUiSnapshot \
-//     --scale 100 --eq --signal --pixel-scale 3 --marketing --out <dir>
+// The plugin image (assets/ui.png, 2880x1692) comes from snapshot.sh: the
+// editor painted at 3x pixel density in the README screenshot's state, with
+// EXTREME on. Re-run snapshot.sh first when the plugin's look changes.
 // Chromium rasterizes the tilted (3D) screen below the page's density, which
 // softens it, so the page reports the screen's corners, warp.py does the
 // perspective at full quality, and the result is laid over the page flat.

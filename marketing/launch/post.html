@@ -34,10 +34,12 @@
   body.story .canvas { padding: 250px 0 340px; } /* clear the Stories UI */
 
   .logo { width: 400px; display: block; box-shadow: 0 0 40px rgba(255,0,68,.35); }
+  /* Inter, not Orbitron: Orbitron's 8 reads as a B and its 0 is slashed, so with
+     wide tracking "808s" scanned as "BØBs". */
   .kicker {
-    margin-top: 44px; font-family: "Orbitron"; font-weight: 700;
-    font-size: 25px; letter-spacing: .42em; color: var(--red-soft);
-    padding-left: .42em;
+    margin-top: 44px; font-family: "Inter", sans-serif; font-weight: 800;
+    font-size: 31px; letter-spacing: .2em; color: var(--red-soft);
+    padding-left: .2em;
   }
   h1 {
     margin-top: 22px; font-family: "Inter Display", "Inter", sans-serif; font-weight: 900;
@@ -84,8 +86,10 @@
     background: linear-gradient(118deg, rgba(255,255,255,.16) 0%, rgba(255,255,255,.04) 28%,
                 transparent 42%, transparent 78%, rgba(255,0,68,.08) 100%);
   }
+  /* right: 0 keeps the badge inside x 34..1046, what the profile grid's 3:4
+     thumbnail shows of a 4:5 post. */
   .badge {
-    position: absolute; right: -36px; top: 78px; width: 136px; height: 136px; z-index: 2;
+    position: absolute; right: 0; top: 78px; width: 136px; height: 136px; z-index: 2;
     border-radius: 50%; background: var(--red); color: #0b0b0e;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     font-family: "Orbitron"; font-weight: 700; transform: rotate(12deg);

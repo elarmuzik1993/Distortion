@@ -156,6 +156,8 @@ Steps 13–15 live inside `applyAutoGainAndISP`; 16–17 are in `processBlock` p
   ./DistortionUiSnapshot --drop-hint --out shots  # a .nam drag over the window
   ./DistortionUiSnapshot --eq --out shots         # Graphic EQ overlay with a sample curve
   ./DistortionUiSnapshot --scale 100 --eq --signal --pixel-scale 3 --marketing --out shots  # 2880x1692, no JUCE badge or version: marketing art
+  ./DistortionUiSnapshot --param distortionAmount=75 --param eqThird17=-9.6 --out shots  # any parameter, in its own units (after --eq etc.)
+  ./DistortionUiSnapshot --signal --signal-hz 110 --signal-amp 0.3 --out shots           # the tone --signal feeds (default 220 Hz, 0.7)
   ./DistortionUiSnapshot --profile drive.nam --out shots                 # a NAM profile loaded (pill lit)
   ./DistortionUiSnapshot --profile drive.nam --profile-card --out shots  # the browser's name card, settled
   ./DistortionUiSnapshot --profile drive.nam --engine-clip --out shots   # CLIP / NAM switch on CLIP

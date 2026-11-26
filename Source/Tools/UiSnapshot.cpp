@@ -60,6 +60,14 @@ juce::File writeScratchSettings(const juce::File& root, bool collapsed, int scal
     return settings;
 }
 
+// The tone --signal feeds: --signal-hz and --signal-amp override it.
+struct SignalSpec
+{
+    double hz = 220.0;
+    float amplitude = 0.7f;
+};
+SignalSpec signalSpec;
+
 // Runs a fixed tone through the processor so the oscilloscope has something to
 // draw. Opt-in (--signal): with no signal the harness stays a pure layout gate
 // whose renders do not depend on DSP behaviour, which is what makes it usable
@@ -77,16 +85,15 @@ void feedScope(PluginProcessor& proc)
     // parameter smoothing ramps and the compressor's attack, so what lands in the
     // FIFO is steady state rather than the onset transient.
     constexpr int    numBlocks  = 32;
-    constexpr double freqHz     = 220.0;
-    constexpr float  amplitude  = 0.7f;
+    const double     freqHz     = signalSpec.hz;
+    const float      amplitude  = signalSpec.amplitude;
     // A small offset keeps the two stereo traces distinguishable in the render.
     constexpr double rightPhaseOffset = 0.25;
 
-    // NOTE: the parameters are left at their defaults, which means distortionAmount
-    // is 0 and compEnabled false, so processBlock takes the true-bypass branch and
-    // the scope shows a clean sine. That is a deliberate choice for the docs image
-    // - a driven render was tried and the undriven waveform reads better - but it
-    // does mean this render shows the signal path, not the distortion character.
+    // NOTE: unless --param changes them, the parameters are at their defaults:
+    // distortionAmount 20, so the scope shows the default drive's waveform. A
+    // render at distortionAmount 0 takes the true-bypass branch and shows the
+    // clean sine, which is what the docs image originally used.
     juce::AudioBuffer<float> buffer(2, blockSize);
     juce::MidiBuffer midi;
 
@@ -175,13 +182,21 @@ bool snapshot(PluginProcessor& proc, int width, int height, const juce::File& ou
     // --marketing hides the "Made with JUCE" badge and the build version
     // label, which belong in the product but not in an ad.
     if (marketing)
+    {
         for (auto* child : editor.getChildren())
+        {
             if (dynamic_cast<juce::JUCESplashScreen*>(child) != nullptr)
+            {
                 child->setVisible(false);
+            }
             else if (auto* label = dynamic_cast<juce::Label*>(child))
-                if (const auto text = label->getText();
-                    text.startsWithChar('v') && juce::CharacterFunctions::isDigit(text[1]) && text.containsChar('.'))
+            {
+                const auto text = label->getText();
+                if (text.startsWithChar('v') && juce::CharacterFunctions::isDigit(text[1]) && text.containsChar('.'))
                     label->setVisible(false);
+            }
+        }
+    }
 
     // The editor keeps its logical size; --pixel-scale paints it through a
     // transform into a larger image, as a high-DPI display would. Text, knobs
@@ -224,6 +239,10 @@ int main(int argc, char* argv[])
                 "  --collapsed      scope folded away\n"
                 "  --extreme        EXTREME mode engaged\n"
                 "  --signal         feed a signal so the scope shows a waveform\n"
+                "  --signal-hz <f>  its frequency (default 220)\n"
+                "  --signal-amp <a> its peak level, linear (default 0.7)\n"
+                "  --param <id>=<v> set any parameter, in its own units (repeatable;\n"
+                "                   applied after --shape, --eq and --legacy, so it overrides them)\n"
                 "  --shape <v>      set Shape (-100..100) before rendering\n"
                 "  --legacy         Legacy Filter mode, Low Pass at 800 Hz (the knob slot shows the filter)\n"
                 "  --profile <f>    load a NAM profile (copied into a scratch library)\n"
@@ -249,6 +268,7 @@ int main(int argc, char* argv[])
     int pixelScale = 1;
     bool marketing = false;
     juce::String profilePath;
+    juce::StringPairArray paramValues;
     for (int i = 1; i < argc; ++i)
     {
         const juce::String t(argv[i]);
@@ -269,6 +289,21 @@ int main(int argc, char* argv[])
         else if (t == "--pixel-scale" && i + 1 < argc)
             pixelScale = juce::jlimit(1, 4, juce::String(argv[++i]).getIntValue());
         else if (t == "--marketing")             marketing = true;
+        else if (t == "--signal-hz" && i + 1 < argc)
+            signalSpec.hz = juce::jlimit(10.0, 20000.0, juce::String(argv[++i]).getDoubleValue());
+        else if (t == "--signal-amp" && i + 1 < argc)
+            signalSpec.amplitude = juce::jlimit(0.0f, 1.0f, juce::String(argv[++i]).getFloatValue());
+        else if (t == "--param" && i + 1 < argc)
+        {
+            const juce::String kv(argv[++i]);
+            if (! kv.containsChar('='))
+            {
+                std::cout << "--param wants <id>=<value>, got: " << kv << "\n";
+                return 1;
+            }
+            paramValues.set(kv.upToFirstOccurrenceOf("=", false, false).trim(),
+                            kv.fromFirstOccurrenceOf("=", false, false).trim());
+        }
     }
 
     // Collapsed (scope folded away) is the other fold state. The harness drives it
@@ -310,6 +345,19 @@ int main(int argc, char* argv[])
                 p->setValueNotifyingHost(p->convertTo0to1(target[(size_t) i]));
     }
     if (legacy)   { setParam("legacyFilter", 1.0f); setParam("filterMode", 1.0f); setParam("highPassFreq", 800.0f); }
+
+    // Last, so a --param overrides what the flags above set.
+    for (const auto& id : paramValues.getAllKeys())
+    {
+        auto* p = proc.parameters.getParameter(id);
+        if (p == nullptr)
+        {
+            std::cout << "Unknown parameter: " << id << "\n";
+            return 1;
+        }
+        p->setValueNotifyingHost(p->convertTo0to1(paramValues[id].getFloatValue()));
+        std::cout << "  " << id << " = " << p->getCurrentValueAsText() << "\n";
+    }
 
     // The profile library lives in the scratch root too, so the card's position
     // ("1 / 1") never depends on what this machine has collected.
