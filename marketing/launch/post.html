@@ -49,20 +49,20 @@
 
   .stage {
     position: relative; margin-top: 44px; width: 940px; height: 470px;
-    perspective: 1250px;
+    perspective: 1600px;
   }
   body.story .stage { margin-top: 90px; height: 520px; }
   /* The window is a slab: a screen face plus stacked layers behind it that
      read as a thick body once rotated. */
   .floor {
     position: absolute; left: 50%; bottom: -34px; width: 820px; height: 90px;
-    transform: translateX(-50%) rotate(4deg); border-radius: 50%;
+    transform: translateX(-50%) rotate(2deg); border-radius: 50%;
     background: radial-gradient(ellipse at center, rgba(0,0,0,.95), rgba(255,0,68,.18) 55%, transparent 72%);
     filter: blur(18px);
   }
   .device {
     position: absolute; left: 50%; top: 50%; width: 840px; aspect-ratio: 1210 / 679;
-    transform: translate(-50%, -50%) rotateX(28deg) rotateY(-22deg) rotateZ(6deg);
+    transform: translate(-50%, -50%) rotateX(16deg) rotateY(-12deg) rotateZ(3deg);
     transform-style: preserve-3d;
   }
   .slab {
@@ -94,7 +94,7 @@
   .badge .small { font-size: 15px; letter-spacing: .18em; margin-top: 4px; }
 
   .cta {
-    margin-top: 40px; padding: 30px 78px; border-radius: 999px; background: var(--red);
+    margin-top: 58px; padding: 30px 78px; border-radius: 999px; background: var(--red);
     color: #0b0b0e; font-family: "Orbitron"; font-weight: 700; font-size: 34px;
     letter-spacing: .3em; padding-right: calc(78px - .3em);
     box-shadow: 0 0 50px rgba(255,0,68,.55);
