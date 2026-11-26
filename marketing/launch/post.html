@@ -49,14 +49,39 @@
 
   .stage {
     position: relative; margin-top: 44px; width: 940px; height: 470px;
-    perspective: 1700px;
+    perspective: 1250px;
   }
   body.story .stage { margin-top: 90px; height: 520px; }
-  .shot {
-    position: absolute; left: 50%; top: 50%; width: 880px;
-    transform: translate(-50%, -50%) rotateX(22deg) rotateY(-12deg) rotateZ(5deg);
-    border-radius: 12px; border: 2px solid rgba(255,0,68,.75);
-    box-shadow: 0 0 0 1px #000, 0 30px 80px rgba(0,0,0,.8), 0 0 90px rgba(255,0,68,.35);
+  /* The window is a slab: a screen face plus stacked layers behind it that
+     read as a thick body once rotated. */
+  .floor {
+    position: absolute; left: 50%; bottom: -34px; width: 820px; height: 90px;
+    transform: translateX(-50%) rotate(4deg); border-radius: 50%;
+    background: radial-gradient(ellipse at center, rgba(0,0,0,.95), rgba(255,0,68,.18) 55%, transparent 72%);
+    filter: blur(18px);
+  }
+  .device {
+    position: absolute; left: 50%; top: 50%; width: 840px; aspect-ratio: 1210 / 679;
+    transform: translate(-50%, -50%) rotateX(28deg) rotateY(-22deg) rotateZ(6deg);
+    transform-style: preserve-3d;
+  }
+  .slab {
+    position: absolute; inset: 0; border-radius: 14px;
+    background: linear-gradient(160deg, #6a1527 0%, #2a0a12 45%, #0c0507 100%);
+    border: 1px solid rgba(255,40,90,.55);
+  }
+  .slab.back { box-shadow: 0 40px 90px rgba(0,0,0,.85), 0 0 110px rgba(255,0,68,.35); }
+  .screen {
+    position: absolute; inset: 0; border-radius: 14px; overflow: hidden;
+    transform: translateZ(1px);
+    border: 2px solid rgba(255,0,68,.85);
+    box-shadow: 0 0 0 1px #000, inset 0 0 30px rgba(0,0,0,.6);
+  }
+  .screen img { display: block; width: 100%; height: 100%; }
+  .screen::after {          /* glass sheen across the face */
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(118deg, rgba(255,255,255,.16) 0%, rgba(255,255,255,.04) 28%,
+                transparent 42%, transparent 78%, rgba(255,0,68,.08) 100%);
   }
   .badge {
     position: absolute; right: 8px; top: -6px; width: 150px; height: 150px;
@@ -86,7 +111,10 @@
     <p class="sub"><b>Sledge Distortion</b> · VST3 / AU · Win · Mac · Linux</p>
 
     <div class="stage">
-      <img class="shot" src="assets/ui.png" alt="Sledge Distortion interface">
+      <div class="floor"></div>
+      <div class="device" id="device">
+        <div class="screen"><img src="assets/ui.png" alt="Sledge Distortion interface"></div>
+      </div>
       <div class="badge"><span class="big">FREE</span><span class="small">PLUGIN</span></div>
     </div>
 
@@ -95,6 +123,15 @@
   </div>
   <script>
     if (location.hash === "#story") document.body.classList.add("story");
+    // Build the slab's thickness: 1.5 px layers stepping back 36 px.
+    const device = document.getElementById("device");
+    const DEPTH = 58, STEP = 1.5;
+    for (let z = STEP; z <= DEPTH; z += STEP) {
+      const s = document.createElement("div");
+      s.className = "slab" + (z + STEP > DEPTH ? " back" : "");
+      s.style.transform = `translateZ(${-z}px)`;
+      device.insertBefore(s, device.firstChild);
+    }
   </script>
 </body>
 </html>
