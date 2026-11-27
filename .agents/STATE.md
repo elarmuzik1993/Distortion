@@ -6,7 +6,8 @@
   scripts, installer guards. v2.4.0 (2026-11-03): NAM profiles, Shape, Sub Guard, 31-dot EQ.
   `README.md`, `INSTALL.md`, `docs/USER_GUIDE.md`, `CHANGELOG.md` and `AGENTS.md` match `main`.
 - CI macOS runs on `macos-15`, JUCE patched for its SDK (`cmake/PatchJuce.cmake`). 2026-11-25:
-  all three builds pass (macOS: tests, pluginval 10, auval); Windows `verify.sh` 4584 assertions.
+  all three builds pass (macOS: tests, pluginval 10, auval); `verify.sh` 4584 assertions.
+  Without a Developer ID CI ad-hoc signs the macOS bundles (never yet run on a real Mac).
 
 ## Next
 1. Owner, post-release listening: CLIP / NAM flip on a bass with a large capture (no click);
@@ -19,9 +20,8 @@
 4. Owner: Sub Guard listening (808, bass, preset changes while playing); re-voice Hard Clip,
    808 Safe, Vocal Warmth, EXTREME, Bass Driver, Lo-Fi Crush, Diode Bite at 100-150 Hz; rename
    PRESERVE/CONTROL/AGGRO; measure Release CPU.
-5. Owner, website downloads: Windows exe + zip and the Linux tarball are ready; the macOS
-   `.pkg` after a real-Mac install (Next 2). Add the GPL source link, checksums, the user guide.
-6. macOS without paying: ad-hoc sign bundles when no Developer ID, upload the `.pkg` every run.
+5. Website: Windows exe + zip, Linux tarball, macOS ZIP now; `.pkg` after Next 2. Add GPL source, checksums, guide.
+6. Owner: on a real Mac (Apple Silicon), check the ad-hoc signed ZIP loads; then `.pkg` every run.
 
 ## Decisions
 - v2.5.0 ships before the owner's listening and host checks (owner, 2026-11-25): they are

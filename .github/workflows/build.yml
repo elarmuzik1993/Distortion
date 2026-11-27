@@ -541,6 +541,29 @@ jobs:
             || { echo "ERROR: $slice is not universal (arm64 + x86_64)"; exit 1; }
         done
 
+    # Without a Developer ID the bundles would ship with only the linker's
+    # signature on the arm64 slice: nothing seals the bundle, and the post-build
+    # licence copy and the moduleinfo.json fix change it after linking, so
+    # `codesign --verify` fails and Apple Silicon hosts may refuse to load it.
+    # An ad-hoc signature ("-") seals each finished bundle. It is not a
+    # Developer ID: Gatekeeper still warns on download, and users still clear
+    # quarantine as INSTALL.md says. It runs before pluginval and auval so they
+    # validate the bundles that ship, and is the exact complement of the
+    # Developer ID step's condition below, so a bundle is never signed twice.
+    - name: Codesign plugins (ad-hoc, no Developer ID)
+      if: env.APPLE_CERT_BASE64 == '' || env.APPLE_SIGN_IDENTITY == ''
+      run: |
+        BASE="build/Distortion_artefacts/${{ env.BUILD_TYPE }}"
+        for b in \
+          "VST3/Sledge Distortion.vst3" \
+          "AU/Sledge Distortion.component" \
+          "Standalone/Sledge Distortion.app"; do
+          codesign --force --deep --sign - "$BASE/$b"
+          codesign --verify --deep --strict --verbose=2 "$BASE/$b"
+          codesign -dv "$BASE/$b" 2>&1 | grep -q "Signature=adhoc" \
+            || { echo "::error::$b is not ad-hoc signed"; exit 1; }
+        done
+
     # Pinned validator - see the note in build-windows.
     - name: Validate with pluginval (strictness 10)
       run: |
