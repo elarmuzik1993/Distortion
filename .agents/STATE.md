@@ -21,7 +21,7 @@
    PRESERVE/CONTROL/AGGRO; measure Release CPU.
 5. Owner, website downloads: Windows exe + zip and the Linux tarball are ready; the macOS
    `.pkg` after a real-Mac install (Next 2). Add the GPL source link, checksums, the user guide.
-6. macOS without paying: ad-hoc sign bundles when no Developer ID, upload the `.pkg` every run.
+6. Ad-hoc macOS signing on `ci/macos-adhoc-sign`: merge once macOS CI passes; then `.pkg` every run.
 
 ## Decisions
 - v2.5.0 ships before the owner's listening and host checks (owner, 2026-11-25): they are
